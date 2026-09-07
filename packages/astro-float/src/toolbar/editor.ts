@@ -242,6 +242,7 @@ export class PageEditor {
     el.addEventListener("drop", this.onDrop);
     el.addEventListener("dragend", this.onDragEnd);
     document.addEventListener("click", this.onDocumentClick, true);
+    document.addEventListener("keydown", this.onDocumentKeydown);
     window.addEventListener("scroll", this.reposition, true);
     window.addEventListener("resize", this.reposition);
 
@@ -271,6 +272,7 @@ export class PageEditor {
     el.removeEventListener("drop", this.onDrop);
     el.removeEventListener("dragend", this.onDragEnd);
     document.removeEventListener("click", this.onDocumentClick, true);
+    document.removeEventListener("keydown", this.onDocumentKeydown);
     window.removeEventListener("scroll", this.reposition, true);
     window.removeEventListener("resize", this.reposition);
     this.observer?.disconnect();
@@ -790,6 +792,21 @@ export class PageEditor {
     const path = e.composedPath();
     if (path.includes(this.selected) || (this.bar && path.includes(this.bar))) return;
     this.select(null);
+  };
+
+  /** Clicking a non-editable island leaves focus outside the body, so its Escape / Delete arrive here. */
+  private onDocumentKeydown = (e: KeyboardEvent) => {
+    if (!this.selected || this.container?.contains(document.activeElement)) return;
+    const target = e.target as HTMLElement | null;
+    if (target && target !== document.body && target.matches("input, textarea, select, [contenteditable]")) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      this.select(null);
+    } else if (e.key === "Backspace" || e.key === "Delete") {
+      e.preventDefault();
+      this.confirming = true;
+      this.renderOverlays();
+    }
   };
 
   private onMouseOver = (e: MouseEvent) => {
