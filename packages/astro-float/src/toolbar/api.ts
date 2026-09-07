@@ -16,13 +16,23 @@ export interface Collection {
 
 export type Frontmatter = Record<string, unknown>;
 
+export interface SourceBlock {
+  type: string;
+  src: string;
+  trailer: string;
+}
+
 export interface EntryDoc {
   collection: string;
   id: string;
   file: string;
   folder: boolean;
+  /** Absolute directory of the entry file (dev only; used to relativize image URLs). */
+  absDir: string;
   frontmatter: Frontmatter;
   body: string;
+  lead: string;
+  blocks: SourceBlock[];
   hash: string;
 }
 
@@ -31,6 +41,9 @@ export interface SaveResult {
   hash: string;
   changed: boolean;
   synced: boolean;
+  body: string;
+  lead: string;
+  blocks: SourceBlock[];
 }
 
 export interface MediaItem {

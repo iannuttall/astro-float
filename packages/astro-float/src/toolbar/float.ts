@@ -1,10 +1,11 @@
 import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
 import { h, replaceChildren } from "./dom";
+import { PageEditor } from "./editor";
 import { icon } from "./icons";
 import { detectEntry, routeFor, swapPage, type DetectedEntry } from "./page";
 import { STYLES } from "./styles";
 
-type PanelId = "body" | "fields" | "media" | "collection" | "settings";
+type PanelId = "fields" | "media" | "collection" | "source" | "settings";
 type Side = "left" | "right";
 type Status = "idle" | "saving" | "refreshing" | "saved" | "error" | "conflict";
 
@@ -16,14 +17,14 @@ interface Prefs {
 
 const PREFS_KEY = "astro-float:prefs";
 const OPEN_KEY = "astro-float:open";
-const AUTOSAVE_DELAY = 700;
+const AUTOSAVE_DELAY = 800;
 
-const ENTRY_PANELS: PanelId[] = ["body", "fields", "media"];
+const ENTRY_PANELS: PanelId[] = ["fields", "media", "source"];
 const PANEL_TITLES: Record<PanelId, string> = {
-  body: "Body",
   fields: "Fields",
   media: "Images",
   collection: "Collection",
+  source: "Source",
   settings: "Settings",
 };
 
@@ -40,7 +41,7 @@ class Float {
   private root: HTMLElement;
   private rail: HTMLElement;
   private panelHost: HTMLElement;
-  private statusDot: HTMLElement;
+  private statusSlot: HTMLElement;
 
   private prefs: Prefs = loadPrefs();
   private open = false;
@@ -50,9 +51,13 @@ class Float {
   private collections: Collection[] = [];
   private detected: DetectedEntry | null = null;
   private doc: EntryDoc | null = null;
-  private draft: { frontmatter: Frontmatter; body: string } = { frontmatter: {}, body: "" };
+  private draftFrontmatter: Frontmatter = {};
+  /** Body draft used only when the page has no `[data-float-body]` to edit in place. */
+  private draftBody = "";
   private media: MediaItem[] | null = null;
   private listCollection: string | null = null;
+
+  private page: PageEditor;
 
   private status: Status = "idle";
   private statusMessage = "";
@@ -61,9 +66,9 @@ class Float {
   private autosaveTimer: number | undefined;
   private savedTimer: number | undefined;
 
-  private editor: HTMLTextAreaElement | null = null;
   private footStatus: HTMLElement | null = null;
   private footActions: HTMLElement | null = null;
+  private sourceView: HTMLTextAreaElement | null = null;
 
   constructor(private canvas: ShadowRoot) {
     const style = document.createElement("style");
@@ -72,11 +77,16 @@ class Float {
 
     this.rail = h("nav", { class: "rail", "aria-label": "Float" });
     this.panelHost = h("div");
-    this.statusDot = h("span", { class: "status-dot", "data-state": "idle" });
+    this.statusSlot = h("div", { class: "status-slot" });
     this.root = h("div", { class: "float", "data-side": this.prefs.side }, this.rail, this.panelHost);
     canvas.appendChild(this.root);
 
-    // Escape inside the editor should just drop focus, not close the whole float.
+    this.page = new PageEditor({
+      onChange: () => this.touched(),
+      onFiles: (files, range) => void this.uploadAll(files, range),
+    });
+
+    // Escape inside the rail should drop focus, not close the whole float.
     this.root.addEventListener("keyup", (e) => {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -107,11 +117,12 @@ class Float {
     if (open) {
       sessionStorage.setItem(OPEN_KEY, "1");
       void this.ensureLoaded().then(() => {
-        if (this.prefs.panel === null) return;
-        this.showPanel(this.prefs.panel, false);
+        this.page.attach();
+        if (this.prefs.panel !== null) this.showPanel(this.prefs.panel, false);
       });
     } else {
       sessionStorage.removeItem(OPEN_KEY);
+      this.page.detach();
     }
   }
 
@@ -127,13 +138,15 @@ class Float {
       this.detected = detectEntry(this.collections);
       if (this.detected) {
         this.doc = await api.entry(this.detected.collection, this.detected.id);
-        this.draft = { frontmatter: clone(this.doc.frontmatter), body: this.doc.body };
+        this.draftFrontmatter = clone(this.doc.frontmatter);
+        this.draftBody = this.doc.body;
         this.listCollection = this.doc.collection;
+        this.bindBody();
       } else {
         this.listCollection = this.collections[0]?.name ?? null;
         if (this.prefs.panel && ENTRY_PANELS.includes(this.prefs.panel)) this.prefs.panel = "collection";
       }
-      if (this.prefs.panel === null) this.prefs.panel = this.detected ? "body" : "collection";
+      if (this.prefs.panel === null && !this.detected) this.prefs.panel = "collection";
     } catch (err) {
       this.setStatus("error", describe(err));
     }
@@ -141,23 +154,52 @@ class Float {
     this.renderRail();
   }
 
+  /** Attach the in-place editor to `[data-float-body]` on the current DOM. */
+  private bindBody() {
+    if (!this.doc) return;
+    const container = PageEditor.find();
+    if (!container) {
+      this.page.unbind();
+      return;
+    }
+    this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
+    if (this.open) this.page.attach();
+  }
+
   private async reloadFromDisk() {
     if (!this.detected) return;
     this.doc = await api.entry(this.detected.collection, this.detected.id);
-    this.draft = { frontmatter: clone(this.doc.frontmatter), body: this.doc.body };
+    this.draftFrontmatter = clone(this.doc.frontmatter);
+    this.draftBody = this.doc.body;
     this.media = null;
+    this.setStatus("refreshing");
+    try {
+      await swapPage();
+    } catch {
+      /* keep current DOM */
+    }
+    this.bindBody();
     this.setStatus("idle");
     this.renderPanel();
   }
 
   // ---- state helpers ----------------------------------------------------------
 
-  private isDirty() {
+  private frontmatterDirty() {
+    return !!this.doc && JSON.stringify(this.draftFrontmatter) !== JSON.stringify(this.doc.frontmatter);
+  }
+
+  private bodyDirty() {
     if (!this.doc) return false;
-    return (
-      this.draft.body !== this.doc.body ||
-      JSON.stringify(this.draft.frontmatter) !== JSON.stringify(this.doc.frontmatter)
-    );
+    return this.page.bound ? this.page.isDirty() : this.draftBody !== this.doc.body;
+  }
+
+  private isDirty() {
+    return this.frontmatterDirty() || this.bodyDirty();
+  }
+
+  private currentBody(): string {
+    return this.page.bound ? this.page.toMarkdown() : this.draftBody;
   }
 
   private setStatus(status: Status, message = "") {
@@ -169,6 +211,7 @@ class Float {
   private touched() {
     if (this.status === "saved" || this.status === "error") this.status = "idle";
     this.renderStatus();
+    if (this.sourceView) this.sourceView.value = this.currentBody();
     if (this.prefs.autosave) this.scheduleAutosave();
   }
 
@@ -181,10 +224,6 @@ class Float {
     localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs));
   }
 
-  private currentCollection(): Collection | undefined {
-    return this.collections.find((c) => c.name === (this.doc?.collection ?? this.listCollection));
-  }
-
   // ---- saving -----------------------------------------------------------------
 
   private async save(force = false) {
@@ -194,23 +233,30 @@ class Float {
 
     this.saving = true;
     this.setStatus("saving");
-    const snapshot = { frontmatter: clone(this.draft.frontmatter), body: this.draft.body };
+    const frontmatter = clone(this.draftFrontmatter);
+    const body = this.currentBody();
+    // Re-rendering from the server would move the caret; skip it while the
+    // user is typing in the body and let their DOM stand as the preview.
+    const refresh = !this.page.hasFocus();
 
     try {
       const result = await api.save({
         collection: this.doc.collection,
         id: this.doc.id,
-        frontmatter: snapshot.frontmatter,
-        body: snapshot.body,
+        frontmatter,
+        body,
         baseHash: this.doc.hash,
         force,
       });
-      this.doc = { ...this.doc, frontmatter: snapshot.frontmatter, body: snapshot.body, hash: result.hash };
+      this.doc = { ...this.doc, frontmatter, body: result.body, lead: result.lead, blocks: result.blocks, hash: result.hash };
+      this.draftBody = result.body;
+      this.page.setBaseline({ lead: result.lead, blocks: result.blocks });
 
-      if (result.changed) {
+      if (result.changed && refresh) {
         this.setStatus("refreshing");
         try {
           await swapPage();
+          this.bindBody();
         } catch (err) {
           console.warn("[astro-float] page refresh failed", err);
         }
@@ -266,24 +312,31 @@ class Float {
 
     replaceChildren(
       this.rail,
-      button("body", "Body"),
       button("fields", "Fields"),
       button("media", "Images"),
-      h("span", { class: "rail-sep" }),
       button("collection", "Collection"),
+      h("span", { class: "rail-sep" }),
+      button("source", "Source"),
       button("settings", "Settings"),
-      this.statusDot,
+      this.statusSlot,
     );
     this.renderStatus();
   }
 
   private togglePanel(id: PanelId) {
     if (this.prefs.panel === id && this.panelHost.childElementCount > 0) {
-      this.panelHost.textContent = "";
-      this.renderRail();
+      this.closePanel();
       return;
     }
     this.showPanel(id, true);
+  }
+
+  private closePanel() {
+    this.panelHost.textContent = "";
+    this.sourceView = null;
+    this.footStatus = null;
+    this.footActions = null;
+    this.renderRail();
   }
 
   private showPanel(id: PanelId, persist: boolean) {
@@ -298,9 +351,9 @@ class Float {
   private renderPanel() {
     const id = this.prefs.panel;
     if (!id) return;
-    this.editor = null;
     this.footStatus = null;
     this.footActions = null;
+    this.sourceView = null;
 
     const sub = this.doc ? `${this.doc.collection}/${this.doc.id}` : "no entry on this page";
     const head = h(
@@ -308,34 +361,22 @@ class Float {
       { class: "panel-head" },
       h("span", { class: "panel-title" }, PANEL_TITLES[id]),
       h("span", { class: "panel-sub", title: this.doc?.file ?? "" }, sub),
-      h(
-        "button",
-        {
-          class: "icon-btn",
-          type: "button",
-          "aria-label": "Collapse",
-          onClick: () => {
-            this.panelHost.textContent = "";
-            this.renderRail();
-          },
-        },
-        icon("close", 14),
-      ),
+      h("button", { class: "icon-btn", type: "button", "aria-label": "Collapse", onClick: () => this.closePanel() }, icon("close", 14)),
     );
 
     let body: HTMLElement;
     let showFoot = false;
     switch (id) {
-      case "body":
-        body = this.renderBody();
-        showFoot = true;
-        break;
       case "fields":
         body = this.renderFields();
         showFoot = true;
         break;
       case "media":
         body = this.renderMedia();
+        showFoot = true;
+        break;
+      case "source":
+        body = this.renderSource();
         showFoot = true;
         break;
       case "collection":
@@ -357,19 +398,34 @@ class Float {
 
   private renderStatus() {
     const dirty = this.isDirty();
-    const dotState =
-      this.status === "saving" || this.status === "refreshing"
-        ? "saving"
-        : this.status === "error" || this.status === "conflict"
-          ? this.status
-          : this.status === "saved"
-            ? "saved"
-            : dirty
-              ? "dirty"
-              : "idle";
-    this.statusDot.dataset.state = dotState;
-    this.statusDot.title =
-      dotState === "dirty" ? "Unsaved changes" : dotState === "saved" ? "Saved" : this.statusMessage || "";
+    const busy = this.status === "saving" || this.status === "refreshing";
+    const dotState = busy
+      ? "saving"
+      : this.status === "error" || this.status === "conflict"
+        ? this.status
+        : this.status === "saved"
+          ? "saved"
+          : dirty
+            ? "dirty"
+            : "idle";
+
+    // The rail's bottom slot is either the status dot or, when there's something
+    // to save and autosave is off, the Save button itself.
+    const showRailSave = dirty && !busy && !this.prefs.autosave && this.status !== "conflict";
+    replaceChildren(
+      this.statusSlot,
+      showRailSave
+        ? h(
+            "button",
+            { class: "rail-save", type: "button", "data-tip": "Save · ⌘S", "aria-label": "Save", onClick: () => void this.save() },
+            icon("check", 14),
+          )
+        : h("span", {
+            class: "status-dot",
+            "data-state": dotState,
+            title: dotState === "dirty" ? "Unsaved changes" : dotState === "saved" ? "Saved" : this.statusMessage || "",
+          }),
+    );
 
     if (!this.footStatus || !this.footActions) return;
 
@@ -404,9 +460,7 @@ class Float {
         if (dirty) {
           text = this.prefs.autosave ? "Unsaved · autosave on" : "Unsaved changes";
           if (!this.prefs.autosave) {
-            actions.push(
-              h("button", { class: "btn btn-sm btn-primary", type: "button", onClick: () => void this.save() }, "Save"),
-            );
+            actions.push(h("button", { class: "btn btn-sm btn-primary", type: "button", onClick: () => void this.save() }, "Save"));
           }
         } else {
           text = this.savedAt ? `Saved ${formatTime(this.savedAt)}` : "Up to date";
@@ -416,55 +470,56 @@ class Float {
     this.footStatus.textContent = text;
     if (tone) this.footStatus.dataset.tone = tone;
     else delete this.footStatus.dataset.tone;
+    if (this.prefs.panel === "source") {
+      actions.unshift(
+        h(
+          "button",
+          {
+            class: "btn btn-sm btn-ghost",
+            type: "button",
+            onClick: () => void navigator.clipboard?.writeText(this.currentBody()),
+          },
+          icon("copy", 12),
+          "Copy",
+        ),
+      );
+    }
     replaceChildren(this.footActions, actions);
   }
 
-  // ---- body -----------------------------------------------------------------------
+  // ---- source (escape hatch) --------------------------------------------------------
 
-  private renderBody(): HTMLElement {
+  private renderSource(): HTMLElement {
     if (!this.doc) return this.renderNoEntry();
-
-    const editor = h("textarea", {
-      class: "editor",
+    const editable = !this.page.bound;
+    const view = h("textarea", {
+      class: "source-view",
       spellcheck: false,
-      placeholder: "Write markdown…",
-      value: this.draft.body,
-      "aria-label": "Markdown body",
+      readOnly: !editable,
+      value: this.currentBody(),
+      "aria-label": "Markdown source",
       onInput: () => {
-        this.draft.body = editor.value;
+        if (!editable) return;
+        this.draftBody = view.value;
         this.touched();
       },
-      onKeydown: (e: KeyboardEvent) => {
-        if (e.key === "Tab" && !e.shiftKey) {
-          e.preventDefault();
-          insertText(editor, "  ");
-          this.draft.body = editor.value;
-          this.touched();
-        }
-      },
-      onPaste: (e: ClipboardEvent) => {
-        const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
-        if (!files.length) return;
-        e.preventDefault();
-        void this.uploadAll(files);
-      },
     }) as HTMLTextAreaElement;
-    this.editor = editor;
+    this.sourceView = view;
 
-    const wrap = h("div", { class: "editor-wrap" }, editor);
-    bindDropzone(wrap, (files) => void this.uploadAll(files));
-    return h("div", { class: "panel-body" }, wrap);
-  }
+    const note = editable
+      ? [
+          "No ",
+          h("code", null, "data-float-body"),
+          " element on this page, so the body can only be edited here. Add the attribute to the element that wraps ",
+          h("code", null, "<Content />"),
+          " to edit on the page.",
+        ]
+      : [
+          "Read-only. This is the Markdown that Save writes to disk",
+          this.page.mapped ? " — untouched blocks are kept byte-for-byte." : ". Blocks didn't line up with the source, so the whole body is re-serialized.",
+        ];
 
-  private insertMarkdown(snippet: string) {
-    if (this.editor) {
-      insertText(this.editor, snippet);
-      this.draft.body = this.editor.value;
-    } else {
-      const sep = this.draft.body.endsWith("\n\n") || this.draft.body === "" ? "" : this.draft.body.endsWith("\n") ? "\n" : "\n\n";
-      this.draft.body = `${this.draft.body}${sep}${snippet}\n`;
-    }
-    this.touched();
+    return h("div", { class: "panel-body source" }, h("p", { class: "source-note" }, ...note), view);
   }
 
   // ---- fields ---------------------------------------------------------------------
@@ -472,20 +527,17 @@ class Float {
   private renderFields(): HTMLElement {
     if (!this.doc) return this.renderNoEntry();
     const container = h("div", { class: "panel-body pad" });
+    const rerender = () => this.renderPanel();
 
-    const rerender = () => {
-      this.renderPanel();
-    };
-
-    for (const [key, value] of Object.entries(this.draft.frontmatter)) {
+    for (const [key, value] of Object.entries(this.draftFrontmatter)) {
       container.appendChild(this.renderField(key, value, rerender));
     }
 
     const newKey = h("input", { class: "input", placeholder: "New field name", "aria-label": "New field name" }) as HTMLInputElement;
     const add = () => {
       const key = newKey.value.trim();
-      if (!key || key in this.draft.frontmatter) return;
-      this.draft.frontmatter[key] = "";
+      if (!key || key in this.draftFrontmatter) return;
+      this.draftFrontmatter[key] = "";
       this.touched();
       rerender();
     };
@@ -501,7 +553,7 @@ class Float {
   private renderField(key: string, value: unknown, rerender: () => void): HTMLElement {
     const kind = fieldKind(value);
     const set = (next: unknown) => {
-      this.draft.frontmatter[key] = next;
+      this.draftFrontmatter[key] = next;
       this.touched();
     };
 
@@ -549,11 +601,7 @@ class Float {
         break;
       }
       case "tags": {
-        const input = h("input", {
-          class: "input",
-          value: (value as unknown[]).join(", "),
-          placeholder: "comma, separated",
-        }) as HTMLInputElement;
+        const input = h("input", { class: "input", value: (value as unknown[]).join(", "), placeholder: "comma, separated" }) as HTMLInputElement;
         const allNumbers = (value as unknown[]).length > 0 && (value as unknown[]).every((v) => typeof v === "number");
         input.addEventListener("input", () => {
           const parts = input.value.split(",").map((s) => s.trim()).filter(Boolean);
@@ -604,7 +652,7 @@ class Float {
             "aria-label": `Remove ${key}`,
             title: "Remove field",
             onClick: () => {
-              delete this.draft.frontmatter[key];
+              delete this.draftFrontmatter[key];
               this.touched();
               rerender();
             },
@@ -624,7 +672,7 @@ class Float {
 
     const fileInput = h("input", { type: "file", accept: "image/*", multiple: true, style: { display: "none" } }) as HTMLInputElement;
     fileInput.addEventListener("change", () => {
-      if (fileInput.files?.length) void this.uploadAll(Array.from(fileInput.files));
+      if (fileInput.files?.length) void this.uploadAll(Array.from(fileInput.files), null);
       fileInput.value = "";
     });
 
@@ -632,7 +680,7 @@ class Float {
       "div",
       { class: "dropzone", role: "button", tabindex: "0", onClick: () => fileInput.click() },
       icon("upload", 16),
-      h("div", null, h("strong", null, "Drop images"), " or click to browse"),
+      h("div", null, h("strong", null, "Drop images"), " here or on the page"),
       h("div", { style: { fontSize: "11px", color: "var(--fg-faint)" } }, `Saved next to ${this.doc.file.split("/").slice(-2).join("/")}`),
     );
     zone.addEventListener("keydown", (e) => {
@@ -641,7 +689,7 @@ class Float {
         fileInput.click();
       }
     });
-    bindDropzone(zone, (files) => void this.uploadAll(files));
+    bindDropzone(zone, (files) => void this.uploadAll(files, null));
 
     const grid = h("div", { class: "media-grid" });
     const renderGrid = () => {
@@ -650,12 +698,7 @@ class Float {
         (this.media ?? []).map((m) =>
           h(
             "button",
-            {
-              class: "media-item",
-              type: "button",
-              title: `Insert ${m.name}`,
-              onClick: () => this.insertMarkdown(`![${altFrom(m.name)}](${m.src})`),
-            },
+            { class: "media-item", type: "button", title: `Insert ${m.name}`, onClick: () => this.placeImage(m, null) },
             h("img", { src: m.url, alt: m.name, loading: "lazy" }),
             h("span", null, m.name),
           ),
@@ -675,12 +718,23 @@ class Float {
     }
 
     container.append(fileInput, zone, grid);
-    const hint = h("p", { class: "field-hint", style: { marginTop: "12px" } }, "Click an image to insert it at the cursor in Body.");
-    container.appendChild(hint);
+    container.appendChild(
+      h("p", { class: "field-hint", style: { marginTop: "12px" } }, "Click an image to insert it after the paragraph you're in."),
+    );
     return container;
   }
 
-  private async uploadAll(files: File[]) {
+  private placeImage(item: MediaItem, range: Range | null) {
+    if (this.page.bound) {
+      this.page.insertImage(item.url, altFrom(item.name), range);
+    } else {
+      const sep = this.draftBody === "" || this.draftBody.endsWith("\n\n") ? "" : this.draftBody.endsWith("\n") ? "\n" : "\n\n";
+      this.draftBody = `${this.draftBody}${sep}![${altFrom(item.name)}](${item.src})\n`;
+      this.touched();
+    }
+  }
+
+  private async uploadAll(files: File[], range: Range | null) {
     if (!this.doc) return;
     const images = files.filter((f) => f.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(f.name));
     if (!images.length) {
@@ -691,10 +745,9 @@ class Float {
     try {
       for (const file of images) {
         const saved = await api.upload(this.doc.collection, this.doc.id, file);
-        this.media = [...(this.media ?? []).filter((m) => m.name !== saved.name), saved].sort((a, b) =>
-          a.name.localeCompare(b.name),
-        );
-        this.insertMarkdown(`![${altFrom(saved.name)}](${saved.src})`);
+        this.media = [...(this.media ?? []).filter((m) => m.name !== saved.name), saved].sort((a, b) => a.name.localeCompare(b.name));
+        this.placeImage(saved, range);
+        range = null;
       }
       this.setStatus("idle");
       if (this.prefs.panel === "media") this.renderPanel();
@@ -709,13 +762,7 @@ class Float {
     const container = h("div", { class: "panel-body" });
     if (!this.collections.length) {
       container.appendChild(
-        h(
-          "p",
-          { class: "empty" },
-          "No collections found. Float looks for directories with Markdown under ",
-          h("code", null, "src/content/"),
-          ".",
-        ),
+        h("p", { class: "empty" }, "No collections found. Float looks for directories with Markdown under ", h("code", null, "src/content/"), "."),
       );
       return container;
     }
@@ -753,10 +800,15 @@ class Float {
           type: "button",
           onClick: () => {
             creating = !creating;
-            replaceChildren(formHost, creating ? this.renderNewEntryForm(selected, () => {
-              creating = false;
-              formHost.textContent = "";
-            }) : null);
+            replaceChildren(
+              formHost,
+              creating
+                ? this.renderNewEntryForm(selected, () => {
+                    creating = false;
+                    formHost.textContent = "";
+                  })
+                : null,
+            );
           },
         },
         icon("plus", 13),
@@ -765,9 +817,7 @@ class Float {
     );
 
     const list = h("div", { class: "list" });
-    if (!selected.entries.length) {
-      list.appendChild(h("p", { class: "empty" }, "This collection is empty."));
-    }
+    if (!selected.entries.length) list.appendChild(h("p", { class: "empty" }, "This collection is empty."));
     for (const entry of selected.entries) {
       const isCurrent = this.doc?.collection === selected.name && this.doc.id === entry.id;
       const route = routeFor(selected, entry.id);
@@ -794,9 +844,11 @@ class Float {
         h(
           "p",
           { class: "empty" },
-          "Open an entry page to edit it here. If Float can't detect one from the URL, bind it with ",
+          "Open an entry page to edit it in place. If Float can't detect one from the URL, bind it with ",
           h("code", null, 'data-float-entry="blog:my-post"'),
-          " on any element.",
+          " and mark the rendered body with ",
+          h("code", null, "data-float-body"),
+          ".",
         ),
       );
     }
@@ -804,7 +856,7 @@ class Float {
   }
 
   private renderNewEntryForm(collection: Collection, close: () => void): HTMLElement {
-    const title = h("input", { class: "input", placeholder: "Title", autofocus: true }) as HTMLInputElement;
+    const title = h("input", { class: "input", placeholder: "Title" }) as HTMLInputElement;
     const slug = h("input", { class: "input", placeholder: "slug", spellcheck: false }) as HTMLInputElement;
     const error = h("div", { class: "field-hint", style: { color: "var(--err)" } });
     let slugTouched = false;
@@ -827,7 +879,7 @@ class Float {
       error.textContent = "";
       try {
         const created = await api.create({ collection: collection.name, slug: s, title: title.value.trim() || s });
-        this.prefs.panel = "body";
+        this.prefs.panel = null;
         this.savePrefs();
         sessionStorage.setItem(OPEN_KEY, "1");
         const route = routeFor(collection, created.id);
@@ -847,12 +899,7 @@ class Float {
       h("label", null, "Title", title),
       h("label", null, `Slug · ${collection.dir}/`, slug),
       error,
-      h(
-        "div",
-        { class: "form-actions" },
-        h("button", { class: "btn btn-ghost", type: "button", onClick: close }, "Cancel"),
-        create,
-      ),
+      h("div", { class: "form-actions" }, h("button", { class: "btn btn-ghost", type: "button", onClick: close }, "Cancel"), create),
     );
     form.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) void submit();
@@ -900,6 +947,12 @@ class Float {
       h("span", { class: "switch" }),
     );
 
+    const bodyState = !this.doc
+      ? "No entry bound to this page."
+      : this.page.bound
+        ? `Editing ${this.doc.file} in place${this.page.mapped ? "" : " (blocks unmapped — whole body re-serialized on save)"}.`
+        : `${this.doc.file} — no data-float-body on this page; body editable in Source only.`;
+
     return h(
       "div",
       { class: "panel-body pad" },
@@ -913,24 +966,19 @@ class Float {
       h(
         "div",
         { class: "setting" },
-        h("div", null, h("div", { class: "label" }, "Shortcuts"), h("div", { class: "desc" }, "⌘/Ctrl+S save · Esc leave field · Toolbar icon toggles float")),
+        h(
+          "div",
+          null,
+          h("div", { class: "label" }, "On the page"),
+          h("div", { class: "desc" }, "⌘/Ctrl+S save · ⌘B / ⌘I / ⌘K format · Tab / ⇧Tab nest lists · type “# ”, “- ”, “1. ”, “> ”, “```” at a line start · Esc leaves the text"),
+        ),
       ),
-      h(
-        "div",
-        { class: "meta" },
-        this.doc ? `${this.doc.file}` : "No entry bound to this page.",
-        h("br"),
-        "astro-float · dev only · writes stay on localhost",
-      ),
+      h("div", { class: "meta" }, bodyState, h("br"), "astro-float · dev only · writes stay on localhost"),
     );
   }
 
   private renderNoEntry(): HTMLElement {
-    return h(
-      "div",
-      { class: "panel-body" },
-      h("p", { class: "empty" }, "No collection entry detected on this page."),
-    );
+    return h("div", { class: "panel-body" }, h("p", { class: "empty" }, "No collection entry detected on this page."));
   }
 }
 
@@ -955,6 +1003,8 @@ function loadPrefs(): Prefs {
   const defaults: Prefs = { side: "right", autosave: false, panel: null };
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
+    // "body" was a panel in an earlier revision; there's no textarea any more.
+    if (stored.panel === "body") stored.panel = null;
     return { ...defaults, ...stored };
   } catch {
     return defaults;
@@ -985,19 +1035,6 @@ function slugify(value: string) {
 
 function altFrom(name: string) {
   return name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
-}
-
-function insertText(textarea: HTMLTextAreaElement, text: string) {
-  const start = textarea.selectionStart ?? textarea.value.length;
-  const end = textarea.selectionEnd ?? start;
-  const before = textarea.value.slice(0, start);
-  const after = textarea.value.slice(end);
-  const needsLeadingBreak = text.startsWith("![") && before.length > 0 && !before.endsWith("\n");
-  const insert = (needsLeadingBreak ? "\n" : "") + text;
-  textarea.value = before + insert + after;
-  const caret = start + insert.length;
-  textarea.setSelectionRange(caret, caret);
-  textarea.focus();
 }
 
 function bindDropzone(el: HTMLElement, onFiles: (files: File[]) => void) {

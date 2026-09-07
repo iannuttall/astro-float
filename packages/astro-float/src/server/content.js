@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { splitBlocks } from "./blocks.js";
 
 export const ENTRY_EXTS = new Set([".md", ".mdx", ".markdown"]);
 export const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg"]);
@@ -167,8 +168,12 @@ export async function readEntry(ctx, collectionName, id) {
     id: entry.id,
     file: entry.file,
     folder: entry.folder,
+    // Absolute dir of the entry; the client uses it to turn Vite's /@fs/ image
+    // URLs back into the relative paths that belong in the Markdown.
+    absDir: path.dirname(abs).split(path.sep).join("/"),
     frontmatter,
     body,
+    ...splitBlocks(body),
     hash: hashOf(raw),
   };
 }
@@ -180,9 +185,11 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
     throw httpError(409, "file changed on disk since it was loaded");
   }
   const next = serializeDocument(frontmatter ?? {}, typeof body === "string" ? body : "");
-  if (next === current) return { file: entry.file, hash: hashOf(current), changed: false };
+  const saved = parseDocument(next);
+  const result = { file: entry.file, body: saved.body, ...splitBlocks(saved.body) };
+  if (next === current) return { ...result, hash: hashOf(current), changed: false };
   await fs.writeFile(abs, next, "utf8");
-  return { file: entry.file, hash: hashOf(next), changed: true };
+  return { ...result, hash: hashOf(next), changed: true };
 }
 
 /**

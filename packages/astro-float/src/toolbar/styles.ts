@@ -117,11 +117,18 @@ export const STYLES = /* css */ `
 .float[data-side="left"] .rail-btn[data-tip]::after { left: calc(100% + 10px); }
 .rail-btn[data-tip]:hover::after { opacity: 1; }
 
+/* bottom slot: a quiet status dot, or the Save button when there's work to save */
+.status-slot {
+  width: 28px;
+  height: 28px;
+  margin-top: 4px;
+  display: grid;
+  place-items: center;
+}
 .status-dot {
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  margin: 8px 0 4px;
   background: var(--line-strong);
   transition: background 200ms ease;
 }
@@ -130,6 +137,38 @@ export const STYLES = /* css */ `
 .status-dot[data-state="saved"] { background: var(--ok); }
 .status-dot[data-state="error"], .status-dot[data-state="conflict"] { background: var(--err); }
 @keyframes float-pulse { 50% { opacity: 0.3; } }
+.rail-save {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  animation: float-in 160ms ease;
+}
+.rail-save:hover { opacity: 0.88; }
+@keyframes float-in { from { transform: scale(0.85); opacity: 0; } }
+.rail-save[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 11.5px;
+  font-weight: 500;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease 200ms;
+}
+.float[data-side="right"] .rail-save[data-tip]::after { right: calc(100% + 10px); }
+.float[data-side="left"] .rail-save[data-tip]::after { left: calc(100% + 10px); }
+.rail-save[data-tip]:hover::after { opacity: 1; }
 
 /* ---- panel --------------------------------------------------------------- */
 .panel {
@@ -143,7 +182,7 @@ export const STYLES = /* css */ `
   box-shadow: var(--shadow);
   overflow: hidden;
 }
-.panel[data-panel="body"] { height: min(680px, calc(100vh - 96px)); }
+.panel[data-panel="source"] { height: min(620px, calc(100vh - 96px)); }
 
 .panel-head {
   display: flex;
@@ -271,37 +310,36 @@ export const STYLES = /* css */ `
 .segmented button { height: 22px; padding: 0 10px; border-radius: 5px; font-size: 11.5px; font-weight: 500; color: var(--fg-muted); display: inline-flex; align-items: center; gap: 6px; }
 .segmented button[aria-pressed="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06); }
 
-/* ---- body editor --------------------------------------------------------- */
-.editor {
-  display: block;
+/* ---- source (read-only escape hatch) ------------------------------------- */
+.panel-body.source { display: flex; flex-direction: column; }
+.source-note {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--fg-muted);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-subtle);
+}
+.source-note code { font-family: var(--mono); font-size: 10.5px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.source-view {
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  height: 100%;
   padding: 12px 14px;
   border: 0;
   resize: none;
   background: transparent;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.6;
   tab-size: 2;
   color: var(--fg);
+  white-space: pre;
+  overflow: auto;
 }
-.editor:focus { outline: none; }
-.editor::placeholder { color: var(--fg-faint); }
-.editor-wrap { position: relative; height: 100%; }
-.editor-wrap[data-dragging]::after {
-  content: "Drop to add image";
-  position: absolute;
-  inset: 8px;
-  display: grid;
-  place-items: center;
-  border: 1px dashed var(--fg-faint);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg) 90%, transparent);
-  color: var(--fg-muted);
-  font-size: 12px;
-  pointer-events: none;
-}
+.source-view:read-only { color: var(--fg-muted); }
+.source-view:focus { outline: none; }
 
 /* ---- fields -------------------------------------------------------------- */
 .field { display: flex; flex-direction: column; gap: 5px; padding: 8px 0; }

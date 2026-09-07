@@ -13,8 +13,11 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
 ---
 
 <Base title={`${post.data.title} · Field Notes`} description={post.data.description}>
-  {/* data-float-entry binds this page to its collection entry. Optional: Float
-      can also infer it from the URL, but the attribute is explicit and cheap. */}
+  {/* Two attributes are all Float needs:
+      - data-float-entry binds the page to its collection entry (optional; Float
+        can also infer it from the URL)
+      - data-float-body marks the element that wraps the rendered Markdown body;
+        that element becomes editable in place when Float is on */}
   <article data-float-entry={`blog:${post.id}`}>
     <header>
       <div class="meta">
@@ -24,7 +27,7 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
       <h1>{post.data.title}</h1>
       {post.data.description && <p class="lede">{post.data.description}</p>}
     </header>
-    <div class="prose">
+    <div class="prose" data-float-body>
       <Content />
     </div>
     {post.data.tags.length > 0 && (
