@@ -71,6 +71,8 @@ export const STYLES = /* css */ `
 
 /* ---- rail ---------------------------------------------------------------- */
 .rail {
+  position: relative;
+  z-index: 1; /* tooltips must paint over the panel beside it */
   display: flex;
   flex-direction: column;
   align-items: center;

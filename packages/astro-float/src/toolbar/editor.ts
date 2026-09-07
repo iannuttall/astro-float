@@ -33,8 +33,8 @@ const PAGE_STYLE = /* css */ `
   transition: outline-color 150ms ease, background-color 150ms ease;
   caret-color: currentColor;
 }
-[data-float-editing]:hover { outline-color: color-mix(in srgb, currentColor 18%, transparent); }
-[data-float-editing]:focus { outline-color: color-mix(in srgb, currentColor 30%, transparent); }
+[data-float-editing]:hover { outline-color: color-mix(in srgb, currentColor 28%, transparent); }
+[data-float-editing]:focus { outline-color: color-mix(in srgb, currentColor 40%, transparent); }
 [data-float-editing][data-float-dragging] {
   outline: 1px dashed currentColor;
   background-color: color-mix(in srgb, currentColor 4%, transparent);
