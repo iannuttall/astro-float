@@ -335,7 +335,7 @@ export const STYLES = /* css */ `
   line-height: 1.6;
   tab-size: 2;
   color: var(--fg);
-  white-space: pre;
+  white-space: pre-wrap;
   overflow: auto;
 }
 .source-view:read-only { color: var(--fg-muted); }

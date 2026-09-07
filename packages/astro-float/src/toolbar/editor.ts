@@ -11,6 +11,12 @@ export interface BodySource {
   blocks: SourceBlock[];
 }
 
+export interface SaveSnapshot {
+  markdown: string;
+  html: string;
+  keys: string[];
+}
+
 export interface PageEditorHooks {
   /** Any DOM change inside the editable body (already debounced to a microtask). */
   onChange(): void;
@@ -81,14 +87,31 @@ export class PageEditor {
     this.setBaseline(source);
   }
 
-  /** New source of truth after a save: current DOM is now "clean". */
+  /** Fresh clean baseline from the DOM as it is right now. */
   setBaseline(source: BodySource) {
+    this.commit(this.snapshotForSave(), source);
+  }
+
+  /**
+   * What a save should write, plus the DOM state it was derived from. Kept
+   * separate from `commit` so keystrokes that land while the request is in
+   * flight still count as unsaved afterwards.
+   */
+  snapshotForSave(): SaveSnapshot {
+    return {
+      markdown: this.toMarkdown(),
+      html: this.container?.innerHTML ?? "",
+      keys: this.domBlocks().map((n) => keyOf(n)),
+    };
+  }
+
+  /** Make a snapshot the new source of truth (call after the server confirmed it). */
+  commit(snapshot: SaveSnapshot, source: BodySource) {
     if (!this.container) return;
     this.source = source;
-    this.baselineHTML = this.container.innerHTML;
-    const nodes = this.domBlocks();
-    this.mapped = nodes.length === source.blocks.length;
-    this.snapshot = this.mapped ? nodes.map((n, i) => ({ key: keyOf(n), block: source.blocks[i] })) : [];
+    this.baselineHTML = snapshot.html;
+    this.mapped = snapshot.keys.length === source.blocks.length;
+    this.snapshot = this.mapped ? snapshot.keys.map((key, i) => ({ key, block: source.blocks[i] })) : [];
   }
 
   attach() {
@@ -113,6 +136,7 @@ export class PageEditor {
     }
 
     el.addEventListener("keydown", this.onKeydown);
+    el.addEventListener("keyup", this.onKeyup);
     el.addEventListener("paste", this.onPaste);
     el.addEventListener("click", this.onClick);
     el.addEventListener("dragenter", this.onDragEnter);
@@ -134,6 +158,7 @@ export class PageEditor {
     el.removeAttribute("data-float-editing");
     el.removeAttribute("data-float-dragging");
     el.removeEventListener("keydown", this.onKeydown);
+    el.removeEventListener("keyup", this.onKeyup);
     el.removeEventListener("paste", this.onPaste);
     el.removeEventListener("click", this.onClick);
     el.removeEventListener("dragenter", this.onDragEnter);
@@ -233,12 +258,18 @@ export class PageEditor {
     });
   }
 
+  /** The dev toolbar closes the active app on Escape keyup; inside the body Escape only leaves the text. */
+  private onKeyup = (e: KeyboardEvent) => {
+    if (e.key === "Escape") e.stopPropagation();
+  };
+
   private onKeydown = (e: KeyboardEvent) => {
     const el = this.container!;
     const mod = e.metaKey || e.ctrlKey;
 
     if (e.key === "Escape") {
       e.preventDefault();
+      e.stopPropagation();
       el.blur();
       return;
     }

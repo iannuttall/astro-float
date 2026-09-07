@@ -234,7 +234,8 @@ class Float {
     this.saving = true;
     this.setStatus("saving");
     const frontmatter = clone(this.draftFrontmatter);
-    const body = this.currentBody();
+    const snapshot = this.page.bound ? this.page.snapshotForSave() : null;
+    const body = snapshot ? snapshot.markdown : this.draftBody;
     // Re-rendering from the server would move the caret; skip it while the
     // user is typing in the body and let their DOM stand as the preview.
     const refresh = !this.page.hasFocus();
@@ -249,8 +250,9 @@ class Float {
         force,
       });
       this.doc = { ...this.doc, frontmatter, body: result.body, lead: result.lead, blocks: result.blocks, hash: result.hash };
-      this.draftBody = result.body;
-      this.page.setBaseline({ lead: result.lead, blocks: result.blocks });
+      if (snapshot) this.page.commit(snapshot, { lead: result.lead, blocks: result.blocks });
+      // Source-only mode: adopt the server's normalized text unless more was typed meanwhile.
+      else if (this.draftBody === body) this.draftBody = result.body;
 
       if (result.changed && refresh) {
         this.setStatus("refreshing");

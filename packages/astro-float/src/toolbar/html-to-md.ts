@@ -153,10 +153,22 @@ function preToMarkdown(pre: HTMLElement): string {
   const lang =
     pre.getAttribute("data-language") ??
     (code.className.match(/language-([\w+-]+)/)?.[1] ?? pre.className.match(/language-([\w+-]+)/)?.[1] ?? "");
-  const text = (code.textContent ?? "").replace(/\n$/, "");
+  const text = preText(code).replace(/\n$/, "");
   const longest = Math.max(2, ...Array.from(text.matchAll(/`+/g)).map((m) => m[0].length));
   const fence = "`".repeat(longest + 1);
   return `${fence}${lang}\n${text}\n${fence}`;
+}
+
+/** textContent, except <br> (which the browser inserts on Enter) counts as a newline. */
+function preText(node: Node): string {
+  let out = "";
+  for (const child of Array.from(node.childNodes)) {
+    if (child.nodeType === Node.TEXT_NODE) out += child.textContent ?? "";
+    else if (child instanceof HTMLElement && child.tagName === "BR") out += "\n";
+    else if (child instanceof HTMLElement && (child.tagName === "DIV" || child.tagName === "P")) out += preText(child) + "\n";
+    else out += preText(child);
+  }
+  return out;
 }
 
 // ---- tables -------------------------------------------------------------------
@@ -254,13 +266,13 @@ function codeSpan(text: string): string {
 }
 
 /**
- * Whitespace as the browser would render it (runs collapse to one space, NBSP
- * stays), and typographic quotes back to ASCII — Astro's smartypants turns
- * `'`/`"` into `’`/`“”` at render time, so writing the straight forms back
- * round-trips to the same page.
+ * Whitespace as the browser would render it: runs collapse to one space, and
+ * the NBSPs contenteditable sprinkles in while you type become plain spaces.
+ * Typographic quotes go back to ASCII — Astro's smartypants turns `'`/`"`
+ * into `’`/`“”` at render time, so the straight forms round-trip to the same page.
  */
 function collapse(text: string): string {
-  return text.replace(/[\t\n\r ]+/g, " ").replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
+  return text.replace(/[\t\n\r \u00a0]+/g, " ").replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
 }
 
 function escapeAlt(text: string): string {
