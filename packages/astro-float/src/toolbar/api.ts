@@ -20,6 +20,8 @@ export interface SourceBlock {
   type: string;
   src: string;
   trailer: string;
+  /** MDX component / raw HTML: atomic on the page, source always written back verbatim. */
+  island?: boolean;
 }
 
 export interface EntryDoc {
@@ -27,6 +29,7 @@ export interface EntryDoc {
   id: string;
   file: string;
   folder: boolean;
+  mdx: boolean;
   /** Absolute directory of the entry file (dev only; used to relativize image URLs). */
   absDir: string;
   frontmatter: Frontmatter;

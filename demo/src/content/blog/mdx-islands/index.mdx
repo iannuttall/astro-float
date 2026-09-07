@@ -1,0 +1,22 @@
+---
+title: MDX islands
+description: Components inside prose stay atomic — move them, remove them, but don't type into them.
+pubDate: 2026-08-25
+tags:
+  - mdx
+draft: false
+---
+
+import Callout from "../../../components/Callout.astro";
+
+This post is an `.mdx` file. The paragraphs are ordinary Markdown and edit exactly like the other posts. Edited beside an island.
+
+Float treats component blocks as **islands**. You can reorder them among the surrounding blocks (drag the grip, or use the arrows) and delete them after a confirm, but their MDX source is written back verbatim — Float never tries to turn rendered component HTML into Markdown.
+
+<Callout title="This is a component" tone="tip">
+  It's rendered from `<Callout>` in the source. Click it: the text won't take a caret, and a small bar appears with move up / move down / remove.
+</Callout>
+
+## Later
+
+A component picker — browse every component the project exposes and drop one in from the rail — is the obvious next step. Not in this pass.

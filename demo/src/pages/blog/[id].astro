@@ -13,19 +13,21 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
 ---
 
 <Base title={`${post.data.title} · Field Notes`} description={post.data.description}>
-  {/* Two attributes are all Float needs:
+  {/* Three attributes are all Float needs:
       - data-float-entry binds the page to its collection entry (optional; Float
         can also infer it from the URL)
       - data-float-body marks the element that wraps the rendered Markdown body;
-        that element becomes editable in place when Float is on */}
+        it becomes editable in place in dev
+      - data-float-field="<frontmatter key>" on an element that prints a string
+        field verbatim makes that field editable in place too */}
   <article data-float-entry={`blog:${post.id}`}>
     <header>
       <div class="meta">
         <time datetime={post.data.pubDate.toISOString()}>{fmt.format(post.data.pubDate)}</time>
         {post.data.draft && <span class="badge">Draft</span>}
       </div>
-      <h1>{post.data.title}</h1>
-      {post.data.description && <p class="lede">{post.data.description}</p>}
+      <h1 data-float-field="title">{post.data.title}</h1>
+      <p class="lede" data-float-field="description">{post.data.description}</p>
     </header>
     <div class="prose" data-float-body>
       <Content />
@@ -45,6 +47,7 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
   .badge { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
   h1 { font-size: 32px; line-height: 1.2; letter-spacing: -0.02em; margin: 0; }
   .lede { color: var(--muted); font-size: 17px; margin: 12px 0 0; }
+  .lede:empty:not([data-float-editing-field]) { display: none; }
   .tags { display: flex; gap: 12px; margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
   .back { margin-top: 40px; font-size: 14px; color: var(--muted); }
   .back a:hover { color: var(--fg); }

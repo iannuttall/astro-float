@@ -41,8 +41,8 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
         {date && <time datetime={date.toISOString()}>{fmt.format(date)}</time>}
         {data.draft === true && <span class="badge">Draft</span>}
       </div>
-      <h1>{title}</h1>
-      {description && <p class="lede">{description}</p>}
+      <h1 data-float-field="title">{title}</h1>
+      <p class="lede" data-float-field="description">{description}</p>
     </header>
     <div class="prose" data-float-body>
       <Content />
@@ -58,6 +58,7 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
   .badge { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
   h1 { font-size: 32px; line-height: 1.2; letter-spacing: -0.02em; margin: 0; }
   .lede { color: var(--muted); font-size: 17px; margin: 12px 0 0; }
+  .lede:empty:not([data-float-editing-field]) { display: none; }
   .back { margin-top: 40px; font-size: 14px; color: var(--muted); }
   .back a:hover { color: var(--fg); }
 </style>

@@ -1,6 +1,7 @@
 import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
 import { h, replaceChildren } from "./dom";
 import { PageEditor } from "./editor";
+import { FieldBindings } from "./fields";
 import { icon } from "./icons";
 import { detectEntry, routeFor, swapPage, type DetectedEntry } from "./page";
 import { STYLES } from "./styles";
@@ -16,6 +17,9 @@ interface Prefs {
 
 const PREFS_KEY = "astro-float:prefs";
 const AUTOSAVE_DELAY = 800;
+/** How long the rail stays fully out after sliding in, before tucking (Astro's bar does the same). */
+const ENTRANCE_HOLD_MS = 1400;
+const HOVER_LEAVE_MS = 450;
 
 const ENTRY_PANELS: PanelId[] = ["fields", "source"];
 const PANEL_TITLES: Record<PanelId, string> = {
@@ -47,9 +51,13 @@ class Float {
   private draftFrontmatter: Frontmatter = {};
   /** Body draft used only when the page has no `[data-float-body]` to edit in place. */
   private draftBody = "";
+  /** MDX whose blocks couldn't be mapped to source: never rewrite the body from HTML. */
+  private bodyReadOnly = false;
   private listCollection: string | null = null;
 
   private page: PageEditor;
+  private fields: FieldBindings;
+  private fieldInputs = new Map<string, HTMLInputElement | HTMLTextAreaElement>();
 
   private status: Status = "idle";
   private statusMessage = "";
@@ -58,6 +66,13 @@ class Float {
   private navigating = false;
   private autosaveTimer: number | undefined;
   private savedTimer: number | undefined;
+
+  // rail tuck state
+  private coarse = isTouchDevice();
+  private entering = true;
+  private hovering = false;
+  private touchExpanded = false;
+  private hoverTimer: number | undefined;
 
   private footStatus: HTMLElement | null = null;
   private footActions: HTMLElement | null = null;
@@ -80,29 +95,43 @@ class Float {
 
     this.rail = h("nav", { class: "rail", "aria-label": "Float" });
     this.panelHost = h("div", { class: "panel-host" });
-    this.root = h("div", { class: "float", "data-side": this.prefs.side }, this.rail, this.panelHost);
+    this.root = h("div", { class: "float", "data-side": this.prefs.side, "data-coarse": this.coarse ? "" : null }, this.rail, this.panelHost);
     canvas.appendChild(this.root);
 
     this.page = new PageEditor({
       onChange: () => this.touched(),
       onFiles: (files, range) => void this.uploadAll(files, range),
     });
-
-    // Escape inside the rail should drop focus, not bubble into page handlers.
-    this.root.addEventListener("keyup", (e) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        (this.canvas.activeElement as HTMLElement | null)?.blur();
-      }
+    this.fields = new FieldBindings({
+      onChange: (key, value) => {
+        this.draftFrontmatter[key] = value;
+        const input = this.fieldInputs.get(key);
+        if (input && input.value !== value) input.value = value;
+        this.touched();
+      },
     });
+
+    this.bindRailInteractions();
+    this.bindViewport();
+
+    // Escape inside the rail: leave the field first, then close the panel.
     this.root.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      const active = this.canvas.activeElement as HTMLElement | null;
+      if (active && active.matches("input, textarea, select")) active.blur();
+      else this.closePanel();
+    });
+    this.root.addEventListener("keyup", (e) => {
       if (e.key === "Escape") e.stopPropagation();
     });
     document.addEventListener("keydown", (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         void this.save();
+        return;
       }
+      if (e.key === "Escape" && this.panel) this.closePanel();
     });
     // Only real unloads (tab close, hard refresh) should ever warn — Float's own
     // navigations are soft swaps and never reach here.
@@ -115,8 +144,112 @@ class Float {
     this.renderRail();
     void this.loadPage();
 
-    // Slide in from the edge once the initial styles have applied.
-    requestAnimationFrame(() => requestAnimationFrame(() => (this.root.dataset.entered = "")));
+    // Slide in from the edge once the initial styles have applied, hold, then tuck.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        this.root.dataset.entered = "";
+        window.setTimeout(() => {
+          this.entering = false;
+          this.updateTuck();
+        }, ENTRANCE_HOLD_MS);
+      }),
+    );
+  }
+
+  // ---- rail tuck / reveal -----------------------------------------------------------
+
+  /**
+   * Resting state is tucked (a sliver showing at the edge). Anything that means
+   * "I'm using it" keeps it out: hover (fine pointers), a tap (coarse pointers),
+   * an open panel, or unsaved work with autosave off.
+   */
+  private updateTuck() {
+    const dirtyWork = this.isDirty() && !this.prefs.autosave;
+    const out = this.entering || this.hovering || this.touchExpanded || this.panel !== null || dirtyWork;
+    this.root.toggleAttribute("data-tucked", !out);
+  }
+
+  private bindRailInteractions() {
+    const reveal = () => {
+      window.clearTimeout(this.hoverTimer);
+      if (!this.hovering) {
+        this.hovering = true;
+        this.updateTuck();
+      }
+    };
+    const leave = () => {
+      window.clearTimeout(this.hoverTimer);
+      this.hoverTimer = window.setTimeout(() => {
+        this.hovering = false;
+        this.updateTuck();
+      }, HOVER_LEAVE_MS);
+    };
+    this.rail.addEventListener("mouseenter", () => {
+      if (!this.coarse) reveal();
+    });
+    this.rail.addEventListener("mouseleave", () => {
+      if (!this.coarse) leave();
+    });
+    this.rail.addEventListener("focusin", reveal);
+    this.rail.addEventListener("focusout", leave);
+
+    // Coarse pointers: the first tap on a tucked rail only expands it.
+    this.rail.addEventListener(
+      "click",
+      (e) => {
+        if (!this.coarse) return;
+        if (this.root.hasAttribute("data-tucked")) {
+          e.preventDefault();
+          e.stopPropagation();
+          this.touchExpanded = true;
+          this.updateTuck();
+          return;
+        }
+        // A tap on the rail's own background (not an icon) collapses it again.
+        if (e.target === this.rail || (e.target as HTMLElement).classList?.contains("rail-sep")) {
+          this.collapse();
+        }
+      },
+      true,
+    );
+
+    matchMedia("(hover: none)").addEventListener("change", () => {
+      this.coarse = isTouchDevice();
+      this.root.toggleAttribute("data-coarse", this.coarse);
+    });
+  }
+
+  /** Close the panel and, on touch devices, tuck the rail. */
+  private collapse() {
+    this.touchExpanded = false;
+    this.closePanel();
+    this.updateTuck();
+  }
+
+  /**
+   * Position everything inside the *visual* viewport. On iOS the on-screen
+   * keyboard shrinks the visual viewport without touching the layout viewport,
+   * which is how fixed panels end up half-hidden behind it.
+   */
+  private bindViewport() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const apply = () => {
+      this.root.style.setProperty("--vv-top", `${Math.max(0, vv.offsetTop)}px`);
+      this.root.style.setProperty("--vv-left", `${Math.max(0, vv.offsetLeft)}px`);
+      this.root.style.setProperty("--vv-width", `${vv.width}px`);
+      this.root.style.setProperty("--vv-height", `${vv.height}px`);
+    };
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    apply();
+  }
+
+  /** Blur whatever has the caret in the rail and undo an iOS focus-zoom if one slipped through. */
+  private releaseFocus() {
+    const active = this.canvas.activeElement as HTMLElement | null;
+    active?.blur();
+    resetViewportZoom();
   }
 
   // ---- page lifecycle ---------------------------------------------------------
@@ -124,10 +257,12 @@ class Float {
   /** (Re)read the current URL: which entry is this, bind the body, keep the rail calm. */
   private async loadPage() {
     this.page.unbind();
+    this.fields.unbind();
     this.doc = null;
     this.detected = null;
     this.draftFrontmatter = {};
     this.draftBody = "";
+    this.bodyReadOnly = false;
     this.closePanel();
 
     try {
@@ -152,15 +287,24 @@ class Float {
     this.renderRail();
   }
 
-  /** Attach the in-place editor to `[data-float-body]` on the current DOM. */
+  /** Attach the in-place editors to `[data-float-body]` and `[data-float-field]` on the current DOM. */
   private bindBody() {
     if (!this.doc) return;
+    this.fields.bind(this.doc.frontmatter);
+    this.fields.attach();
+
     const container = PageEditor.find();
     if (!container) {
       this.page.unbind();
       return;
     }
     this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
+    // MDX we can't line up with the source would be written back as HTML — never do that.
+    this.bodyReadOnly = this.doc.mdx && !this.page.mapped;
+    if (this.bodyReadOnly) {
+      this.setStatus("error", "MDX blocks didn't line up with the source — body is read-only here; fields still save");
+      return;
+    }
     this.page.attach();
   }
 
@@ -175,6 +319,7 @@ class Float {
       if (this.isDirty()) return;
     }
     this.navigating = true;
+    this.releaseFocus();
     this.setStatus("refreshing");
     try {
       await swapPage(url.href);
@@ -191,8 +336,14 @@ class Float {
   }
 
   private onDocumentClick = (e: MouseEvent) => {
+    const path = e.composedPath();
+    const insideFloat = path.includes(this.canvas.host);
+
+    // Touch: tapping the page while the rail is out (or a panel is open) puts it away.
+    if (this.coarse && !insideFloat && (this.touchExpanded || this.panel)) this.collapse();
+
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const anchor = e.composedPath().find((n) => n instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined;
+    const anchor = path.find((n) => n instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined;
     if (!anchor || !anchor.href) return;
     if ((anchor.target && anchor.target !== "_self") || anchor.hasAttribute("download")) return;
     const url = new URL(anchor.href, location.href);
@@ -222,7 +373,7 @@ class Float {
   }
 
   private bodyDirty() {
-    if (!this.doc) return false;
+    if (!this.doc || this.bodyReadOnly) return false;
     return this.page.bound ? this.page.isDirty() : this.draftBody !== this.doc.body;
   }
 
@@ -231,6 +382,8 @@ class Float {
   }
 
   private currentBody(): string {
+    if (!this.doc) return "";
+    if (this.bodyReadOnly) return this.doc.body;
     return this.page.bound ? this.page.toMarkdown() : this.draftBody;
   }
 
@@ -241,7 +394,7 @@ class Float {
   }
 
   private touched() {
-    if (this.status === "saved" || this.status === "error") this.status = "idle";
+    if (this.status === "saved" || (this.status === "error" && !this.bodyReadOnly)) this.status = "idle";
     this.renderStatus();
     if (this.sourceView) this.sourceView.value = this.currentBody();
     if (this.prefs.autosave) this.scheduleAutosave();
@@ -266,11 +419,11 @@ class Float {
     this.saving = true;
     this.setStatus("saving");
     const frontmatter = clone(this.draftFrontmatter);
-    const snapshot = this.page.bound ? this.page.snapshotForSave() : null;
-    const body = snapshot ? snapshot.markdown : this.draftBody;
+    const snapshot = this.page.bound && !this.bodyReadOnly ? this.page.snapshotForSave() : null;
+    const body = snapshot ? snapshot.markdown : this.currentBody();
     // Re-rendering from the server would move the caret; skip it while the
-    // user is typing in the body and let their DOM stand as the preview.
-    const refresh = !this.page.hasFocus();
+    // user is typing on the page and let their DOM stand as the preview.
+    const refresh = !this.page.hasFocus() && !this.fields.hasFocus();
 
     try {
       const result = await api.save({
@@ -284,7 +437,7 @@ class Float {
       this.doc = { ...this.doc, frontmatter, body: result.body, lead: result.lead, blocks: result.blocks, hash: result.hash };
       if (snapshot) this.page.commit(snapshot, { lead: result.lead, blocks: result.blocks });
       // Source-only mode: adopt the server's normalized text unless more was typed meanwhile.
-      else if (this.draftBody === body) this.draftBody = result.body;
+      else if (!this.bodyReadOnly && this.draftBody === body) this.draftBody = result.body;
 
       if (result.changed && refresh) {
         this.setStatus("refreshing");
@@ -363,19 +516,23 @@ class Float {
 
   private closePanel() {
     if (this.panel === null && !this.panelHost.childElementCount) return;
+    this.releaseFocus();
     this.panel = null;
     this.panelHost.textContent = "";
     this.sourceView = null;
     this.footStatus = null;
     this.footActions = null;
+    this.fieldInputs.clear();
     this.lastFoot = "";
     this.renderRail();
+    this.updateTuck();
   }
 
   private showPanel(id: PanelId) {
     this.panel = id;
     this.renderPanel();
     this.renderRail();
+    this.updateTuck();
   }
 
   // ---- panel shell --------------------------------------------------------------
@@ -386,6 +543,7 @@ class Float {
     this.footStatus = null;
     this.footActions = null;
     this.sourceView = null;
+    this.fieldInputs.clear();
     this.lastFoot = "";
 
     const sub = this.doc ? `${this.doc.collection}/${this.doc.id}` : "no entry on this page";
@@ -394,7 +552,7 @@ class Float {
       { class: "panel-head" },
       h("span", { class: "panel-title" }, PANEL_TITLES[id]),
       h("span", { class: "panel-sub", title: this.doc?.file ?? "" }, sub),
-      h("button", { class: "icon-btn", type: "button", "aria-label": "Close panel", onClick: () => this.closePanel() }, icon("close", 14)),
+      h("button", { class: "icon-btn", type: "button", "aria-label": "Close panel", onClick: () => this.collapse() }, icon("close", 14)),
     );
 
     let body: HTMLElement;
@@ -446,6 +604,7 @@ class Float {
       this.statusDot.hidden = showSave;
       this.statusDot.dataset.state = dotState;
       this.statusDot.title = dotState === "dirty" ? "Unsaved changes" : dotState === "saved" ? "Saved" : this.statusMessage || "";
+      this.updateTuck();
     }
 
     if (!this.footStatus || !this.footActions) return;
@@ -474,7 +633,7 @@ class Float {
       case "error":
         text = this.statusMessage || "Something went wrong";
         tone = "err";
-        if (dirty) actions.push(h("button", { class: "btn btn-sm", type: "button", onClick: () => void this.save() }, "Retry"));
+        if (dirty) actions.push(h("button", { class: "btn btn-sm", type: "button", onClick: () => void this.save() }, this.bodyReadOnly ? "Save fields" : "Retry"));
         break;
       case "saved":
         text = "Saved";
@@ -509,7 +668,7 @@ class Float {
 
   private renderSource(): HTMLElement {
     if (!this.doc) return this.renderNoEntry();
-    const editable = !this.page.bound;
+    const editable = !this.page.bound && !this.bodyReadOnly;
     const view = h("textarea", {
       class: "source-view",
       spellcheck: false,
@@ -524,18 +683,20 @@ class Float {
     }) as HTMLTextAreaElement;
     this.sourceView = view;
 
-    const note = editable
-      ? [
-          "No ",
-          h("code", null, "data-float-body"),
-          " element on this page, so the body can only be edited here. Add the attribute to the element that wraps ",
-          h("code", null, "<Content />"),
-          " to edit on the page.",
-        ]
-      : [
-          "Read-only. This is the Markdown that Save writes to disk",
-          this.page.mapped ? " — untouched blocks are kept byte-for-byte." : ". Blocks didn't line up with the source, so the whole body is re-serialized.",
-        ];
+    const note = this.bodyReadOnly
+      ? ["Read-only. This MDX file has blocks Float couldn't line up with the rendered page, so the body is left untouched on save."]
+      : editable
+        ? [
+            "No ",
+            h("code", null, "data-float-body"),
+            " element on this page, so the body can only be edited here. Add the attribute to the element that wraps ",
+            h("code", null, "<Content />"),
+            " to edit on the page.",
+          ]
+        : [
+            "Read-only. This is the Markdown that Save writes to disk",
+            this.page.mapped ? " — untouched blocks are kept byte-for-byte." : ". Blocks didn't line up with the source, so the whole body is re-serialized.",
+          ];
 
     return h("div", { class: "panel-body source" }, h("p", { class: "source-note" }, ...note), view);
   }
@@ -572,6 +733,7 @@ class Float {
     const kind = fieldKind(value);
     const set = (next: unknown) => {
       this.draftFrontmatter[key] = next;
+      this.fields.setValue(key, next);
       this.touched();
     };
 
@@ -631,6 +793,7 @@ class Float {
       case "text": {
         const ta = h("textarea", { class: "textarea", rows: 3, value: String(value) }) as HTMLTextAreaElement;
         ta.addEventListener("input", () => set(ta.value));
+        this.fieldInputs.set(key, ta);
         control = ta;
         break;
       }
@@ -650,6 +813,7 @@ class Float {
       default: {
         const input = h("input", { class: "input", type: "text", value: value == null ? "" : String(value) }) as HTMLInputElement;
         input.addEventListener("input", () => set(input.value));
+        this.fieldInputs.set(key, input);
         control = input;
       }
     }
@@ -661,6 +825,7 @@ class Float {
         "div",
         { class: "field-head" },
         h("span", { class: "field-key" }, key),
+        this.fields.has(key) ? h("span", { class: "field-type", title: "Also editable on the page" }, "on page") : null,
         h("span", { class: "field-type" }, kind === "string" ? "text" : kind),
         h(
           "button",
@@ -685,9 +850,9 @@ class Float {
   // ---- images (drop / paste on the prose only) ----------------------------------------
 
   private placeImage(item: MediaItem, range: Range | null) {
-    if (this.page.bound) {
+    if (this.page.bound && !this.bodyReadOnly) {
       this.page.insertImage(item.url, altFrom(item.name), range);
-    } else {
+    } else if (!this.bodyReadOnly) {
       const sep = this.draftBody === "" || this.draftBody.endsWith("\n\n") ? "" : this.draftBody.endsWith("\n") ? "\n" : "\n\n";
       this.draftBody = `${this.draftBody}${sep}![${altFrom(item.name)}](${item.src})\n`;
       this.touched();
@@ -724,8 +889,10 @@ class Float {
     const selected = this.collections.find((c) => c.name === this.listCollection) ?? this.collections[0];
     if (selected) this.listCollection = selected.name;
 
+    // Cancel/close puts the list back exactly as it was: same panel, keyboard down, no zoom left behind.
     const setForm = (kind: "entry" | "collection" | null) => {
       openForm = kind;
+      if (kind === null) this.releaseFocus();
       replaceChildren(
         formHost,
         kind === "entry" && selected
@@ -734,6 +901,7 @@ class Float {
             ? this.renderNewCollectionForm(() => setForm(null))
             : null,
       );
+      if (kind === null) container.scrollTop = 0;
     };
 
     const picker = !selected
@@ -822,8 +990,8 @@ class Float {
   }
 
   private renderNewEntryForm(collection: Collection, close: () => void): HTMLElement {
-    const title = h("input", { class: "input", placeholder: "Title" }) as HTMLInputElement;
-    const slug = h("input", { class: "input", placeholder: "slug", spellcheck: false }) as HTMLInputElement;
+    const title = h("input", { class: "input", placeholder: "Title", autocomplete: "off" }) as HTMLInputElement;
+    const slug = h("input", { class: "input", placeholder: "slug", spellcheck: false, autocomplete: "off", autocapitalize: "off" }) as HTMLInputElement;
     const error = h("div", { class: "form-error" });
     let slugTouched = false;
 
@@ -865,13 +1033,14 @@ class Float {
     form.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) void submit();
     });
-    queueMicrotask(() => title.focus());
+    keepInView(form);
+    queueMicrotask(() => title.focus({ preventScroll: true }));
     return form;
   }
 
   private renderNewCollectionForm(close: () => void): HTMLElement {
-    const name = h("input", { class: "input", placeholder: "til", spellcheck: false, autocapitalize: "off" }) as HTMLInputElement;
-    const first = h("input", { class: "input", placeholder: "First entry", value: "First entry" }) as HTMLInputElement;
+    const name = h("input", { class: "input", placeholder: "til", spellcheck: false, autocapitalize: "off", autocomplete: "off" }) as HTMLInputElement;
+    const first = h("input", { class: "input", placeholder: "First entry", value: "First entry", autocomplete: "off" }) as HTMLInputElement;
     const error = h("div", { class: "form-error" });
     const preview = h("div", { class: "muted mono" }, "src/content/…/");
 
@@ -913,7 +1082,8 @@ class Float {
     form.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) void submit();
     });
-    queueMicrotask(() => name.focus());
+    keepInView(form);
+    queueMicrotask(() => name.focus({ preventScroll: true }));
     return form;
   }
 
@@ -950,6 +1120,7 @@ class Float {
           this.savePrefs();
           if (this.prefs.autosave && this.isDirty()) this.scheduleAutosave();
           this.renderStatus();
+          this.updateTuck();
         },
       },
       h("div", null, h("div", { class: "label" }, "Autosave"), h("div", { class: "desc" }, "Write to disk shortly after you stop typing")),
@@ -958,9 +1129,11 @@ class Float {
 
     const bodyState = !this.doc
       ? "No entry bound to this page."
-      : this.page.bound
-        ? `Editing ${this.doc.file} in place${this.page.mapped ? "" : " (blocks unmapped — whole body re-serialized on save)"}.`
-        : `${this.doc.file} — no data-float-body on this page; body editable in Source only.`;
+      : this.bodyReadOnly
+        ? `${this.doc.file} — MDX blocks unmapped; body read-only, fields editable.`
+        : this.page.bound
+          ? `Editing ${this.doc.file} in place${this.page.mapped ? "" : " (blocks unmapped — whole body re-serialized on save)"}.`
+          : `${this.doc.file} — no data-float-body on this page; body editable in Source only.`;
 
     return h(
       "div",
@@ -982,7 +1155,7 @@ class Float {
           h(
             "div",
             { class: "desc" },
-            "⌘/Ctrl+S save · ⌘B / ⌘I / ⌘K format · Tab / ⇧Tab nest lists · type “# ”, “- ”, “1. ”, “> ”, “```” at a line start · drop or paste images into the text · Esc leaves the text",
+            "⌘/Ctrl+S save · ⌘B / ⌘I / ⌘K format · Tab / ⇧Tab nest lists · type “# ”, “- ”, “1. ”, “> ”, “```” at a line start · drop or paste images into the text · click a component block to move or remove it · Esc leaves the text",
           ),
         ),
       ),
@@ -1012,6 +1185,18 @@ function fieldKind(value: unknown): FieldKind {
   return "json";
 }
 
+/**
+ * Touch-first device: no hover *and* a touchscreen. Headless / virtual displays
+ * report `hover: none` with zero touch points and should behave like a mouse.
+ * `localStorage["astro-float:pointer"] = "coarse" | "fine"` forces either mode.
+ */
+function isTouchDevice(): boolean {
+  const forced = localStorage.getItem("astro-float:pointer");
+  if (forced === "coarse") return true;
+  if (forced === "fine") return false;
+  return matchMedia("(hover: none)").matches && navigator.maxTouchPoints > 0;
+}
+
 function loadPrefs(): Prefs {
   const defaults: Prefs = { side: "right", autosave: false };
   try {
@@ -1020,6 +1205,32 @@ function loadPrefs(): Prefs {
   } catch {
     return defaults;
   }
+}
+
+/** Keep a focused control visible inside the (scrollable) panel when the keyboard comes up. */
+function keepInView(form: HTMLElement) {
+  form.addEventListener("focusin", (e) => {
+    const target = e.target as HTMLElement;
+    window.setTimeout(() => target.scrollIntoView?.({ block: "nearest", behavior: "smooth" }), 60);
+  });
+}
+
+/**
+ * iOS zooms the page when a focused control has text smaller than 16px and
+ * doesn't zoom back out on blur. Float's controls are 16px on touch devices so
+ * this shouldn't trigger — but if the page is left zoomed anyway, briefly pin
+ * `maximum-scale=1` on the viewport meta to snap it back, then restore the
+ * original so user zoom keeps working. No-op on desktop (`scale` is 1).
+ */
+function resetViewportZoom() {
+  const vv = window.visualViewport;
+  if (!vv || vv.scale <= 1.01) return;
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  if (!meta) return;
+  const original = meta.getAttribute("content") ?? "width=device-width, initial-scale=1";
+  const pinned = original.replace(/,?\s*maximum-scale=[^,]*/i, "") + ", maximum-scale=1";
+  meta.setAttribute("content", pinned);
+  window.setTimeout(() => meta.setAttribute("content", original), 350);
 }
 
 function clone<T>(value: T): T {

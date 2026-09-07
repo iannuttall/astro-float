@@ -63,16 +63,32 @@ export const STYLES = /* css */ `
   border: 1px solid var(--line);
   border-radius: 9999px;
   box-shadow: var(--shadow);
+  --rail-x: 0px;
+  --rail-y: 0px;
+  transform: translate(var(--rail-x), var(--rail-y));
   transition: transform 0.35s var(--ease-pop);
 }
-/* Slide in from the edge on mount; nudge out a little further on hover, like the bottom bar. */
-.float[data-side="right"]:not([data-entered]) .rail { transform: translateX(calc(100% + 24px)); }
-.float[data-side="left"]:not([data-entered]) .rail { transform: translateX(calc(-100% - 24px)); }
-.float[data-side="right"][data-entered] .rail:hover { transform: translateX(-3px); }
-.float[data-side="left"][data-entered] .rail:hover { transform: translateX(3px); }
+/*
+ * Like Astro's bottom bar: slide in from the edge, then rest mostly tucked
+ * away with the icons faded. Hover (or a tap on touch screens) brings it out;
+ * an open panel or unsaved work keeps it out.
+ */
+.float[data-side="right"]:not([data-entered]) .rail { --rail-x: calc(100% + 24px); }
+.float[data-side="left"]:not([data-entered]) .rail { --rail-x: calc(-100% - 24px); }
+.float[data-side="right"][data-entered][data-tucked] .rail { --rail-x: 26px; }
+.float[data-side="left"][data-entered][data-tucked] .rail { --rail-x: -26px; }
+.float[data-tucked] .rail > * { opacity: 0.35; }
+@media (hover: hover) {
+  .float[data-side="right"][data-entered]:not([data-tucked]) .rail:hover { --rail-x: -3px; }
+  .float[data-side="left"][data-entered]:not([data-tucked]) .rail:hover { --rail-x: 3px; }
+  /* Generous invisible hit zone so the tucked sliver is easy to catch (Astro has the same above its bar). */
+  .rail::after { content: ""; position: absolute; top: -12px; bottom: -12px; left: -28px; right: -20px; }
+  .float[data-side="left"] .rail::after { left: -20px; right: -28px; }
+}
 
 .rail-btn, .status-slot {
   position: relative;
+  z-index: 1;
   width: 100%;
   height: 36px;
   display: grid;
@@ -397,4 +413,73 @@ export const STYLES = /* css */ `
 .setting .label { font-size: 12.5px; color: var(--fg); }
 .setting .desc { font-size: 11px; color: var(--fg-muted); margin-top: 1px; line-height: 1.5; }
 .meta { font-family: var(--mono); font-size: 10.5px; color: var(--fg-faint); word-break: break-all; padding-top: 12px; border-top: 1px solid var(--line); margin-top: 4px; line-height: 1.6; }
+
+/* ---- small screens ---------------------------------------------------------
+ * The root becomes a box the size of the *visual* viewport (updated from JS as
+ * the keyboard opens/closes), the rail sits centred on its right edge, and the
+ * panel is a sheet pinned to its top beside the rail — so the keyboard shrinks
+ * the sheet instead of covering its buttons. Inputs are 16px so iOS never zooms.
+ */
+@media (max-width: 640px) {
+  .float {
+    top: var(--vv-top, 0px);
+    left: var(--vv-left, 0px);
+    right: auto;
+    width: var(--vv-width, 100vw);
+    height: var(--vv-height, 100dvh);
+    transform: none;
+    display: block;
+    pointer-events: none;
+  }
+  .float[data-side="right"], .float[data-side="left"] { right: auto; left: var(--vv-left, 0px); }
+  .rail {
+    position: absolute;
+    top: 50%;
+    --rail-y: -50%;
+    width: 44px;
+    pointer-events: auto;
+  }
+  .float[data-side="right"] .rail { right: max(12px, env(safe-area-inset-right)); }
+  .float[data-side="left"] .rail { left: max(12px, env(safe-area-inset-left)); }
+  .float[data-side="right"][data-entered][data-tucked] .rail { --rail-x: 28px; }
+  .float[data-side="left"][data-entered][data-tucked] .rail { --rail-x: -28px; }
+  .rail-btn, .status-slot { height: 44px; }
+  .rail > :first-child, .rail > :last-child { height: 47px; }
+  .tip::after, .tip::before { display: none; }
+
+  .panel-host {
+    position: absolute;
+    top: calc(8px + env(safe-area-inset-top));
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    left: max(8px, env(safe-area-inset-left));
+    right: calc(max(12px, env(safe-area-inset-right)) + 44px + 8px);
+    display: flex;
+    align-items: flex-start;
+    pointer-events: none;
+  }
+  .float[data-side="left"] .panel-host {
+    left: calc(max(12px, env(safe-area-inset-left)) + 44px + 8px);
+    right: max(8px, env(safe-area-inset-right));
+  }
+  .panel { width: 100%; max-height: 100%; pointer-events: auto; }
+  .panel[data-panel="source"] { height: 100%; }
+  .panel-body { -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+
+  .input, .textarea, .select, .source-view { font-size: 16px; }
+  .input, .select { min-height: 40px; }
+  .btn { height: 38px; padding: 0 14px; font-size: 14px; }
+  .btn-sm { height: 34px; padding: 0 12px; font-size: 13px; }
+  .icon-btn { width: 40px; height: 40px; }
+  .panel-head, .panel-foot { min-height: 52px; }
+  .list-item { padding: 12px 10px; }
+  .list-item .title { font-size: 15px; }
+  .row-action { padding: 14px; font-size: 14px; }
+  .field-remove { opacity: 1; width: 28px; height: 28px; }
+  .toggle-row { min-height: 40px; }
+  .switch { width: 40px; height: 24px; }
+  .switch::after { width: 20px; height: 20px; }
+  [aria-checked="true"] > .switch::after { transform: translateX(16px); }
+  .segmented button { height: 32px; padding: 0 14px; font-size: 13px; }
+  .form label, .form-note, .source-note { font-size: 13px; }
+}
 `;

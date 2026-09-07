@@ -171,11 +171,16 @@ export async function readEntry(ctx, collectionName, id) {
     // Absolute dir of the entry; the client uses it to turn Vite's /@fs/ image
     // URLs back into the relative paths that belong in the Markdown.
     absDir: path.dirname(abs).split(path.sep).join("/"),
+    mdx: isMdx(abs),
     frontmatter,
     body,
-    ...splitBlocks(body),
+    ...splitBlocks(body, { mdx: isMdx(abs) }),
     hash: hashOf(raw),
   };
+}
+
+function isMdx(file) {
+  return path.extname(file).toLowerCase() === ".mdx";
 }
 
 export async function writeEntry(ctx, { collection, id, frontmatter, body, baseHash, force }) {
@@ -186,7 +191,7 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
   }
   const next = serializeDocument(frontmatter ?? {}, typeof body === "string" ? body : "");
   const saved = parseDocument(next);
-  const result = { file: entry.file, body: saved.body, ...splitBlocks(saved.body) };
+  const result = { file: entry.file, body: saved.body, ...splitBlocks(saved.body, { mdx: isMdx(abs) }) };
   if (next === current) return { ...result, hash: hashOf(current), changed: false };
   await fs.writeFile(abs, next, "utf8");
   return { ...result, hash: hashOf(next), changed: true };
