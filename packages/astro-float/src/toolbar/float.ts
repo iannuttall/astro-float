@@ -144,6 +144,24 @@ class Float {
     this.renderRail();
     void this.loadPage();
 
+    // Read-only introspection for tests and bug reports: host.__astroFloat.state()
+    (this.canvas.host as HTMLElement & { __astroFloat?: unknown }).__astroFloat = {
+      state: () => ({
+        panel: this.panel,
+        tucked: this.root.hasAttribute("data-tucked"),
+        touchExpanded: this.touchExpanded,
+        coarse: this.coarse,
+        status: this.status,
+        frontmatterDirty: this.frontmatterDirty(),
+        bodyDirty: this.bodyDirty(),
+        bodyBound: this.page.bound,
+        bodyMapped: this.page.mapped,
+        bodyReadOnly: this.bodyReadOnly,
+        bodyDiff: this.page.debugDiff(),
+        entry: this.doc ? `${this.doc.collection}/${this.doc.id}` : null,
+      }),
+    };
+
     // Slide in from the edge once the initial styles have applied, hold, then tuck.
     requestAnimationFrame(() =>
       requestAnimationFrame(() => {
@@ -167,6 +185,7 @@ class Float {
     const dirtyWork = this.isDirty() && !this.prefs.autosave;
     const out = this.entering || this.hovering || this.touchExpanded || this.panel !== null || dirtyWork;
     this.root.toggleAttribute("data-tucked", !out);
+    this.root.toggleAttribute("data-expanded", this.touchExpanded);
   }
 
   private bindRailInteractions() {
@@ -190,8 +209,14 @@ class Float {
     this.rail.addEventListener("mouseleave", () => {
       if (!this.coarse) leave();
     });
-    this.rail.addEventListener("focusin", reveal);
-    this.rail.addEventListener("focusout", leave);
+    // Keyboard users: focusing a rail button reveals it. On touch, focus arrives
+    // with the tap itself and must not pre-empt the tap-to-expand step below.
+    this.rail.addEventListener("focusin", () => {
+      if (!this.coarse) reveal();
+    });
+    this.rail.addEventListener("focusout", () => {
+      if (!this.coarse) leave();
+    });
 
     // Coarse pointers: the first tap on a tucked rail only expands it.
     this.rail.addEventListener(
@@ -205,8 +230,9 @@ class Float {
           this.updateTuck();
           return;
         }
-        // A tap on the rail's own background (not an icon) collapses it again.
-        if (e.target === this.rail || (e.target as HTMLElement).classList?.contains("rail-sep")) {
+        // A tap on the rail's own background, the separator or the idle status dot collapses it again.
+        const t = e.target as HTMLElement;
+        if (t === this.rail || t.classList?.contains("rail-sep") || t === this.statusSlot || t === this.statusDot) {
           this.collapse();
         }
       },
@@ -263,6 +289,7 @@ class Float {
     this.draftFrontmatter = {};
     this.draftBody = "";
     this.bodyReadOnly = false;
+    this.touchExpanded = false; // a fresh page starts from the calm, tucked state
     this.closePanel();
 
     try {

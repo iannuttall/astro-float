@@ -171,6 +171,12 @@ export class PageEditor {
     if (this.attached) this.detach();
     this.container = container;
     this.absDir = absDir.replace(/\/$/, "");
+    // Astro's dev toolbar strips these dev-only annotations a beat after load;
+    // do it first so the clean baseline can't be invalidated by it.
+    for (const el of Array.from(container.querySelectorAll("[data-astro-source-file], [data-astro-source-loc]"))) {
+      el.removeAttribute("data-astro-source-file");
+      el.removeAttribute("data-astro-source-loc");
+    }
     this.decorateIslands(source);
     this.setBaseline(source);
   }
@@ -286,6 +292,17 @@ export class PageEditor {
 
   isDirty() {
     return this.container ? this.container.innerHTML !== this.baselineHTML : false;
+  }
+
+  /** Where the live DOM first departs from the clean baseline (for bug reports). */
+  debugDiff(): string | null {
+    if (!this.container) return null;
+    const a = this.baselineHTML;
+    const b = this.container.innerHTML;
+    if (a === b) return null;
+    let i = 0;
+    while (i < a.length && a[i] === b[i]) i++;
+    return `@${i}\n  baseline: ${JSON.stringify(a.slice(Math.max(0, i - 40), i + 80))}\n  now:      ${JSON.stringify(b.slice(Math.max(0, i - 40), i + 80))}`;
   }
 
   /** Focus the body with the first block selected — a fresh entry's placeholder gets replaced by whatever you type. */
