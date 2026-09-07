@@ -1,10 +1,10 @@
 # astro-float
 
-A proof-of-concept floating content editor for Astro content collections. It lives in the **Astro Dev Toolbar** — one icon toggles a vertical rail docked to the edge of the page — and writes Markdown straight to disk while you look at the rendered page.
+A proof-of-concept content editor for Astro content collections that lives **on the page**. Toggle one icon in the **Astro Dev Toolbar** and the rendered Markdown body becomes editable in place — click into the prose, type, save. A thin vertical rail docks to the edge of the viewport for the things that can't live in the text: frontmatter fields, images, other entries, a read-only view of the Markdown that's about to hit disk.
 
-No `/admin`, no desktop app, no CMS studio. Dev-only: the integration adds nothing to production builds.
+No `/admin`, no desktop app, no CMS studio, no separate text area. Dev-only: the integration adds nothing to production builds.
 
-![Float open on a blog post, docked right, body editor visible](docs/float-body.png)
+![Editing a blog post in place: dashed focus outline around the prose, caret in the text, thin rail on the right with a dark Save button](docs/float-editing.png)
 
 ## Preview it
 
@@ -15,41 +15,41 @@ pnpm install
 pnpm dev
 ```
 
-Open <http://localhost:4321/blog/hello-float/>, move the mouse to the bottom of the window to reveal the Astro dev toolbar, and click the **Float** icon (the last one before Settings).
+Open <http://localhost:4321/blog/hello-float/>, move the mouse to the bottom of the window to reveal the Astro dev toolbar, and click the **Float** icon (the last one before Settings). Then click into the article and type.
 
 > Local `astro dev` is the only real preview path — the editor writes to your filesystem. A Vercel/Netlify preview would only show the plain blog, since the integration is stripped from builds.
 
-## What you can do from the float
+## On the page
 
-| Rail icon | Panel | What it does |
-| --- | --- | --- |
-| Document | **Body** | Edit the entry's Markdown. Save with **⌘S / Ctrl+S**, the **Save** button (appears only when dirty), or autosave. The page re-renders in place — no reload, scroll and caret preserved. Drop or paste images straight into the editor. |
-| Sliders | **Fields** | Frontmatter as a form. Types are inferred from the values: text, long text, number, date, tags (`string[]`), boolean switch, JSON fallback. Add or remove fields. |
-| Image | **Images** | Drop zone + grid of images already colocated with the entry. Uploads land next to the entry (`src/content/blog/<post>/photo.png`) and a `![alt](./photo.png)` link is inserted at the cursor. Astro's asset pipeline picks the relative path up as normal. |
-| List | **Collection** | Every entry in the collection (switch collections if there are several), the current one marked. **New** creates an entry with frontmatter inferred from its siblings and navigates to it. |
-| Dots | **Settings** | Dock left/right, autosave toggle, shortcuts, and the file path of the current entry. |
+| | |
+| --- | --- |
+| **Type** | The body under `[data-float-body]` is `contenteditable` while Float is on. Native caret, native undo, native spellcheck. Links don't navigate (⌘-click does). |
+| **Save** | A dark Save button appears at the bottom of the rail the moment the page differs from disk. **⌘S / Ctrl+S** works anywhere. Optional autosave (800ms after you stop typing) in Settings. |
+| **Shortcuts** | At the start of an empty line: `# `…`###### ` heading, `- ` / `* ` bullet, `1. ` numbered, `> ` quote, ``` ``` ``` code block. **Tab / ⇧Tab** nest and un-nest list items. **⌘B / ⌘I** bold / italic, **⌘K** link. Inside a code block Enter is a newline; ⇧Enter leaves it. **Esc** leaves the text without closing the float. |
+| **Images** | Drop or paste an image onto the prose. The file is copied **next to the entry** (`src/content/blog/<post>/photo.png`), shows up where you dropped it, and is written as `![alt](./photo.png)`. |
+| **Live preview** | While your caret is in the text, a save doesn't touch the DOM — what you typed *is* the preview. Save from the rail (or with the caret elsewhere) and the page is re-rendered by Astro in place, no reload, scroll kept. |
+
+## The rail
 
 <p>
-  <img src="docs/float-dirty.png" width="300" alt="Body panel with unsaved changes and a Save button">
-  <img src="docs/float-fields.png" width="300" alt="Fields panel showing inferred frontmatter controls">
+  <img src="docs/float-rail.png" width="90" alt="The rail: Fields, Images, Collection, Source, Settings, and a dark Save button in the bottom slot" align="left" hspace="12">
 </p>
 
-![Collection panel listing entries with a New button](docs/float-collection.png)
+| Icon | Panel | |
+| --- | --- | --- |
+| Sliders | **Fields** | Frontmatter as a form. Controls inferred from values: text, long text, number, date, tags (`string[]`), boolean switch, JSON fallback. Add / remove fields. |
+| Image | **Images** | Drop zone + grid of images already colocated with the entry. Click one to insert it after the paragraph your caret is in. |
+| List | **Collection** | Every entry in the collection (switch collections if there are several), current one marked. **New** creates an entry with frontmatter inferred from its siblings and opens it. |
+| `<>` | **Source** | Read-only escape hatch: the exact Markdown that Save will write. (Editable only when the page has no `data-float-body`.) |
+| Dots | **Settings** | Dock left / right, autosave, shortcut cheat-sheet, current file. |
+| Bottom slot | **Status / Save** | Quiet dot: gray idle · amber unsaved · pulsing saving · green saved · red error. Becomes the Save button when there's something to save and autosave is off. |
 
-## Repo layout
+<br clear="all">
 
-```
-packages/astro-float/   the integration (what you'd publish to npm)
-  src/index.js            Astro integration: registers the toolbar app + dev API
-  src/server/api.js       /__float/api/* endpoints (localhost-only JSON)
-  src/server/content.js   frontmatter parse/serialize, collection discovery, uploads
-  src/server/sync-gate.js swallow Astro's post-save reload, signal "content synced"
-  src/toolbar/app.ts      defineToolbarApp() entry
-  src/toolbar/float.ts    the rail + panels (vanilla TS, shadow DOM, no framework)
-  src/toolbar/styles.ts   cool-gray tokens, hairlines, light + dark
-demo/                   a minimal Astro 5 blog with a `blog` collection and 4 posts
-docs/                   screenshots
-```
+<p>
+  <img src="docs/float-fields.png" width="300" alt="Fields panel with inferred frontmatter controls">
+  <img src="docs/float-source.png" width="300" alt="Source panel showing the Markdown that will be written">
+</p>
 
 ## Using it in your own Astro project
 
@@ -63,13 +63,24 @@ export default defineConfig({
 });
 ```
 
-Zero config: every directory under `src/content/` that holds Markdown is treated as a collection. Float works out which entry a page renders by matching the URL tail against entry ids; for anything unusual, bind it explicitly:
+Then mark the element that wraps your rendered Markdown:
 
 ```astro
-<article data-float-entry={`blog:${post.id}`}>…</article>
+---
+const { Content } = await render(post);
+---
+<article data-float-entry={`blog:${post.id}`}>
+  <h1>{post.data.title}</h1>
+  <div class="prose" data-float-body>
+    <Content />
+  </div>
+</article>
 ```
 
-Options, all optional:
+- `data-float-body` — required for on-page editing. It must wrap **only** the rendered body (not the title or other frontmatter-driven markup), because its children are what gets written back as Markdown.
+- `data-float-entry="collection:id"` — optional. Without it Float matches the URL tail against entry ids (`/blog/hello-float/` → `hello-float`).
+
+Zero config otherwise: every directory under `src/content/` that holds Markdown is a collection. Options, all optional:
 
 ```js
 astroFloat({
@@ -84,23 +95,55 @@ astroFloat({
 
 ## How it works
 
-- **Dev toolbar app.** `addDevToolbarApp()` in `astro:config:setup` (only when `command === "dev"`). The rail and panels render into the app's shadow root, so nothing leaks into the host page's CSS and vice versa. Toggling the toolbar icon shows/hides the canvas; open state survives reloads via `sessionStorage`.
-- **API.** `astro:server:setup` mounts `/__float/api/*` on the Vite dev server: list collections, read/write an entry, create an entry, list/upload media. Requests must come from `localhost` (host header and socket address), be same-origin, and carry an `x-astro-float` header for mutations. Paths are confined to the collection directory; images are extension-allowlisted.
-- **Files.** Frontmatter goes through `yaml` (key order kept, quoting normalized); the body is kept byte-for-byte. Saves carry the hash of the file as loaded — if it changed on disk in the meantime you get a 409 and a Reload / Overwrite choice instead of a silent clobber.
-- **Live update without reload.** Astro's content layer re-syncs a changed entry and asks the browser to full-reload, which would kill the editor mid-keystroke. `sync-gate.js` opens a 3s quiet window after each Float save, swallows that reload, and uses it as the "synced" signal: the save endpoint responds only once the store has the new content, the client fetches the fresh HTML and swaps everything except the toolbar. Edits from your IDE still reload normally.
+- **Dev toolbar app.** `addDevToolbarApp()` in `astro:config:setup`, only when `command === "dev"`. The rail renders into the app's shadow root so no CSS leaks either way. Toggling the icon attaches/detaches `contenteditable` on `[data-float-body]`; open state survives reloads via `sessionStorage`.
+- **Block-level round trip.** The server parses the body with `mdast-util-from-markdown` (+ GFM) and returns each top-level block's exact source slice. The client lines those up with the body's top-level DOM children. On save it aligns the current DOM against that snapshot (LCS on outerHTML): unchanged blocks emit their **original Markdown byte-for-byte**; only edited or new blocks go through the HTML→Markdown serializer. A one-word fix is a one-line diff.
+- **HTML→Markdown** (`src/toolbar/html-to-md.ts`) covers what remark-rehype + Shiki emit: ATX headings, paragraphs, tight/loose and nested lists, task lists, links (with titles), images (Vite `/@fs/…` and Astro `/_image?href=…` URLs mapped back to `./relative`), inline code, fenced code with language, blockquotes, rules, GFM tables with alignment, strong / em / strike, hard breaks. Unknown elements pass through as raw HTML. Fidelity check: serializing the demo's rendered pages reproduces every source block identically.
+- **API.** `astro:server:setup` mounts `/__float/api/*`: collections, read/write entry, create entry, list/upload media. Localhost-only (host header + socket address), same-origin, custom header on mutations, paths confined to the collection dir, image extension allowlist. Saves carry the file hash as loaded; a 409 gives you Reload / Overwrite instead of a silent clobber.
+- **No reload on save.** Astro's content layer full-reloads the page after a content change. `sync-gate.js` swallows that reload for 3s after a Float save and uses it as the "synced" signal, so the save response only returns once the store has the new content. If the caret is in the body the DOM is left alone; otherwise the client fetches fresh HTML and swaps everything but the toolbar. IDE edits still reload as normal.
+
+## Known round-trip limits (v0)
+
+Only blocks you edit are re-serialized, so these only bite inside a paragraph you actually touched:
+
+- **Markdown style is normalized**: `*emphasis*`, `**strong**`, `-` bullets, `1.` numbering, ATX `#` headings, fenced code. Setext headings, `+`/`*` bullets, reference-style links (`[text][ref]`) and autolinks in an edited block come back as the inline/ATX forms.
+- **Smartypants**: Astro renders `'`/`"` as `’`/`“”`; edited blocks write straight quotes back (renders the same). Em dashes and ellipses are kept as-is.
+- **Raw HTML in Markdown** round-trips as raw HTML (fine), but if a raw-HTML block renders to more than one element, block counts won't line up and Float falls back to re-serializing the whole body (Settings and Source tell you when that happens).
+- **Footnotes** (`[^1]`) live in a rendered footer section, which breaks the block alignment → whole-body fallback; an edited paragraph containing a footnote ref keeps the rendered `<sup>` as raw HTML.
+- **MDX**: components render to arbitrary HTML; edited blocks would be written as that HTML. Treat `.mdx` as view-only for now.
+- **Custom remark/rehype plugins** that add wrappers (e.g. heading anchors, TOC) can change block counts or inject markup that gets serialized as HTML.
+- **Escaping** is conservative: `* _ [ ] < \`` and line-leading `# - + > 1.` are escaped in edited text; `&` and `~` (single) are not.
+- Programmatic conversions (typing `## ` etc.) aren't in the browser's undo stack. Native typing undo works.
+- A `<br>` typed with ⇧Enter inside a paragraph becomes a two-space hard break.
 
 ## Intentionally out of scope for v0
 
-- Reading Zod schemas from `content.config.ts` — field types are inferred from values. Next step: parse the schema (or `astro sync` output) to drive controls and validation.
-- MDX bodies are treated as plain text; no component awareness.
-- Rich-text / WYSIWYG editing on the page itself. The body panel is a Markdown textarea on purpose.
-- Creating collections, deleting entries, renaming slugs, git operations.
-- Non-Markdown loaders (JSON/YAML data collections, remote loaders).
-- Live-loader / view-transitions (`<ClientRouter />`) pages — untested.
-- Auth, multi-user, production use. This only runs under `astro dev` on localhost.
+- Zod schema awareness for Fields (types are inferred from values) — natural next step
+- Inline formatting toolbar / link popover (⌘B / ⌘I / ⌘K + Markdown shortcuts only)
+- Creating collections, deleting / renaming entries, git operations
+- JSON/YAML data collections, remote loaders, live-loader / `<ClientRouter />` pages
+- Auth, multi-user, anything outside `astro dev` on localhost
+
+## Repo layout
+
+```
+packages/astro-float/   the integration (what you'd publish to npm)
+  src/index.js            Astro integration: toolbar app + dev API
+  src/server/api.js       /__float/api/* endpoints (localhost-only JSON)
+  src/server/blocks.js    Markdown → top-level source blocks (mdast, with offsets)
+  src/server/content.js   frontmatter parse/serialize, collection discovery, uploads
+  src/server/sync-gate.js swallow Astro's post-save reload, signal "content synced"
+  src/toolbar/app.ts      defineToolbarApp() entry
+  src/toolbar/editor.ts   on-page contenteditable controller + block alignment
+  src/toolbar/html-to-md.ts  HTML → Markdown for edited blocks
+  src/toolbar/float.ts    the rail + panels (vanilla TS, shadow DOM, no framework)
+  src/toolbar/styles.ts   cool-gray tokens, hairlines, light + dark
+demo/                   a minimal Astro 5 blog with a `blog` collection and 4 posts
+docs/                   screenshots
+```
 
 ## Notes
 
 - Astro prints `[glob-loader] Duplicate id … found` after every content save. That's Astro's own watcher log for changed files, not a Float bug.
-- Tested against Astro 5.18 / Vite 6. The sync gate relies on the content layer sending `{ type: "full-reload", path: "*" }` after a data-store write; other majors are unverified.
+- If you delete an image that a post referenced, Astro's `.astro/` asset cache can 500 the page until you restart `astro dev`.
+- Tested against Astro 5.18 / Vite 6 / Chrome. The sync gate relies on the content layer sending `{ type: "full-reload", path: "*" }` after a data-store write; other majors are unverified. `contenteditable` behaviour is Chromium-tested; Safari/Firefox will differ in the details.
 - Prefs (dock side, autosave, last panel) live in `localStorage` under `astro-float:*`.
