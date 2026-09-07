@@ -783,7 +783,7 @@ class Float {
           },
           h("span", { class: "title" }, entry.title),
           h("span", { class: "id" }, entry.id),
-          isCurrent ? icon("check", 13) : icon("external", 12),
+          isCurrent ? icon("check", 13) : icon("chevron", 13),
         ),
       );
     }

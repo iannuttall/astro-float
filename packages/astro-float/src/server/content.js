@@ -279,21 +279,19 @@ export async function listMedia(ctx, collectionName, id) {
 }
 
 export async function saveMedia(ctx, collectionName, id, filename, buffer) {
-  const { abs, entry } = await resolveEntry(ctx, collectionName, id);
+  const { abs, entry, collectionDir } = await resolveEntry(ctx, collectionName, id);
   const ext = path.extname(filename).toLowerCase();
   if (!IMAGE_EXTS.has(ext)) throw httpError(415, `unsupported image type "${ext || filename}"`);
 
   const base = slugify(path.basename(filename, ext)) || "image";
   const dir = mediaDirFor(abs, entry);
+  if (!isInside(collectionDir, dir) && dir !== collectionDir) throw httpError(400, "bad media path");
   await fs.mkdir(dir, { recursive: true });
 
   let candidate = `${base}${ext}`;
   for (let i = 2; await exists(path.join(dir, candidate)); i++) candidate = `${base}-${i}${ext}`;
 
   const file = path.join(dir, candidate);
-  if (!isInside(path.dirname(abs), file) && path.dirname(file) !== path.dirname(abs)) {
-    throw httpError(400, "bad media path");
-  }
   await fs.writeFile(file, buffer, { flag: "wx" });
 
   return {
