@@ -140,7 +140,10 @@ class Float {
         this.listCollection = this.doc.collection;
         this.bindBody();
       } else {
-        this.listCollection = this.collections[0]?.name ?? null;
+        // No entry here (index/listing page): prefer the collection named in the URL.
+        const first = location.pathname.split("/").filter(Boolean)[0];
+        const byUrl = this.collections.find((c) => c.name === first);
+        this.listCollection = byUrl?.name ?? this.collections[0]?.name ?? null;
       }
       if (this.status !== "saved") this.setStatus("idle");
     } catch (err) {
@@ -760,7 +763,7 @@ class Float {
               "button",
               { class: "btn", type: "button", title: `New entry in ${selected.name}`, onClick: () => setForm(openForm === "entry" ? null : "entry") },
               icon("plus", 13),
-              "Entry",
+              "New entry",
             )
           : null,
       ),

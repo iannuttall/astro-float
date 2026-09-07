@@ -8,13 +8,13 @@ import { getCollection, render } from "astro:content";
 import { collections } from "../../content.config";
 import Base from "../../layouts/Base.astro";
 
-// Collections with a dedicated route under src/pages skip the generic one.
-const DEDICATED = new Set(["blog"]);
-
 export async function getStaticPaths() {
+  // Collections with a dedicated route under src/pages skip the generic one.
+  // (Declared inside: getStaticPaths runs in isolation from the frontmatter.)
+  const dedicated = new Set(["blog"]);
   const paths = [];
   for (const name of Object.keys(collections)) {
-    if (DEDICATED.has(name)) continue;
+    if (dedicated.has(name)) continue;
     const entries = await getCollection(name as keyof typeof collections);
     for (const entry of entries) {
       paths.push({ params: { collection: name, id: entry.id }, props: { entry, collection: name } });
