@@ -1,6 +1,6 @@
 # astro-float
 
-Minimal on-page content editor for Astro content collections. Toggle it from the Astro Dev Toolbar; the rendered Markdown body becomes editable in place, a thin rail handles frontmatter, images and other entries, and everything writes back to the `.md` on disk during `astro dev`. Adds nothing to production builds.
+Minimal on-page content editor for Astro content collections. In `astro dev` the rendered Markdown body is editable in place and a thin rail (a vertical sibling of the Astro dev toolbar) handles frontmatter, collections and entries; everything writes back to the `.md` on disk. Adds nothing to production builds.
 
 ```js
 // astro.config.mjs
