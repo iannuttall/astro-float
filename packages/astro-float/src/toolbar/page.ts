@@ -87,31 +87,36 @@ export function routeFor(collection: Collection, id: string): { href: string; gu
   return { href: `/${encodeURIComponent(collection.name)}/${encoded}/`, guessed: true };
 }
 
+/** Elements that belong to dev tooling, not the page: never swapped out. */
+const KEEP_SELECTOR = "astro-dev-toolbar, [data-astro-float-host]";
+
 /**
- * Re-render the current page in place: fetch fresh HTML from the dev server and
- * swap everything except the dev toolbar. Keeps scroll position and, crucially,
- * keeps the Float editor (and its focus) alive.
+ * Render a page in place: fetch its HTML from the dev server and swap
+ * everything except dev-tooling elements (the Astro toolbar and Float itself).
+ * With no URL it re-renders the current page — scroll position, the editor
+ * and its focus all survive. With a URL it's a soft navigation.
  */
-export async function swapPage(): Promise<void> {
-  const res = await fetch(location.href, { headers: { accept: "text/html" }, cache: "no-store" });
+export async function swapPage(href: string = location.href): Promise<void> {
+  const res = await fetch(href, { headers: { accept: "text/html" }, cache: "no-store" });
   if (!res.ok) throw new Error(`page fetch failed (${res.status})`);
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/html")) throw new Error("not an HTML page");
   const html = await res.text();
   const next = new DOMParser().parseFromString(html, "text/html");
 
   document.title = next.title;
 
-  const toolbar = document.body.querySelector(":scope > astro-dev-toolbar");
+  const keep = new Set(Array.from(document.body.querySelectorAll(`:scope > :is(${KEEP_SELECTOR})`)));
   for (const node of Array.from(document.body.childNodes)) {
-    if (node !== toolbar) node.remove();
+    if (!keep.has(node as Element)) node.remove();
   }
   for (const attr of Array.from(document.body.attributes)) document.body.removeAttribute(attr.name);
   for (const attr of Array.from(next.body.attributes)) document.body.setAttribute(attr.name, attr.value);
 
-  const incoming = Array.from(next.body.childNodes).filter(
-    (n) => !(n instanceof Element && n.tagName.toLowerCase() === "astro-dev-toolbar"),
-  );
+  const anchor = document.body.firstChild;
+  const incoming = Array.from(next.body.childNodes).filter((n) => !(n instanceof Element && n.matches(KEEP_SELECTOR)));
   for (const node of incoming) {
-    document.body.insertBefore(document.adoptNode(node), toolbar);
+    document.body.insertBefore(document.adoptNode(node), anchor);
   }
 
   // Dev styles are inlined per component in <head>; merge any new ones in.

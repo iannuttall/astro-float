@@ -1,10 +1,12 @@
 ---
 import { getCollection } from "astro:content";
+import { collections } from "../content.config";
 import Base from "../layouts/Base.astro";
 
 const posts = (await getCollection("blog")).sort(
   (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf(),
 );
+const others = Object.keys(collections).filter((name) => name !== "blog");
 const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "short", day: "numeric" });
 ---
 
@@ -13,8 +15,13 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "short", day
     <h1>Field Notes</h1>
     <p>
       A tiny blog whose only job is to give <strong>astro-float</strong> something to edit.
-      Open any post, toggle the Float icon in the Astro dev toolbar, and change things.
+      Open any post and start typing — the rail on the right is always there in dev.
     </p>
+    {others.length > 0 && (
+      <p class="others">
+        Other collections: {others.map((name, i) => <><a href={`/${name}/`}>{name}</a>{i < others.length - 1 && ", "}</>)}
+      </p>
+    )}
   </section>
 
   <ul class="posts">
@@ -39,6 +46,8 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "short", day
 <style>
   .intro h1 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
   .intro p { color: var(--muted); margin: 0 0 32px; max-width: 54ch; }
+  .intro .others { margin-top: -20px; font-size: 14px; }
+  .intro .others a { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
   .posts { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; }
   .posts li { border-top: 1px solid var(--line); }
   .posts li:last-child { border-bottom: 1px solid var(--line); }

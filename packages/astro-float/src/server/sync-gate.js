@@ -54,7 +54,7 @@ export function createSyncGate(server, logger) {
      * @returns {Promise<boolean>}
      */
     expectSync(timeoutMs = 2500) {
-      quietUntil = Date.now() + QUIET_WINDOW_MS;
+      quietUntil = Date.now() + Math.max(QUIET_WINDOW_MS, timeoutMs + 500);
       return new Promise((resolve) => {
         const timer = setTimeout(() => {
           waiters = waiters.filter((w) => w !== done);

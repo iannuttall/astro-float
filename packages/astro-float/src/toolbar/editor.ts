@@ -27,18 +27,31 @@ export interface PageEditorHooks {
 const PAGE_STYLE_ID = "astro-float-page-style";
 const PAGE_STYLE = /* css */ `
 [data-float-editing] {
-  outline: 1px dashed transparent;
-  outline-offset: 16px;
-  border-radius: 4px;
-  transition: outline-color 150ms ease, background-color 150ms ease;
+  position: relative;
+  outline: none;
   caret-color: currentColor;
+  --float-edge: transparent;
 }
-[data-float-editing]:hover { outline-color: color-mix(in srgb, currentColor 28%, transparent); }
-[data-float-editing]:focus { outline-color: color-mix(in srgb, currentColor 40%, transparent); }
-[data-float-editing][data-float-dragging] {
-  outline: 1px dashed currentColor;
-  background-color: color-mix(in srgb, currentColor 4%, transparent);
+/* A quiet dashed frame: 1px edges drawn as gradients so the dash/gap rhythm is ours (5px on, 9px off), square corners. */
+[data-float-editing]::before {
+  content: "";
+  position: absolute;
+  inset: -16px -18px;
+  pointer-events: none;
+  background-image:
+    repeating-linear-gradient(90deg, var(--float-edge) 0 5px, transparent 5px 14px),
+    repeating-linear-gradient(90deg, var(--float-edge) 0 5px, transparent 5px 14px),
+    repeating-linear-gradient(180deg, var(--float-edge) 0 5px, transparent 5px 14px),
+    repeating-linear-gradient(180deg, var(--float-edge) 0 5px, transparent 5px 14px);
+  background-size: 100% 1px, 100% 1px, 1px 100%, 1px 100%;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  background-repeat: no-repeat;
+  transition: background-color 150ms ease;
 }
+[data-float-editing]:hover { --float-edge: color-mix(in srgb, currentColor 16%, transparent); }
+[data-float-editing]:focus { --float-edge: color-mix(in srgb, currentColor 24%, transparent); }
+[data-float-editing][data-float-dragging] { --float-edge: color-mix(in srgb, currentColor 55%, transparent); }
+[data-float-editing][data-float-dragging]::before { background-color: color-mix(in srgb, currentColor 3%, transparent); }
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
 `;
@@ -181,6 +194,19 @@ export class PageEditor {
 
   isDirty() {
     return this.container ? this.container.innerHTML !== this.baselineHTML : false;
+  }
+
+  /** Focus the body with the first block selected — a fresh entry's placeholder gets replaced by whatever you type. */
+  focusStart() {
+    const el = this.container;
+    if (!el) return;
+    el.focus();
+    const first = el.firstElementChild ?? el;
+    const range = document.createRange();
+    range.selectNodeContents(first);
+    const sel = document.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
   }
 
   /** True while the caret lives in the body (focus, not just a lingering selection). */

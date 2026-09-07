@@ -1,3 +1,4 @@
+import { createCollection } from "./collections.js";
 import {
   createEntry,
   discoverCollections,
@@ -61,10 +62,21 @@ export function attachFloatApi(server, ctx) {
 
       if (method === "POST" && url.pathname === "/entries") {
         const payload = await readJson(req, 1024 * 1024);
-        ctx.gate.quiet();
+        const synced = ctx.gate.expectSync(4000);
         const created = await createEntry(ctx, payload);
         ctx.logger.info(`created ${created.file}`);
-        return json(res, 201, created);
+        return json(res, 201, { ...created, synced: await synced });
+      }
+
+      if (method === "POST" && url.pathname === "/collections") {
+        const payload = await readJson(req, 1024 * 1024);
+        // A content.config change makes Astro re-sync every collection; give it room.
+        const synced = ctx.gate.expectSync(8000);
+        const created = await createCollection(ctx, payload);
+        ctx.logger.info(
+          `created collection ${created.collection} (${created.config.updated ? `wired ${created.config.file}` : created.config.note})`,
+        );
+        return json(res, 201, { ...created, synced: await synced });
       }
 
       if (method === "GET" && url.pathname === "/media") {

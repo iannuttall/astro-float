@@ -5,36 +5,28 @@ import { icon } from "./icons";
 import { detectEntry, routeFor, swapPage, type DetectedEntry } from "./page";
 import { STYLES } from "./styles";
 
-type PanelId = "fields" | "media" | "collection" | "source" | "settings";
+type PanelId = "fields" | "collection" | "source" | "settings";
 type Side = "left" | "right";
 type Status = "idle" | "saving" | "refreshing" | "saved" | "error" | "conflict";
 
 interface Prefs {
   side: Side;
   autosave: boolean;
-  panel: PanelId | null;
 }
 
 const PREFS_KEY = "astro-float:prefs";
-const OPEN_KEY = "astro-float:open";
 const AUTOSAVE_DELAY = 800;
 
-const ENTRY_PANELS: PanelId[] = ["fields", "media", "source"];
+const ENTRY_PANELS: PanelId[] = ["fields", "source"];
 const PANEL_TITLES: Record<PanelId, string> = {
   fields: "Fields",
-  media: "Images",
   collection: "Collection",
   source: "Source",
   settings: "Settings",
 };
 
-export interface FloatHandle {
-  setOpen(open: boolean): void;
-}
-
-export function mountFloat(canvas: ShadowRoot): FloatHandle {
-  const float = new Float(canvas);
-  return { setOpen: (open) => float.setOpen(open) };
+export function mountFloat(canvas: ShadowRoot): void {
+  new Float(canvas);
 }
 
 class Float {
@@ -42,11 +34,12 @@ class Float {
   private rail: HTMLElement;
   private panelHost: HTMLElement;
   private statusSlot: HTMLElement;
+  private statusDot: HTMLElement;
+  private saveButton: HTMLButtonElement;
 
   private prefs: Prefs = loadPrefs();
-  private open = false;
-  private loaded = false;
-  private loading: Promise<void> | null = null;
+  /** Open panel. In-memory only: nothing re-opens on load or navigation. */
+  private panel: PanelId | null = null;
 
   private collections: Collection[] = [];
   private detected: DetectedEntry | null = null;
@@ -54,7 +47,6 @@ class Float {
   private draftFrontmatter: Frontmatter = {};
   /** Body draft used only when the page has no `[data-float-body]` to edit in place. */
   private draftBody = "";
-  private media: MediaItem[] | null = null;
   private listCollection: string | null = null;
 
   private page: PageEditor;
@@ -63,21 +55,31 @@ class Float {
   private statusMessage = "";
   private savedAt: number | null = null;
   private saving = false;
+  private navigating = false;
   private autosaveTimer: number | undefined;
   private savedTimer: number | undefined;
 
   private footStatus: HTMLElement | null = null;
   private footActions: HTMLElement | null = null;
   private sourceView: HTMLTextAreaElement | null = null;
+  private lastSlot = "";
+  private lastFoot = "";
 
   constructor(private canvas: ShadowRoot) {
     const style = document.createElement("style");
     style.textContent = STYLES;
     canvas.appendChild(style);
 
+    this.statusDot = h("span", { class: "status-dot", "data-state": "idle" });
+    this.saveButton = h(
+      "button",
+      { class: "rail-save tip", type: "button", "data-tip": "Save · ⌘S", "aria-label": "Save", hidden: true, onClick: () => void this.save() },
+      icon("check", 14),
+    ) as HTMLButtonElement;
+    this.statusSlot = h("div", { class: "status-slot" }, this.statusDot, this.saveButton);
+
     this.rail = h("nav", { class: "rail", "aria-label": "Float" });
-    this.panelHost = h("div");
-    this.statusSlot = h("div", { class: "status-slot" });
+    this.panelHost = h("div", { class: "panel-host" });
     this.root = h("div", { class: "float", "data-side": this.prefs.side }, this.rail, this.panelHost);
     canvas.appendChild(this.root);
 
@@ -86,7 +88,7 @@ class Float {
       onFiles: (files, range) => void this.uploadAll(files, range),
     });
 
-    // Escape inside the rail should drop focus, not close the whole float.
+    // Escape inside the rail should drop focus, not bubble into page handlers.
     this.root.addEventListener("keyup", (e) => {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -97,42 +99,37 @@ class Float {
       if (e.key === "Escape") e.stopPropagation();
     });
     document.addEventListener("keydown", (e) => {
-      if (!this.open) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         void this.save();
       }
     });
+    // Only real unloads (tab close, hard refresh) should ever warn — Float's own
+    // navigations are soft swaps and never reach here.
     window.addEventListener("beforeunload", (e) => {
-      if (this.isDirty()) e.preventDefault();
+      if (this.isDirty() && !this.navigating) e.preventDefault();
     });
+    document.addEventListener("click", this.onDocumentClick);
+    window.addEventListener("popstate", () => void this.navigate(location.href, { push: false }));
 
     this.renderRail();
+    void this.loadPage();
+
+    // Slide in from the edge once the initial styles have applied.
+    requestAnimationFrame(() => requestAnimationFrame(() => (this.root.dataset.entered = "")));
   }
 
-  // ---- lifecycle ------------------------------------------------------------
+  // ---- page lifecycle ---------------------------------------------------------
 
-  setOpen(open: boolean) {
-    this.open = open;
-    if (open) {
-      sessionStorage.setItem(OPEN_KEY, "1");
-      void this.ensureLoaded().then(() => {
-        this.page.attach();
-        if (this.prefs.panel !== null) this.showPanel(this.prefs.panel, false);
-      });
-    } else {
-      sessionStorage.removeItem(OPEN_KEY);
-      this.page.detach();
-    }
-  }
+  /** (Re)read the current URL: which entry is this, bind the body, keep the rail calm. */
+  private async loadPage() {
+    this.page.unbind();
+    this.doc = null;
+    this.detected = null;
+    this.draftFrontmatter = {};
+    this.draftBody = "";
+    this.closePanel();
 
-  private ensureLoaded() {
-    if (this.loaded) return Promise.resolve();
-    if (!this.loading) this.loading = this.load();
-    return this.loading;
-  }
-
-  private async load() {
     try {
       this.collections = await api.collections();
       this.detected = detectEntry(this.collections);
@@ -144,13 +141,11 @@ class Float {
         this.bindBody();
       } else {
         this.listCollection = this.collections[0]?.name ?? null;
-        if (this.prefs.panel && ENTRY_PANELS.includes(this.prefs.panel)) this.prefs.panel = "collection";
       }
-      if (this.prefs.panel === null && !this.detected) this.prefs.panel = "collection";
+      if (this.status !== "saved") this.setStatus("idle");
     } catch (err) {
       this.setStatus("error", describe(err));
     }
-    this.loaded = true;
     this.renderRail();
   }
 
@@ -163,24 +158,58 @@ class Float {
       return;
     }
     this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
-    if (this.open) this.page.attach();
+    this.page.attach();
   }
+
+  /**
+   * Soft navigation: save anything pending, fetch the next page's HTML and swap
+   * it in under the rail. No unload, no "Leave site?", no rail re-animating.
+   */
+  private async navigate(href: string, { push = true, focusBody = false } = {}) {
+    const url = new URL(href, location.href);
+    if (this.isDirty()) {
+      await this.save();
+      if (this.isDirty()) return;
+    }
+    this.navigating = true;
+    this.setStatus("refreshing");
+    try {
+      await swapPage(url.href);
+      if (push) history.pushState({ astroFloat: true }, "", url.href);
+      window.scrollTo(0, 0);
+      await this.loadPage();
+      if (focusBody) this.page.focusStart();
+    } catch (err) {
+      console.warn("[astro-float] soft navigation failed, falling back to a full load", err);
+      location.assign(url.href);
+    } finally {
+      this.navigating = false;
+    }
+  }
+
+  private onDocumentClick = (e: MouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const anchor = e.composedPath().find((n) => n instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined;
+    if (!anchor || !anchor.href) return;
+    if ((anchor.target && anchor.target !== "_self") || anchor.hasAttribute("download")) return;
+    const url = new URL(anchor.href, location.href);
+    if (url.origin !== location.origin) return;
+    if (url.pathname === location.pathname && url.search === location.search && url.hash) return;
+    e.preventDefault();
+    void this.navigate(url.href);
+  };
 
   private async reloadFromDisk() {
     if (!this.detected) return;
-    this.doc = await api.entry(this.detected.collection, this.detected.id);
-    this.draftFrontmatter = clone(this.doc.frontmatter);
-    this.draftBody = this.doc.body;
-    this.media = null;
     this.setStatus("refreshing");
     try {
       await swapPage();
     } catch {
       /* keep current DOM */
     }
-    this.bindBody();
-    this.setStatus("idle");
-    this.renderPanel();
+    const panel = this.panel;
+    await this.loadPage();
+    if (panel) this.showPanel(panel);
   }
 
   // ---- state helpers ----------------------------------------------------------
@@ -287,7 +316,7 @@ class Float {
   private async refreshCollections() {
     try {
       this.collections = await api.collections();
-      if (this.prefs.panel === "collection") this.renderPanel();
+      if (this.panel === "collection") this.renderPanel();
     } catch {
       /* non-fatal */
     }
@@ -301,21 +330,20 @@ class Float {
       h(
         "button",
         {
-          class: "rail-btn",
+          class: "rail-btn tip",
           type: "button",
-          "data-tip": ENTRY_PANELS.includes(id) && !hasEntry ? `${tip} · no entry on this page` : tip,
+          "data-tip": ENTRY_PANELS.includes(id) && !hasEntry ? `${tip} · no entry here` : tip,
           "aria-label": tip,
-          "aria-pressed": String(this.prefs.panel === id && this.panelHost.childElementCount > 0),
+          "aria-pressed": String(this.panel === id),
           disabled: ENTRY_PANELS.includes(id) && !hasEntry,
           onClick: () => this.togglePanel(id),
         },
-        icon(id),
+        icon(id, 16),
       );
 
     replaceChildren(
       this.rail,
       button("fields", "Fields"),
-      button("media", "Images"),
       button("collection", "Collection"),
       h("span", { class: "rail-sep" }),
       button("source", "Source"),
@@ -326,24 +354,23 @@ class Float {
   }
 
   private togglePanel(id: PanelId) {
-    if (this.prefs.panel === id && this.panelHost.childElementCount > 0) {
-      this.closePanel();
-      return;
-    }
-    this.showPanel(id, true);
+    if (this.panel === id) this.closePanel();
+    else this.showPanel(id);
   }
 
   private closePanel() {
+    if (this.panel === null && !this.panelHost.childElementCount) return;
+    this.panel = null;
     this.panelHost.textContent = "";
     this.sourceView = null;
     this.footStatus = null;
     this.footActions = null;
+    this.lastFoot = "";
     this.renderRail();
   }
 
-  private showPanel(id: PanelId, persist: boolean) {
-    this.prefs.panel = id;
-    if (persist) this.savePrefs();
+  private showPanel(id: PanelId) {
+    this.panel = id;
     this.renderPanel();
     this.renderRail();
   }
@@ -351,11 +378,12 @@ class Float {
   // ---- panel shell --------------------------------------------------------------
 
   private renderPanel() {
-    const id = this.prefs.panel;
+    const id = this.panel;
     if (!id) return;
     this.footStatus = null;
     this.footActions = null;
     this.sourceView = null;
+    this.lastFoot = "";
 
     const sub = this.doc ? `${this.doc.collection}/${this.doc.id}` : "no entry on this page";
     const head = h(
@@ -363,7 +391,7 @@ class Float {
       { class: "panel-head" },
       h("span", { class: "panel-title" }, PANEL_TITLES[id]),
       h("span", { class: "panel-sub", title: this.doc?.file ?? "" }, sub),
-      h("button", { class: "icon-btn", type: "button", "aria-label": "Collapse", onClick: () => this.closePanel() }, icon("close", 14)),
+      h("button", { class: "icon-btn", type: "button", "aria-label": "Close panel", onClick: () => this.closePanel() }, icon("close", 14)),
     );
 
     let body: HTMLElement;
@@ -371,10 +399,6 @@ class Float {
     switch (id) {
       case "fields":
         body = this.renderFields();
-        showFoot = true;
-        break;
-      case "media":
-        body = this.renderMedia();
         showFoot = true;
         break;
       case "source":
@@ -391,13 +415,14 @@ class Float {
     const panel = h("section", { class: "panel", "data-panel": id }, head, body);
     if (showFoot && this.doc) {
       this.footStatus = h("span", { class: "foot-status" });
-      this.footActions = h("div", { style: { display: "flex", gap: "6px" } });
+      this.footActions = h("div", { class: "foot-actions" });
       panel.appendChild(h("footer", { class: "panel-foot" }, this.footStatus, this.footActions));
     }
     replaceChildren(this.panelHost, panel);
     this.renderStatus();
   }
 
+  /** Cheap and idempotent: only touches the DOM when the visible state actually changes. */
   private renderStatus() {
     const dirty = this.isDirty();
     const busy = this.status === "saving" || this.status === "refreshing";
@@ -410,31 +435,24 @@ class Float {
           : dirty
             ? "dirty"
             : "idle";
-
-    // The rail's bottom slot is either the status dot or, when there's something
-    // to save and autosave is off, the Save button itself.
-    const showRailSave = dirty && !busy && !this.prefs.autosave && this.status !== "conflict";
-    replaceChildren(
-      this.statusSlot,
-      showRailSave
-        ? h(
-            "button",
-            { class: "rail-save", type: "button", "data-tip": "Save · ⌘S", "aria-label": "Save", onClick: () => void this.save() },
-            icon("check", 14),
-          )
-        : h("span", {
-            class: "status-dot",
-            "data-state": dotState,
-            title: dotState === "dirty" ? "Unsaved changes" : dotState === "saved" ? "Saved" : this.statusMessage || "",
-          }),
-    );
+    const showSave = dirty && !busy && !this.prefs.autosave && this.status !== "conflict" && this.status !== "error";
+    const slot = `${showSave}|${dotState}|${this.statusMessage}`;
+    if (slot !== this.lastSlot) {
+      this.lastSlot = slot;
+      this.saveButton.hidden = !showSave;
+      this.statusDot.hidden = showSave;
+      this.statusDot.dataset.state = dotState;
+      this.statusDot.title = dotState === "dirty" ? "Unsaved changes" : dotState === "saved" ? "Saved" : this.statusMessage || "";
+    }
 
     if (!this.footStatus || !this.footActions) return;
+    const foot = `${this.status}|${dirty}|${this.prefs.autosave}|${this.statusMessage}|${this.savedAt}`;
+    if (foot === this.lastFoot) return;
+    this.lastFoot = foot;
 
     let text = "";
     let tone = "";
     const actions: HTMLElement[] = [];
-
     switch (this.status) {
       case "saving":
         text = "Saving…";
@@ -468,24 +486,19 @@ class Float {
           text = this.savedAt ? `Saved ${formatTime(this.savedAt)}` : "Up to date";
         }
     }
-
-    this.footStatus.textContent = text;
-    if (tone) this.footStatus.dataset.tone = tone;
-    else delete this.footStatus.dataset.tone;
-    if (this.prefs.panel === "source") {
+    if (this.panel === "source") {
       actions.unshift(
         h(
           "button",
-          {
-            class: "btn btn-sm btn-ghost",
-            type: "button",
-            onClick: () => void navigator.clipboard?.writeText(this.currentBody()),
-          },
+          { class: "btn btn-sm btn-ghost", type: "button", onClick: () => void navigator.clipboard?.writeText(this.currentBody()) },
           icon("copy", 12),
           "Copy",
         ),
       );
     }
+    this.footStatus.textContent = text;
+    if (tone) this.footStatus.dataset.tone = tone;
+    else delete this.footStatus.dataset.tone;
     replaceChildren(this.footActions, actions);
   }
 
@@ -666,65 +679,7 @@ class Float {
     );
   }
 
-  // ---- media ----------------------------------------------------------------------
-
-  private renderMedia(): HTMLElement {
-    if (!this.doc) return this.renderNoEntry();
-    const container = h("div", { class: "panel-body pad" });
-
-    const fileInput = h("input", { type: "file", accept: "image/*", multiple: true, style: { display: "none" } }) as HTMLInputElement;
-    fileInput.addEventListener("change", () => {
-      if (fileInput.files?.length) void this.uploadAll(Array.from(fileInput.files), null);
-      fileInput.value = "";
-    });
-
-    const zone = h(
-      "div",
-      { class: "dropzone", role: "button", tabindex: "0", onClick: () => fileInput.click() },
-      icon("upload", 16),
-      h("div", null, h("strong", null, "Drop images"), " here or on the page"),
-      h("div", { style: { fontSize: "11px", color: "var(--fg-faint)" } }, `Saved next to ${this.doc.file.split("/").slice(-2).join("/")}`),
-    );
-    zone.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        fileInput.click();
-      }
-    });
-    bindDropzone(zone, (files) => void this.uploadAll(files, null));
-
-    const grid = h("div", { class: "media-grid" });
-    const renderGrid = () => {
-      replaceChildren(
-        grid,
-        (this.media ?? []).map((m) =>
-          h(
-            "button",
-            { class: "media-item", type: "button", title: `Insert ${m.name}`, onClick: () => this.placeImage(m, null) },
-            h("img", { src: m.url, alt: m.name, loading: "lazy" }),
-            h("span", null, m.name),
-          ),
-        ),
-      );
-    };
-
-    if (this.media) renderGrid();
-    else {
-      void api
-        .media(this.doc.collection, this.doc.id)
-        .then((items) => {
-          this.media = items;
-          renderGrid();
-        })
-        .catch((err) => this.setStatus("error", describe(err)));
-    }
-
-    container.append(fileInput, zone, grid);
-    container.appendChild(
-      h("p", { class: "field-hint", style: { marginTop: "12px" } }, "Click an image to insert it after the paragraph you're in."),
-    );
-    return container;
-  }
+  // ---- images (drop / paste on the prose only) ----------------------------------------
 
   private placeImage(item: MediaItem, range: Range | null) {
     if (this.page.bound) {
@@ -747,12 +702,10 @@ class Float {
     try {
       for (const file of images) {
         const saved = await api.upload(this.doc.collection, this.doc.id, file);
-        this.media = [...(this.media ?? []).filter((m) => m.name !== saved.name), saved].sort((a, b) => a.name.localeCompare(b.name));
         this.placeImage(saved, range);
         range = null;
       }
       this.setStatus("idle");
-      if (this.prefs.panel === "media") this.renderPanel();
     } catch (err) {
       this.setStatus("error", describe(err));
     }
@@ -762,21 +715,27 @@ class Float {
 
   private renderCollection(): HTMLElement {
     const container = h("div", { class: "panel-body" });
-    if (!this.collections.length) {
-      container.appendChild(
-        h("p", { class: "empty" }, "No collections found. Float looks for directories with Markdown under ", h("code", null, "src/content/"), "."),
-      );
-      return container;
-    }
+    const formHost = h("div");
+    let openForm: "entry" | "collection" | null = null;
 
     const selected = this.collections.find((c) => c.name === this.listCollection) ?? this.collections[0];
-    this.listCollection = selected.name;
+    if (selected) this.listCollection = selected.name;
 
-    let creating = false;
-    const formHost = h("div");
+    const setForm = (kind: "entry" | "collection" | null) => {
+      openForm = kind;
+      replaceChildren(
+        formHost,
+        kind === "entry" && selected
+          ? this.renderNewEntryForm(selected, () => setForm(null))
+          : kind === "collection"
+            ? this.renderNewCollectionForm(() => setForm(null))
+            : null,
+      );
+    };
 
-    const picker =
-      this.collections.length > 1
+    const picker = !selected
+      ? h("span", { class: "muted" }, "No collections yet")
+      : this.collections.length > 1
         ? (h(
             "select",
             {
@@ -789,64 +748,66 @@ class Float {
             },
             this.collections.map((c) => h("option", { value: c.name, selected: c.name === selected.name }, c.name)),
           ) as HTMLSelectElement)
-        : h("span", { style: { fontWeight: "500" } }, selected.name);
+        : h("span", { class: "collection-name" }, selected.name);
 
-    const toolbar = h(
-      "div",
-      { class: "toolbar-row" },
-      h("div", { class: "grow" }, picker),
+    container.appendChild(
+      h(
+        "div",
+        { class: "toolbar-row" },
+        h("div", { class: "grow" }, picker),
+        selected
+          ? h(
+              "button",
+              { class: "btn", type: "button", title: `New entry in ${selected.name}`, onClick: () => setForm(openForm === "entry" ? null : "entry") },
+              icon("plus", 13),
+              "Entry",
+            )
+          : null,
+      ),
+    );
+    container.appendChild(formHost);
+
+    const list = h("div", { class: "list" });
+    if (selected) {
+      if (!selected.entries.length) list.appendChild(h("p", { class: "empty" }, "This collection is empty."));
+      for (const entry of selected.entries) {
+        const isCurrent = this.doc?.collection === selected.name && this.doc.id === entry.id;
+        const route = routeFor(selected, entry.id);
+        list.appendChild(
+          h(
+            "a",
+            {
+              class: "list-item",
+              href: route.href,
+              "aria-current": isCurrent ? "page" : null,
+              title: route.guessed ? `${route.href} (guessed route)` : route.href,
+            },
+            h("span", { class: "title" }, entry.title),
+            h("span", { class: "id" }, entry.id),
+            isCurrent ? icon("check", 13) : icon("chevron", 13),
+          ),
+        );
+      }
+    }
+    container.appendChild(list);
+
+    // A separate, explicit control so "new collection" can never be mistaken for "new post".
+    container.appendChild(
       h(
         "button",
-        {
-          class: "btn",
-          type: "button",
-          onClick: () => {
-            creating = !creating;
-            replaceChildren(
-              formHost,
-              creating
-                ? this.renderNewEntryForm(selected, () => {
-                    creating = false;
-                    formHost.textContent = "";
-                  })
-                : null,
-            );
-          },
-        },
-        icon("plus", 13),
-        "New",
+        { class: "row-action", type: "button", onClick: () => setForm(openForm === "collection" ? null : "collection") },
+        icon("folderPlus", 14),
+        h("span", null, "New collection"),
+        h("span", { class: "row-action-hint" }, "src/content/…"),
       ),
     );
 
-    const list = h("div", { class: "list" });
-    if (!selected.entries.length) list.appendChild(h("p", { class: "empty" }, "This collection is empty."));
-    for (const entry of selected.entries) {
-      const isCurrent = this.doc?.collection === selected.name && this.doc.id === entry.id;
-      const route = routeFor(selected, entry.id);
-      list.appendChild(
-        h(
-          "a",
-          {
-            class: "list-item",
-            href: route.href,
-            "aria-current": isCurrent ? "page" : null,
-            title: route.guessed ? `${route.href} (guessed route)` : route.href,
-            onClick: () => sessionStorage.setItem(OPEN_KEY, "1"),
-          },
-          h("span", { class: "title" }, entry.title),
-          h("span", { class: "id" }, entry.id),
-          isCurrent ? icon("check", 13) : icon("chevron", 13),
-        ),
-      );
-    }
-
-    container.append(toolbar, formHost, list);
     if (!this.doc) {
       container.appendChild(
         h(
           "p",
           { class: "empty" },
-          "Open an entry page to edit it in place. If Float can't detect one from the URL, bind it with ",
+          "Open an entry to edit it in place. If Float can't detect one from the URL, bind it with ",
           h("code", null, 'data-float-entry="blog:my-post"'),
           " and mark the rendered body with ",
           h("code", null, "data-float-body"),
@@ -860,7 +821,7 @@ class Float {
   private renderNewEntryForm(collection: Collection, close: () => void): HTMLElement {
     const title = h("input", { class: "input", placeholder: "Title" }) as HTMLInputElement;
     const slug = h("input", { class: "input", placeholder: "slug", spellcheck: false }) as HTMLInputElement;
-    const error = h("div", { class: "field-hint", style: { color: "var(--err)" } });
+    const error = h("div", { class: "form-error" });
     let slugTouched = false;
 
     title.addEventListener("input", () => {
@@ -881,25 +842,20 @@ class Float {
       error.textContent = "";
       try {
         const created = await api.create({ collection: collection.name, slug: s, title: title.value.trim() || s });
-        this.prefs.panel = null;
-        this.savePrefs();
-        sessionStorage.setItem(OPEN_KEY, "1");
-        const route = routeFor(collection, created.id);
-        // Give Astro a beat to pick the new file up before we navigate to it.
-        await new Promise((r) => setTimeout(r, 600));
-        location.assign(route.href);
+        await this.navigate(routeFor(collection, created.id).href, { focusBody: true });
       } catch (err) {
         error.textContent = describe(err);
         create.disabled = false;
       }
     };
 
-    const create = h("button", { class: "btn btn-primary", type: "button", onClick: () => void submit() }, "Create") as HTMLButtonElement;
+    const create = h("button", { class: "btn btn-primary", type: "button", onClick: () => void submit() }, "Create entry") as HTMLButtonElement;
     const form = h(
       "div",
       { class: "form" },
+      h("div", { class: "form-title" }, `New entry in ${collection.name}`),
       h("label", null, "Title", title),
-      h("label", null, `Slug · ${collection.dir}/`, slug),
+      h("label", null, h("span", null, "Slug ", h("span", { class: "muted" }, `· ${collection.dir}/`)), slug),
       error,
       h("div", { class: "form-actions" }, h("button", { class: "btn btn-ghost", type: "button", onClick: close }, "Cancel"), create),
     );
@@ -907,6 +863,54 @@ class Float {
       if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) void submit();
     });
     queueMicrotask(() => title.focus());
+    return form;
+  }
+
+  private renderNewCollectionForm(close: () => void): HTMLElement {
+    const name = h("input", { class: "input", placeholder: "til", spellcheck: false, autocapitalize: "off" }) as HTMLInputElement;
+    const first = h("input", { class: "input", placeholder: "First entry", value: "First entry" }) as HTMLInputElement;
+    const error = h("div", { class: "form-error" });
+    const preview = h("div", { class: "muted mono" }, "src/content/…/");
+
+    name.addEventListener("input", () => {
+      name.value = name.value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+/, "");
+      preview.textContent = `src/content/${name.value || "…"}/ · registered in content.config.ts`;
+    });
+
+    const submit = async () => {
+      const n = name.value.replace(/-+$/, "");
+      if (!/^[a-z][a-z0-9-]*$/.test(n)) {
+        error.textContent = "Name must start with a letter: a-z, 0-9, dashes";
+        return;
+      }
+      create.disabled = true;
+      error.textContent = "";
+      try {
+        const created = await api.createCollection({ name: n, title: first.value.trim() || "First entry" });
+        if (!created.config.updated) this.setStatus("error", created.config.note ?? "content.config.ts not updated");
+        this.listCollection = created.collection;
+        await this.navigate(routeFor({ name: created.collection, dir: created.dir, entries: [] }, created.id).href, { focusBody: true });
+      } catch (err) {
+        error.textContent = describe(err);
+        create.disabled = false;
+      }
+    };
+
+    const create = h("button", { class: "btn btn-primary", type: "button", onClick: () => void submit() }, "Create collection") as HTMLButtonElement;
+    const form = h(
+      "div",
+      { class: "form" },
+      h("div", { class: "form-title" }, "New collection"),
+      h("label", null, "Name", name, preview),
+      h("label", null, "First entry title", first),
+      h("p", { class: "form-note" }, "Creates the folder, adds a defineCollection() with a starter schema to content.config.ts, and seeds one entry."),
+      error,
+      h("div", { class: "form-actions" }, h("button", { class: "btn btn-ghost", type: "button", onClick: close }, "Cancel"), create),
+    );
+    form.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !(e.target instanceof HTMLTextAreaElement)) void submit();
+    });
+    queueMicrotask(() => name.focus());
     return form;
   }
 
@@ -961,7 +965,7 @@ class Float {
       h(
         "div",
         { class: "setting" },
-        h("div", null, h("div", { class: "label" }, "Dock"), h("div", { class: "desc" }, "Which edge the float lives on")),
+        h("div", null, h("div", { class: "label" }, "Dock"), h("div", { class: "desc" }, "Which edge the rail lives on")),
         h("div", { class: "segmented" }, sideButton("left", "Left"), sideButton("right", "Right")),
       ),
       autosave,
@@ -972,7 +976,11 @@ class Float {
           "div",
           null,
           h("div", { class: "label" }, "On the page"),
-          h("div", { class: "desc" }, "⌘/Ctrl+S save · ⌘B / ⌘I / ⌘K format · Tab / ⇧Tab nest lists · type “# ”, “- ”, “1. ”, “> ”, “```” at a line start · Esc leaves the text"),
+          h(
+            "div",
+            { class: "desc" },
+            "⌘/Ctrl+S save · ⌘B / ⌘I / ⌘K format · Tab / ⇧Tab nest lists · type “# ”, “- ”, “1. ”, “> ”, “```” at a line start · drop or paste images into the text · Esc leaves the text",
+          ),
         ),
       ),
       h("div", { class: "meta" }, bodyState, h("br"), "astro-float · dev only · writes stay on localhost"),
@@ -1002,12 +1010,10 @@ function fieldKind(value: unknown): FieldKind {
 }
 
 function loadPrefs(): Prefs {
-  const defaults: Prefs = { side: "right", autosave: false, panel: null };
+  const defaults: Prefs = { side: "right", autosave: false };
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    // "body" was a panel in an earlier revision; there's no textarea any more.
-    if (stored.panel === "body") stored.panel = null;
-    return { ...defaults, ...stored };
+    return { side: stored.side === "left" ? "left" : "right", autosave: Boolean(stored.autosave ?? defaults.autosave) };
   } catch {
     return defaults;
   }
@@ -1037,28 +1043,4 @@ function slugify(value: string) {
 
 function altFrom(name: string) {
   return name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
-}
-
-function bindDropzone(el: HTMLElement, onFiles: (files: File[]) => void) {
-  let depth = 0;
-  el.addEventListener("dragenter", (e) => {
-    e.preventDefault();
-    depth++;
-    el.dataset.dragging = "";
-  });
-  el.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
-  });
-  el.addEventListener("dragleave", () => {
-    depth = Math.max(0, depth - 1);
-    if (depth === 0) delete el.dataset.dragging;
-  });
-  el.addEventListener("drop", (e) => {
-    e.preventDefault();
-    depth = 0;
-    delete el.dataset.dragging;
-    const files = Array.from(e.dataTransfer?.files ?? []);
-    if (files.length) onFiles(files);
-  });
 }

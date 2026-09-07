@@ -103,10 +103,20 @@ export const api = {
   }) => request<SaveResult>("/entry", { method: "PUT", body: JSON.stringify(payload) }),
 
   create: (payload: { collection: string; slug: string; title: string }) =>
-    request<{ collection: string; id: string; file: string }>("/entries", {
+    request<{ collection: string; id: string; file: string; synced: boolean }>("/entries", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  createCollection: (payload: { name: string; title: string }) =>
+    request<{
+      collection: string;
+      id: string;
+      file: string;
+      dir: string;
+      synced: boolean;
+      config: { file: string; updated: boolean; created?: boolean; note?: string };
+    }>("/collections", { method: "POST", body: JSON.stringify(payload) }),
 
   media: (collection: string, id: string) =>
     request<{ media: MediaItem[] }>(
