@@ -1,0 +1,52 @@
+---
+import { getCollection } from "astro:content";
+import Base from "../layouts/Base.astro";
+
+const posts = (await getCollection("blog")).sort(
+  (a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf(),
+);
+const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "short", day: "numeric" });
+---
+
+<Base title="Field Notes">
+  <section class="intro">
+    <h1>Field Notes</h1>
+    <p>
+      A tiny blog whose only job is to give <strong>astro-float</strong> something to edit.
+      Open any post, toggle the Float icon in the Astro dev toolbar, and change things.
+    </p>
+  </section>
+
+  <ul class="posts">
+    {posts.map((post) => (
+      <li>
+        <a href={`/blog/${post.id}/`}>
+          <div class="row">
+            <h2>{post.data.title}</h2>
+            {post.data.draft && <span class="badge">Draft</span>}
+          </div>
+          {post.data.description && <p>{post.data.description}</p>}
+          <div class="meta">
+            <time datetime={post.data.pubDate.toISOString()}>{fmt.format(post.data.pubDate)}</time>
+            {post.data.tags.length > 0 && <span>· {post.data.tags.join(", ")}</span>}
+          </div>
+        </a>
+      </li>
+    ))}
+  </ul>
+</Base>
+
+<style>
+  .intro h1 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
+  .intro p { color: var(--muted); margin: 0 0 32px; max-width: 54ch; }
+  .posts { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; }
+  .posts li { border-top: 1px solid var(--line); }
+  .posts li:last-child { border-bottom: 1px solid var(--line); }
+  .posts a { display: block; padding: 22px 0; }
+  .posts .row { display: flex; align-items: center; gap: 10px; }
+  .posts h2 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  .posts p { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+  .meta { margin-top: 10px; font-size: 13px; color: var(--faint); display: flex; gap: 6px; }
+  .badge { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+  .posts a:hover h2 { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+</style>
