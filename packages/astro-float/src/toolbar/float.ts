@@ -508,19 +508,26 @@ class Float {
     let control: HTMLElement;
     switch (kind) {
       case "boolean": {
-        const sw = h("button", {
-          class: "switch",
-          type: "button",
-          role: "switch",
-          "aria-checked": String(Boolean(value)),
-          "aria-label": key,
-          onClick: () => {
-            const next = sw.getAttribute("aria-checked") !== "true";
-            sw.setAttribute("aria-checked", String(next));
-            set(next);
+        const hint = h("span", { class: "field-hint" }, value ? "true" : "false");
+        const row = h(
+          "button",
+          {
+            class: "toggle-row",
+            type: "button",
+            role: "switch",
+            "aria-checked": String(Boolean(value)),
+            "aria-label": key,
+            onClick: () => {
+              const next = row.getAttribute("aria-checked") !== "true";
+              row.setAttribute("aria-checked", String(next));
+              hint.textContent = next ? "true" : "false";
+              set(next);
+            },
           },
-        });
-        control = h("div", { class: "field-row" }, h("span", { class: "field-hint" }, "true / false"), sw);
+          hint,
+          h("span", { class: "switch" }),
+        );
+        control = row;
         break;
       }
       case "number": {
@@ -587,7 +594,7 @@ class Float {
       h(
         "div",
         { class: "field-head" },
-        h("span", { class: "field-key", title: key }, key),
+        h("span", { class: "field-key" }, key),
         h("span", { class: "field-type" }, kind === "string" ? "text" : kind),
         h(
           "button",
@@ -874,20 +881,24 @@ class Float {
         label,
       );
 
-    const autosave = h("button", {
-      class: "switch",
-      type: "button",
-      role: "switch",
-      "aria-checked": String(this.prefs.autosave),
-      "aria-label": "Autosave",
-      onClick: () => {
-        this.prefs.autosave = !this.prefs.autosave;
-        autosave.setAttribute("aria-checked", String(this.prefs.autosave));
-        this.savePrefs();
-        if (this.prefs.autosave && this.isDirty()) this.scheduleAutosave();
-        this.renderStatus();
+    const autosave = h(
+      "button",
+      {
+        class: "setting toggle-row",
+        type: "button",
+        role: "switch",
+        "aria-checked": String(this.prefs.autosave),
+        onClick: () => {
+          this.prefs.autosave = !this.prefs.autosave;
+          autosave.setAttribute("aria-checked", String(this.prefs.autosave));
+          this.savePrefs();
+          if (this.prefs.autosave && this.isDirty()) this.scheduleAutosave();
+          this.renderStatus();
+        },
       },
-    });
+      h("div", null, h("div", { class: "label" }, "Autosave"), h("div", { class: "desc" }, "Write to disk shortly after you stop typing")),
+      h("span", { class: "switch" }),
+    );
 
     return h(
       "div",
@@ -898,12 +909,7 @@ class Float {
         h("div", null, h("div", { class: "label" }, "Dock"), h("div", { class: "desc" }, "Which edge the float lives on")),
         h("div", { class: "segmented" }, sideButton("left", "Left"), sideButton("right", "Right")),
       ),
-      h(
-        "div",
-        { class: "setting" },
-        h("div", null, h("div", { class: "label" }, "Autosave"), h("div", { class: "desc" }, "Write to disk shortly after you stop typing")),
-        autosave,
-      ),
+      autosave,
       h(
         "div",
         { class: "setting" },

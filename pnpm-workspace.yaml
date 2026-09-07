@@ -1,3 +1,8 @@
 packages:
   - packages/*
   - demo
+
+# pnpm 10 blocks postinstall scripts by default; these two need theirs.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp

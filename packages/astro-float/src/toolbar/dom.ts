@@ -23,7 +23,12 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   const el = document.createElement(tag);
   if (props) {
     for (const [key, value] of Object.entries(props)) {
-      if (value == null || value === false) continue;
+      if (value == null) continue;
+      if (value === false) {
+        // `spellcheck: false` and friends must be written; a missing boolean attribute is simply omitted.
+        if (PROPERTY_KEYS.has(key)) (el as unknown as Record<string, unknown>)[key] = value;
+        continue;
+      }
       if (key === "class") el.className = String(value);
       else if (key === "dataset") Object.assign(el.dataset, value as Record<string, string>);
       else if (key === "style" && typeof value === "object") Object.assign(el.style, value);

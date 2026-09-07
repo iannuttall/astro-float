@@ -59,14 +59,15 @@ export const STYLES = /* css */ `
 .float[data-side="left"] { left: 12px; flex-direction: row; }
 
 .float *, .float *::before, .float *::after { box-sizing: border-box; }
-.float button, .float input, .float select, .float textarea {
+/* :where() keeps these resets at class-level specificity so .btn/.switch etc. can override them. */
+.float :where(button, input, select, textarea) {
   font: inherit;
   color: inherit;
   margin: 0;
 }
-.float button { cursor: pointer; background: none; border: 0; padding: 0; }
+.float :where(button) { cursor: pointer; background: none; border: 0; padding: 0; text-align: left; }
 .float :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.float a { color: inherit; text-decoration: none; }
+.float :where(a) { color: inherit; text-decoration: none; }
 
 /* ---- rail ---------------------------------------------------------------- */
 .rail {
@@ -228,10 +229,11 @@ export const STYLES = /* css */ `
 
 .switch {
   position: relative;
-  width: 28px;
-  height: 16px;
+  display: inline-block;
+  width: 30px;
+  height: 18px;
   border-radius: 999px;
-  background: var(--line-strong);
+  background: #cfd3da;
   transition: background 150ms ease;
   flex: none;
 }
@@ -240,16 +242,30 @@ export const STYLES = /* css */ `
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
   background: #fff;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   transition: transform 150ms ease;
 }
-.switch[aria-checked="true"] { background: var(--accent); }
-.switch[aria-checked="true"]::after { transform: translateX(12px); }
-@media (prefers-color-scheme: dark) { .switch[aria-checked="true"]::after { background: var(--accent-fg); } }
+[aria-checked="true"] > .switch, .switch[aria-checked="true"] { background: var(--accent); }
+[aria-checked="true"] > .switch::after, .switch[aria-checked="true"]::after { transform: translateX(12px); }
+@media (prefers-color-scheme: dark) {
+  .switch { background: #3a404b; }
+  [aria-checked="true"] > .switch::after, .switch[aria-checked="true"]::after { background: var(--accent-fg); }
+}
+/* whole-row toggles: label on the left, switch on the right, click anywhere */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border-radius: 6px;
+}
+.toggle-row:hover .switch:not([aria-checked="true"]) { background: #c2c7cf; }
+[aria-checked="true"].toggle-row:hover .switch { opacity: 0.9; }
 
 .segmented { display: inline-flex; padding: 2px; border-radius: 7px; background: var(--bg-subtle); border: 1px solid var(--line); }
 .segmented button { height: 22px; padding: 0 10px; border-radius: 5px; font-size: 11.5px; font-weight: 500; color: var(--fg-muted); display: inline-flex; align-items: center; gap: 6px; }
@@ -296,8 +312,8 @@ export const STYLES = /* css */ `
 .field-remove { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 5px; color: var(--fg-faint); opacity: 0; transition: opacity 120ms ease; }
 .field:hover .field-remove, .field-remove:focus-visible { opacity: 1; }
 .field-remove:hover { background: var(--bg-hover); color: var(--fg); }
-.field-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .field-hint { font-size: 11px; color: var(--fg-faint); }
+.field .toggle-row { padding: 2px 0; }
 .field-add { display: flex; gap: 6px; padding-top: 10px; margin-top: 4px; border-top: 1px solid var(--line); }
 
 /* ---- media --------------------------------------------------------------- */
@@ -353,7 +369,8 @@ export const STYLES = /* css */ `
 
 .setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
 .setting + .setting { border-top: 1px solid var(--line); }
-.setting .label { font-size: 12.5px; }
+.setting > :first-child { flex: 1; min-width: 0; }
+.setting .label { font-size: 12.5px; color: var(--fg); }
 .setting .desc { font-size: 11px; color: var(--fg-muted); margin-top: 1px; }
 .meta { font-family: var(--mono); font-size: 10.5px; color: var(--fg-faint); word-break: break-all; padding-top: 12px; border-top: 1px solid var(--line); margin-top: 4px; }
 `;

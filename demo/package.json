@@ -11,5 +11,8 @@
   "dependencies": {
     "astro": "^5.13.0",
     "astro-float": "workspace:*"
+  },
+  "devDependencies": {
+    "sharp": "^0.34.0"
   }
 }
