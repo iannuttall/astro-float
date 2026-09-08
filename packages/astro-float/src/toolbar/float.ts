@@ -131,6 +131,15 @@ class Float {
         void this.save();
       }
     });
+    // Astro's toolbar switches the active app off on Escape keyup. While editing,
+    // Escape means "leave this field", never "leave edit mode" — the pencil does that.
+    document.addEventListener(
+      "keyup",
+      (e) => {
+        if (this.editing && e.key === "Escape") e.stopPropagation();
+      },
+      true,
+    );
     // Only real unloads (tab close, hard refresh) should ever warn — Float's own
     // navigations are soft swaps and never reach here.
     window.addEventListener("beforeunload", (e) => {
@@ -243,7 +252,8 @@ class Float {
   };
 
   private onFocusOut = () => {
-    if (this.editing) this.region.scheduleHide();
+    // In source view the control is the way back to the rendered page: keep it up.
+    if (this.editing && !this.sourceArea) this.region.scheduleHide();
   };
 
   private bodyRegionActions() {
@@ -277,6 +287,9 @@ class Float {
     area.addEventListener("input", () => {
       this.sourceDraft = area.value;
       this.touched();
+    });
+    area.addEventListener("keyup", (e) => {
+      if (e.key === "Escape") e.stopPropagation();
     });
     area.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {

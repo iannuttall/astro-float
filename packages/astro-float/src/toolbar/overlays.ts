@@ -235,6 +235,7 @@ export class SelectionBubble {
       else if (current) document.execCommand("unlink");
       this.hide();
     };
+    input.addEventListener("keyup", (e) => e.stopPropagation());
     input.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Enter") {
