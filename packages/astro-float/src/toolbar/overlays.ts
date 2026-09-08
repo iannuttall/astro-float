@@ -1,7 +1,9 @@
+import { icon, type IconName } from "./icons";
+
 /**
- * Small page-side helpers shared by the body editor and the field bindings:
+ * Small page-side helpers shared by the body editor and the sidebar:
  *
- * - `RegionControl` is the tiny copy / source toggle that sits just above the
+ * - `RegionControl` is the copy / source toggle that sits just above the
  *   top-right corner of whichever region is being edited.
  * - `SelectionBubble` is the bold / italic / link bubble for a text selection.
  *
@@ -9,18 +11,11 @@
  * positioned above/beside their target so nothing stacks on the words.
  */
 
-const ICON = {
-  copy: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`,
-  check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>`,
-  source: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>`,
-  eye: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></svg>`,
-  link: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>`,
-};
-
-function makeButton(html: string, label: string, onClick: (e: MouseEvent) => void): HTMLButtonElement {
+function makeButton(iconName: IconName | null, label: string, onClick: (e: MouseEvent) => void, text?: string): HTMLButtonElement {
   const b = document.createElement("button");
   b.type = "button";
-  b.innerHTML = html;
+  if (iconName) b.appendChild(icon(iconName, 14));
+  if (text) b.appendChild(Object.assign(document.createElement("span"), { textContent: text }));
   b.title = label;
   b.setAttribute("aria-label", label);
   // Keep the page selection / focus where it is.
@@ -41,6 +36,11 @@ export interface RegionActions {
   /** Present only for the body: flip between rendered and in-page source editing. */
   toggleSource?: () => void;
   isSource?: () => boolean;
+  /** A save is running as part of leaving source view. */
+  busy?: () => boolean;
+  /** The last attempt to leave source view failed; shown next to a Discard escape hatch. */
+  error?: () => string | null;
+  discard?: () => void;
 }
 
 /** Copy / Source control anchored just above the top-right corner of the region being edited. */
@@ -55,6 +55,11 @@ export class RegionControl {
     this.target = target;
     this.actions = actions;
     this.render();
+  }
+
+  /** Re-draw with the same target (busy / error state changed). */
+  refresh() {
+    if (this.target && this.actions && this.el && !this.el.hidden) this.render();
   }
 
   /** Hide after a beat, unless focus moved into the control itself. */
@@ -108,28 +113,44 @@ export class RegionControl {
     if (!this.el) {
       this.el = document.createElement("div");
       this.el.className = "astro-float-region";
-      document.body.appendChild(this.el);
       window.addEventListener("scroll", this.reposition, true);
       window.addEventListener("resize", this.reposition);
     }
+    // A page swap may have dropped it from the document; put it back.
+    if (!this.el.isConnected) document.body.appendChild(this.el);
     const el = this.el;
     const actions = this.actions!;
     el.textContent = "";
 
-    const copy = makeButton(ICON.copy, "Copy markdown", () => {
+    const copy = makeButton("copy", "Copy Markdown", () => {
       void navigator.clipboard?.writeText(actions.copy()).then(() => {
-        copy.innerHTML = ICON.check;
-        window.setTimeout(() => (copy.innerHTML = ICON.copy), 1200);
+        copy.replaceChildren(icon("check", 14));
+        window.setTimeout(() => copy.replaceChildren(icon("copy", 14)), 1200);
       });
     });
     el.appendChild(copy);
 
     if (actions.toggleSource) {
       const isSource = actions.isSource?.() ?? false;
-      const toggle = makeButton(isSource ? ICON.eye : ICON.source, isSource ? "Back to the rendered view" : "Edit this region as Markdown", () => actions.toggleSource!());
-      toggle.appendChild(Object.assign(document.createElement("span"), { textContent: isSource ? "Rendered" : "Source" }));
+      const busy = actions.busy?.() ?? false;
+      const error = actions.error?.() ?? null;
+      const toggle = makeButton(
+        isSource ? "eye" : "code",
+        isSource ? "Save and go back to the rendered page" : "Edit this region as Markdown",
+        () => actions.toggleSource!(),
+        busy ? "Saving…" : isSource ? "Rendered" : "Source",
+      );
       toggle.setAttribute("data-wide", "");
+      toggle.disabled = busy;
       el.appendChild(toggle);
+      if (error && isSource && actions.discard) {
+        const note = document.createElement("span");
+        note.className = "astro-float-region-error";
+        note.append(icon("alert", 13), Object.assign(document.createElement("span"), { textContent: error }));
+        const discard = makeButton(null, "Discard the source edits and show the page as it was", () => actions.discard!(), "Discard");
+        discard.setAttribute("data-danger", "");
+        el.append(note, discard);
+      }
     }
 
     el.hidden = false;
@@ -202,15 +223,20 @@ export class SelectionBubble {
     if (!this.el) {
       this.el = document.createElement("div");
       this.el.className = "astro-float-bubble";
-      document.body.appendChild(this.el);
     }
+    if (!this.el.isConnected) document.body.appendChild(this.el);
     const el = this.el;
     el.textContent = "";
 
-    const inLink = (range.commonAncestorContainer as Element).closest?.("a") ?? range.startContainer.parentElement?.closest("a");
-    const b = makeButton("<b>B</b>", "Bold (⌘B)", () => document.execCommand("bold"));
-    const i = makeButton("<i>I</i>", "Italic (⌘I)", () => document.execCommand("italic"));
-    const link = makeButton(ICON.link, inLink ? "Edit link (⌘K)" : "Link (⌘K)", () => this.enterLinkMode(range, inLink?.getAttribute("href") ?? ""));
+    const anchorEl = range.commonAncestorContainer instanceof Element ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+    const inLink = anchorEl?.closest("a") ?? null;
+    const inBold = !!anchorEl?.closest("b, strong");
+    const inItalic = !!anchorEl?.closest("i, em");
+    const b = makeButton("bold", "Bold (⌘B)", () => document.execCommand("bold"));
+    const i = makeButton("italic", "Italic (⌘I)", () => document.execCommand("italic"));
+    const link = makeButton("link", inLink ? "Edit link (⌘K)" : "Link (⌘K)", () => this.enterLinkMode(range, inLink?.getAttribute("href") ?? ""));
+    if (inBold) b.setAttribute("data-on", "");
+    if (inItalic) i.setAttribute("data-on", "");
     if (inLink) link.setAttribute("data-on", "");
     el.append(b, i, link);
     el.hidden = false;
@@ -246,7 +272,7 @@ export class SelectionBubble {
         this.hide();
       }
     });
-    const ok = makeButton(ICON.check, "Apply", apply);
+    const ok = makeButton("check", "Apply", apply);
     el.append(input, ok);
     this.position(range);
     input.focus();

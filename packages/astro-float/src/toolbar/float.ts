@@ -69,6 +69,11 @@ class Float {
   /** In-page source view of the body: a textarea standing in for the prose. */
   private sourceArea: HTMLTextAreaElement | null = null;
   private sourceDraft = "";
+  private sourceBusy = false;
+  private sourceError: string | null = null;
+  /** The sidebar can be tucked away while editing continues on the page. */
+  private panelHidden = false;
+  private savePromise: Promise<void> | null = null;
 
   private status: Status = "idle";
   private statusMessage = "";
@@ -185,6 +190,7 @@ class Float {
       }
     } else {
       window.clearTimeout(this.autosaveTimer);
+      this.panelHidden = false;
       this.exitSourceMode(false);
       this.page.detach();
       this.fields.detach();
@@ -263,18 +269,45 @@ class Float {
       copy: () => this.currentBody(),
       toggleSource: () => void this.toggleSourceMode(),
       isSource: () => !!this.sourceArea,
+      busy: () => this.sourceBusy,
+      error: () => this.sourceError,
+      discard: () => this.discardSource(),
     };
+  }
+
+  /** Escape hatch when leaving source view can't save: drop the source edits, show the page as it was. */
+  private discardSource() {
+    if (!this.sourceArea) return;
+    this.sourceError = null;
+    this.sourceDraft = this.doc?.body ?? "";
+    this.exitSourceMode(true);
+    if (this.status === "error" || this.status === "conflict") this.setStatus("idle");
+    else this.renderStatus();
   }
 
   /** Swap the rendered prose for a Markdown textarea in the same spot (and back). */
   private async toggleSourceMode() {
+    if (this.sourceBusy) return;
     if (this.sourceArea) {
       // Leaving source view: a save re-renders the page from what was typed.
-      if (this.isDirty()) {
-        await this.save();
-        if (this.isDirty()) return;
+      this.sourceBusy = true;
+      this.sourceError = null;
+      this.region.refresh();
+      try {
+        if (this.savePromise) await this.savePromise; // an autosave already in flight
+        if (this.isDirty()) {
+          await this.save();
+          if (this.isDirty()) {
+            // The save didn't take (conflict, server error): stay put and say why, with a way out.
+            this.sourceError = this.status === "conflict" ? "Changed on disk — Reload or Overwrite in the sidebar" : this.statusMessage || "Couldn't save";
+            return;
+          }
+        }
+        if (this.sourceArea) this.exitSourceMode(true); // nothing changed, or the save didn't re-render
+      } finally {
+        this.sourceBusy = false;
+        this.region.refresh();
       }
-      this.exitSourceMode(true);
       return;
     }
     const container = this.page.container;
@@ -483,7 +516,13 @@ class Float {
 
   // ---- saving -----------------------------------------------------------------
 
-  private async save(force = false) {
+  private save(force = false): Promise<void> {
+    if (this.savePromise) return this.savePromise;
+    this.savePromise = this.saveNow(force).finally(() => (this.savePromise = null));
+    return this.savePromise;
+  }
+
+  private async saveNow(force: boolean) {
     if (!this.doc || this.saving) return;
     if (!this.isDirty() && !force) return;
     window.clearTimeout(this.autosaveTimer);
@@ -517,11 +556,16 @@ class Float {
       if (result.changed && refresh) {
         this.setStatus("refreshing");
         try {
-          this.exitSourceMode(false);
           await swapPage();
+          this.exitSourceMode(false);
           this.bindBody();
         } catch (err) {
+          // Saved fine, page didn't re-render: fall back to the DOM we have and say so.
           console.warn("[astro-float] page refresh failed", err);
+          if (fromSource) this.exitSourceMode(true);
+          this.setStatus("error", "Saved, but the page didn't refresh — reload to see it");
+          this.saving = false;
+          return;
         }
         void this.refreshCollections();
       } else if (fromSource && !result.changed) {
@@ -571,8 +615,12 @@ class Float {
       h(
         "div",
         { class: "sb-title" },
-        h("span", { class: "sb-label" }, "Editing"),
-        h("span", { class: "sb-entry", title: this.doc?.file ?? "" }, this.doc ? `${this.doc.collection}/${this.doc.id}` : "no entry on this page"),
+        h("span", { class: "sb-entry", title: this.doc?.file ?? "" }, this.doc ? `${this.doc.collection}/${this.doc.id}` : "No entry on this page"),
+        h(
+          "button",
+          { class: "icon-btn", type: "button", "aria-label": "Hide the sidebar (keep editing)", title: "Hide the sidebar — editing stays on", onClick: () => this.setPanelHidden(true) },
+          icon("panelClose", 15),
+        ),
       ),
       h("div", { class: "sb-status" }, this.statusText, this.statusActions),
     );
@@ -583,7 +631,23 @@ class Float {
     this.renderCollectionSection();
 
     this.sidebar = h("aside", { class: "sidebar", "aria-label": "Content editor" }, head, this.fieldsSection, this.collectionSection, this.renderSettingsSection());
-    replaceChildren(this.root, this.sidebar);
+    // A quiet tab at the edge brings the sidebar back; it also carries the status dot / Save so nothing is lost while hidden.
+    const tab = h(
+      "div",
+      { class: "sb-tab" },
+      h("button", { class: "sb-tab-open", type: "button", "aria-label": "Show the sidebar", title: "Show the sidebar", onClick: () => this.setPanelHidden(false) }, icon("panelOpen", 15)),
+      h("div", { class: "sb-tab-status" }),
+    );
+    replaceChildren(this.root, this.sidebar, tab);
+    this.root.toggleAttribute("data-panel-hidden", this.panelHidden);
+    this.renderStatus();
+  }
+
+  private setPanelHidden(hidden: boolean) {
+    this.panelHidden = hidden;
+    this.root.toggleAttribute("data-panel-hidden", hidden);
+    if (hidden) this.releaseFocus();
+    this.lastSlot = ""; // the status slot moves between the header and the tab
     this.renderStatus();
   }
 
@@ -601,13 +665,16 @@ class Float {
             ? "dirty"
             : "idle";
     const showSave = dirty && !busy && !this.prefs.autosave && this.status !== "conflict" && this.status !== "error";
-    const slot = `${showSave}|${dotState}|${this.statusMessage}`;
+    const slot = `${showSave}|${dotState}|${this.statusMessage}|${this.panelHidden}`;
     if (slot !== this.lastSlot) {
       this.lastSlot = slot;
       this.saveButton.hidden = !showSave;
       this.statusDot.hidden = showSave;
       this.statusDot.dataset.state = dotState;
       this.statusDot.title = dotState === "dirty" ? "Unsaved changes" : dotState === "saved" ? "Saved" : this.statusMessage || "";
+      const tabStatus = this.root.querySelector(".sb-tab-status");
+      if (this.panelHidden && tabStatus) tabStatus.appendChild(this.statusSlot);
+      else if (this.statusActions && !this.statusActions.contains(this.statusSlot)) this.statusActions.appendChild(this.statusSlot);
     }
 
     if (!this.statusText || !this.statusActions) return;
@@ -648,7 +715,7 @@ class Float {
     this.statusText.textContent = text;
     if (tone) this.statusText.dataset.tone = tone;
     else delete this.statusText.dataset.tone;
-    replaceChildren(this.statusActions, ...actions, this.statusSlot);
+    replaceChildren(this.statusActions, ...actions, ...(this.panelHidden ? [] : [this.statusSlot]));
   }
 
   // ---- fields (only what isn't already on the page) ----------------------------------------
@@ -675,6 +742,23 @@ class Float {
       }
       rows.push(this.renderField(key, value));
     }
+    // Fields removed since the last save stay listed so the removal can be undone before it's written.
+    for (const key of Object.keys(this.doc.frontmatter)) {
+      if (key in this.draftFrontmatter || onPage.has(key)) continue;
+      rows.push(
+        h(
+          "div",
+          { class: "field field-removed" },
+          h(
+            "div",
+            { class: "field-head" },
+            h("span", { class: "field-key" }, key),
+            h("span", { class: "field-type" }, "removed on save"),
+            h("button", { class: "btn btn-sm btn-ghost", type: "button", onClick: () => this.revertField(key) }, icon("undo", 13), "Restore"),
+          ),
+        ),
+      );
+    }
 
     const newKey = h("input", { class: "input", placeholder: "New field name", "aria-label": "New field name" }) as HTMLInputElement;
     const add = () => {
@@ -690,23 +774,56 @@ class Float {
 
     replaceChildren(
       section,
-      h("h3", { class: "sb-heading" }, "Fields", onPage.size ? h("span", { class: "sb-hint" }, `${[...onPage].join(", ")} on the page`) : null),
+      h("h3", { class: "sb-heading" }, "Fields", onPage.size ? h("span", { class: "sb-hint" }, `${[...onPage].join(", ")} are on the page`) : null),
       rows.length ? rows : h("p", { class: "empty" }, "Everything else is on the page."),
       h("div", { class: "field-add" }, newKey, h("button", { class: "btn", type: "button", onClick: add }, icon("plus", 13), "Add")),
     );
   }
 
+  /** Put a field back to what's on disk (also restores a removed field, in its original position). */
+  private revertField(key: string) {
+    if (!this.doc) return;
+    if (key in this.doc.frontmatter) {
+      const next: Frontmatter = {};
+      for (const k of Object.keys(this.doc.frontmatter)) {
+        if (k === key) next[k] = clone(this.doc.frontmatter[k]);
+        else if (k in this.draftFrontmatter) next[k] = this.draftFrontmatter[k];
+      }
+      for (const k of Object.keys(this.draftFrontmatter)) if (!(k in next)) next[k] = this.draftFrontmatter[k];
+      this.draftFrontmatter = next;
+    } else {
+      delete this.draftFrontmatter[key];
+    }
+    this.fields.setValue(key, this.draftFrontmatter[key]);
+    this.touched();
+    this.renderFieldsSection();
+  }
+
+  private fieldChanged(key: string) {
+    if (!this.doc) return false;
+    return JSON.stringify(this.draftFrontmatter[key]) !== JSON.stringify(this.doc.frontmatter[key]);
+  }
+
   private renderField(key: string, value: unknown): HTMLElement {
     const kind = fieldKind(value);
+    const original = this.doc?.frontmatter[key];
+    const revert = h(
+      "button",
+      { class: "field-revert", type: "button", "aria-label": `Revert ${key}`, title: "Back to the saved value", hidden: !this.fieldChanged(key), onClick: () => this.revertField(key) },
+      icon("undo", 12),
+    ) as HTMLButtonElement;
+    const hint = h("div", { class: "field-note" });
     const set = (next: unknown) => {
       this.draftFrontmatter[key] = next;
+      this.fields.setValue(key, next);
+      revert.hidden = !this.fieldChanged(key);
       this.touched();
     };
 
     let control: HTMLElement;
     switch (kind) {
       case "boolean": {
-        const hint = h("span", { class: "field-hint" }, value ? "true" : "false");
+        const label = h("span", { class: "field-hint" }, value ? "true" : "false");
         const row = h(
           "button",
           {
@@ -718,11 +835,11 @@ class Float {
             onClick: () => {
               const next = row.getAttribute("aria-checked") !== "true";
               row.setAttribute("aria-checked", String(next));
-              hint.textContent = next ? "true" : "false";
+              label.textContent = next ? "true" : "false";
               set(next);
             },
           },
-          hint,
+          label,
           h("span", { class: "switch" }),
         );
         control = row;
@@ -731,17 +848,32 @@ class Float {
       case "number": {
         const input = h("input", { class: "input", type: "number", step: "any", value: String(value) }) as HTMLInputElement;
         input.addEventListener("input", () => {
-          if (input.value === "") return;
+          if (input.value === "") {
+            input.dataset.invalid = "";
+            hint.textContent = `Empty — keeping ${String(original ?? value)} until you enter a number.`;
+            return;
+          }
           const n = Number(input.value);
-          if (!Number.isNaN(n)) set(n);
+          if (Number.isNaN(n)) return;
+          delete input.dataset.invalid;
+          hint.textContent = "";
+          set(n);
         });
         control = input;
         break;
       }
       case "date": {
+        // An emptied date is never written: the draft keeps the last real value until a date is picked.
         const input = h("input", { class: "input", type: "date", value: String(value).slice(0, 10) }) as HTMLInputElement;
         input.addEventListener("input", () => {
-          if (input.value) set(input.value);
+          if (!input.value) {
+            input.dataset.invalid = "";
+            hint.textContent = `Empty — keeping ${String(this.draftFrontmatter[key] ?? original ?? "")} until you pick a date.`;
+            return;
+          }
+          delete input.dataset.invalid;
+          hint.textContent = "";
+          set(input.value);
         });
         control = input;
         break;
@@ -769,8 +901,10 @@ class Float {
           try {
             set(JSON.parse(ta.value));
             delete ta.dataset.invalid;
+            hint.textContent = "";
           } catch {
             ta.dataset.invalid = "";
+            hint.textContent = "Not valid JSON yet — keeping the last valid value.";
           }
         });
         control = ta;
@@ -791,6 +925,7 @@ class Float {
         "div",
         { class: "field-head" },
         h("span", { class: "field-key" }, key),
+        revert,
         h("span", { class: "field-type" }, kind === "string" ? "text" : kind),
         h(
           "button",
@@ -798,7 +933,7 @@ class Float {
             class: "field-remove",
             type: "button",
             "aria-label": `Remove ${key}`,
-            title: "Remove field",
+            title: "Remove field (undo before saving with Restore)",
             onClick: () => {
               delete this.draftFrontmatter[key];
               this.touched();
@@ -809,6 +944,7 @@ class Float {
         ),
       ),
       control,
+      hint,
     );
   }
 

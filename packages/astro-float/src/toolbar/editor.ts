@@ -1,4 +1,5 @@
 import { blockToMarkdown, type SerializeContext } from "./html-to-md";
+import { icon, type IconName } from "./icons";
 import { SelectionBubble } from "./overlays";
 
 export interface SourceBlock {
@@ -60,9 +61,6 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing][data-float-dragging]::after { background-color: color-mix(in srgb, currentColor 7%, transparent); }
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
-.astro-float-source { outline: none; caret-color: currentColor; border-radius: 6px; background-color: transparent; transition: background-color 120ms ease; }
-.astro-float-source:hover { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
-.astro-float-source:focus { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
 
 /* In-page source view for the body: a textarea in the prose's place, same wash. */
 .astro-float-source {
@@ -70,6 +68,7 @@ const PAGE_STYLE = /* css */ `
   width: 100%;
   min-height: 240px;
   border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 6px;
   padding: 14px 18px;
   margin: 0 0 18px;
   color: inherit;
@@ -77,25 +76,45 @@ const PAGE_STYLE = /* css */ `
   tab-size: 2;
   resize: vertical;
   white-space: pre-wrap;
+  outline: none;
+  caret-color: currentColor;
+  background-color: transparent;
+  transition: background-color 120ms ease;
 }
+.astro-float-source:hover { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+.astro-float-source:focus { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
 
-/* Region control (copy / source) and the selection bubble: dark Astro-style pills in the page margin. */
-.astro-float-region, .astro-float-bubble {
+/* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
+[data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
+[data-float-editing] [data-float-island] * { cursor: default; }
+
+/* Frontmatter fields edited in place (title, description, …). */
+[data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
+
+/* Overlays live in the page, never inside the editable body. */
+.astro-float-frame, .astro-float-dropline { position: fixed; z-index: 2000000001; pointer-events: none; box-sizing: border-box; }
+.astro-float-frame { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 6px; }
+.astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); }
+.astro-float-dropline { height: 2px; background: #6b7280; border-radius: 1px; }
+
+/* Region control (copy / source), selection bubble and island bar: one quiet dark pill, one icon set. */
+.astro-float-region, .astro-float-bubble, .astro-float-bar {
   position: fixed;
   z-index: 2000000001;
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 3px;
-  background: linear-gradient(180deg, #13151a 0%, rgba(19, 21, 26, 0.94) 100%);
-  border: 1px solid #343841;
+  background: #16181d;
+  border: 1px solid #2c3037;
   border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(19, 21, 26, 0.29), 0 4px 4px rgba(19, 21, 26, 0.26), 0 10px 6px rgba(19, 21, 26, 0.15);
-  color: #d5d8de;
+  box-shadow: 0 1px 2px rgba(19, 21, 26, 0.25), 0 6px 16px -6px rgba(19, 21, 26, 0.35);
+  color: #c7ccd4;
   font: 12px/1 system-ui, -apple-system, sans-serif;
+  box-sizing: border-box;
 }
-.astro-float-region[hidden], .astro-float-bubble[hidden] { display: none; }
-.astro-float-region button, .astro-float-bubble button {
+.astro-float-region[hidden], .astro-float-bubble[hidden], .astro-float-bar[hidden] { display: none; }
+.astro-float-region button, .astro-float-bubble button, .astro-float-bar button {
   all: unset;
   display: inline-flex;
   align-items: center;
@@ -105,14 +124,19 @@ const PAGE_STYLE = /* css */ `
   min-width: 26px;
   padding: 0 6px;
   border-radius: 5px;
-  color: #d5d8de;
+  color: #c7ccd4;
   cursor: pointer;
   font: inherit;
+  font-weight: 500;
+  box-sizing: border-box;
 }
-.astro-float-region button[data-wide] { padding: 0 8px 0 6px; font-weight: 500; }
-.astro-float-region button:hover, .astro-float-bubble button:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.astro-float-bubble button[data-on] { color: #fff; background: rgba(71, 78, 94, 1); }
-.astro-float-bubble b, .astro-float-bubble i { font-family: Georgia, "Times New Roman", serif; font-size: 14px; }
+.astro-float-region button svg, .astro-float-bubble button svg, .astro-float-bar button svg { width: 14px; height: 14px; display: block; }
+.astro-float-region button[data-wide] { padding: 0 8px 0 6px; }
+.astro-float-region button:hover, .astro-float-bubble button:hover, .astro-float-bar button:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
+.astro-float-region button:disabled, .astro-float-bar button:disabled { opacity: 0.45; cursor: default; background: none; }
+.astro-float-bubble button[data-on] { color: #fff; background: rgba(255, 255, 255, 0.12); }
+.astro-float-region button[data-danger], .astro-float-bar button[data-danger]:hover { color: #f8a5a5; }
+.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: #f8a5a5; white-space: nowrap; border-left: 1px solid #2c3037; margin-left: 2px; }
 .astro-float-bubble input {
   all: unset;
   width: 220px;
@@ -122,6 +146,7 @@ const PAGE_STYLE = /* css */ `
   background: rgba(255, 255, 255, 0.06);
   color: #fff;
   font: 12.5px/1 system-ui, -apple-system, sans-serif;
+  box-sizing: border-box;
 }
 .astro-float-bubble input::placeholder { color: #6b7280; }
 .astro-float-bubble::after {
@@ -132,67 +157,21 @@ const PAGE_STYLE = /* css */ `
   transform: translateX(-50%);
   border: 5px solid transparent;
   border-bottom: 0;
-  border-top-color: #343841;
+  border-top-color: #2c3037;
 }
-.astro-float-bubble[data-below]::after { top: -6px; bottom: auto; border-top: 0; border-bottom: 5px solid #343841; }
-@media (pointer: coarse) {
-  .astro-float-region button, .astro-float-bubble button { height: 36px; min-width: 36px; }
-  .astro-float-bubble input { height: 36px; font-size: 16px; }
-}
-
-/* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
-[data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
-[data-float-editing] [data-float-island] * { cursor: default; }
-
-/* Frontmatter fields edited in place (title, description, …). */
-[data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
-
-/* Overlays live in the page, never inside the editable body. */
-.astro-float-frame, .astro-float-dropline, .astro-float-bar { position: fixed; z-index: 2000000001; pointer-events: none; box-sizing: border-box; }
-.astro-float-frame { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 6px; }
-.astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); border-style: solid; }
-.astro-float-dropline { height: 2px; background: #6b7280; border-radius: 1px; }
-.astro-float-bar {
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  padding: 3px;
-  background: linear-gradient(180deg, #13151a 0%, rgba(19, 21, 26, 0.92) 100%);
-  border: 1px solid #343841;
-  border-radius: 9px;
-  box-shadow: 0 1px 2px rgba(19, 21, 26, 0.29), 0 4px 4px rgba(19, 21, 26, 0.26), 0 10px 6px rgba(19, 21, 26, 0.15);
-  color: #d5d8de;
-  font: 12.5px/1 system-ui, -apple-system, sans-serif;
-}
-.astro-float-bar button {
-  all: unset;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  color: #d5d8de;
-  cursor: pointer;
-}
-.astro-float-bar button:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
-.astro-float-bar button:disabled { opacity: 0.3; cursor: default; background: none; }
+.astro-float-bubble[data-below]::after { top: -6px; bottom: auto; border-top: 0; border-bottom: 5px solid #2c3037; }
 .astro-float-bar button[data-grip] { cursor: grab; }
-.astro-float-bar button[data-danger]:hover { color: #f87171; }
-.astro-float-bar .astro-float-sep { width: 1px; height: 18px; background: #343841; margin: 0 2px; }
+.astro-float-bar .astro-float-sep { width: 1px; height: 18px; background: #2c3037; margin: 0 2px; }
 .astro-float-bar .astro-float-confirm { display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; white-space: nowrap; }
-.astro-float-bar .astro-float-confirm button { width: auto; height: 26px; padding: 0 9px; font-weight: 500; }
+.astro-float-bar .astro-float-confirm button { width: auto; height: 26px; padding: 0 9px; }
 .astro-float-bar .astro-float-confirm button[data-danger] { background: #f87171; color: #13151a; }
 .astro-float-bar .astro-float-confirm button[data-danger]:hover { background: #fca5a5; color: #13151a; }
-@media (pointer: coarse) { .astro-float-bar button { width: 40px; height: 40px; } .astro-float-bar .astro-float-confirm button { height: 34px; } }
+@media (pointer: coarse) {
+  .astro-float-region button, .astro-float-bubble button, .astro-float-bar button { height: 36px; min-width: 36px; }
+  .astro-float-bubble input { height: 36px; font-size: 16px; }
+  .astro-float-bar .astro-float-confirm button { height: 34px; }
+}
 `;
-
-const ICON = {
-  up: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m18 15-6-6-6 6"/></svg>`,
-  down: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`,
-  grip: `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>`,
-  trash: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`,
-};
 
 /** Page-side styles (wash, islands, overlays) live for the whole edit session, not just while the body is attached. */
 export function ensurePageStyle() {
@@ -546,18 +525,18 @@ export class PageEditor {
   }
 
   private ensureOverlays() {
-    if (this.frame) return;
-    this.frame = document.createElement("div");
-    this.frame.className = "astro-float-frame";
-    this.dropLine = document.createElement("div");
-    this.dropLine.className = "astro-float-dropline";
-    this.bar = document.createElement("div");
-    this.bar.className = "astro-float-bar";
-    this.bar.addEventListener("mousedown", (e) => e.preventDefault()); // keep page selection where it is
-    for (const el of [this.frame, this.dropLine, this.bar]) {
-      el.hidden = true;
-      document.body.appendChild(el);
+    if (!this.frame) {
+      this.frame = document.createElement("div");
+      this.frame.className = "astro-float-frame";
+      this.dropLine = document.createElement("div");
+      this.dropLine.className = "astro-float-dropline";
+      this.bar = document.createElement("div");
+      this.bar.className = "astro-float-bar";
+      this.bar.addEventListener("mousedown", (e) => e.preventDefault()); // keep page selection where it is
+      for (const el of [this.frame, this.dropLine, this.bar]) el.hidden = true;
     }
+    // A page swap may have dropped them from the document; put them back.
+    for (const el of [this.frame, this.dropLine!, this.bar!]) if (!el.isConnected) document.body.appendChild(el);
   }
 
   private hideOverlays() {
@@ -589,28 +568,26 @@ export class PageEditor {
       const wrap = document.createElement("span");
       wrap.className = "astro-float-confirm";
       wrap.append("Remove this block?");
-      const yes = button(ICON.trash, "Remove", () => this.removeIsland(target));
-      yes.textContent = "Remove";
+      const yes = button(null, "Remove", () => this.removeIsland(target), "Remove");
       yes.setAttribute("data-danger", "");
-      const no = button("", "Keep", () => {
+      const no = button(null, "Keep", () => {
         this.confirming = false;
         this.renderOverlays();
-      });
-      no.textContent = "Keep";
+      }, "Keep");
       wrap.append(yes, no);
       bar.appendChild(wrap);
     } else {
-      const up = button(ICON.up, "Move up", () => this.moveIsland(target, -1));
-      const down = button(ICON.down, "Move down", () => this.moveIsland(target, 1));
+      const up = button("arrowUp", "Move up", () => this.moveIsland(target, -1));
+      const down = button("arrowDown", "Move down", () => this.moveIsland(target, 1));
       up.disabled = !target.previousElementSibling;
       down.disabled = !target.nextElementSibling;
-      const grip = button(ICON.grip, "Drag to reorder", () => {});
+      const grip = button("grip", "Drag to reorder", () => {});
       grip.setAttribute("data-grip", "");
       grip.draggable = true;
       grip.addEventListener("dragstart", (e) => this.startIslandDrag(e, target));
       const sep = document.createElement("span");
       sep.className = "astro-float-sep";
-      const del = button(ICON.trash, "Remove", () => {
+      const del = button("trash", "Remove", () => {
         this.confirming = true;
         this.renderOverlays();
       });
@@ -1034,10 +1011,11 @@ function keyOf(node: Node): string {
   return "#text:" + (node.textContent ?? "");
 }
 
-function button(svg: string, label: string, onClick: () => void): HTMLButtonElement {
+function button(name: IconName | null, label: string, onClick: () => void, text?: string): HTMLButtonElement {
   const b = document.createElement("button");
   b.type = "button";
-  b.innerHTML = svg;
+  if (name) b.appendChild(icon(name, 14));
+  if (text) b.appendChild(Object.assign(document.createElement("span"), { textContent: text }));
   b.title = label;
   b.setAttribute("aria-label", label);
   b.addEventListener("click", (e) => {
