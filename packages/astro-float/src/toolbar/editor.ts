@@ -1,4 +1,5 @@
 import { blockToMarkdown, type SerializeContext } from "./html-to-md";
+import { SelectionBubble } from "./overlays";
 
 export interface SourceBlock {
   type: string;
@@ -33,23 +34,111 @@ const PAGE_STYLE = /* css */ `
 /*
  * One convention for "you can edit this": a quiet grey wash on hover, a
  * lighter one while you're in it. Same treatment for the title, the
- * description, the body and any other bound field. Nothing else.
+ * description, the body and any other bound field. The wash is a pseudo-element
+ * painted *behind* the text, a little larger than the box — it takes part in no
+ * layout at all, so attaching, hovering or focusing never moves a pixel.
  */
 [data-float-editing], [data-float-editing-field] {
-  --float-wash: transparent;
+  position: relative;
+  z-index: 0;
   outline: none;
   caret-color: currentColor;
-  border-radius: 6px;
-  background-color: var(--float-wash);
-  box-shadow: 0 0 0 var(--float-wash-spread, 8px) var(--float-wash);
-  transition: background-color 120ms ease, box-shadow 120ms ease;
 }
-[data-float-editing] { --float-wash-spread: 14px; }
-[data-float-editing]:hover, [data-float-editing-field]:hover { --float-wash: color-mix(in srgb, currentColor 4.5%, transparent); }
-[data-float-editing]:focus, [data-float-editing-field]:focus { --float-wash: color-mix(in srgb, currentColor 2.5%, transparent); }
-[data-float-editing][data-float-dragging] { --float-wash: color-mix(in srgb, currentColor 7%, transparent); }
+[data-float-editing]::after, [data-float-editing-field]::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -6px -10px;
+  border-radius: 6px;
+  background-color: transparent;
+  pointer-events: none;
+  transition: background-color 120ms ease;
+}
+[data-float-editing]::after { inset: -14px -18px; }
+[data-float-editing]:hover::after, [data-float-editing-field]:hover::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+[data-float-editing]:focus::after, [data-float-editing-field]:focus::after { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
+[data-float-editing][data-float-dragging]::after { background-color: color-mix(in srgb, currentColor 7%, transparent); }
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
+.astro-float-source { outline: none; caret-color: currentColor; border-radius: 6px; background-color: transparent; transition: background-color 120ms ease; }
+.astro-float-source:hover { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+.astro-float-source:focus { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
+
+/* In-page source view for the body: a textarea in the prose's place, same wash. */
+.astro-float-source {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  padding: 14px 18px;
+  margin: 0 0 18px;
+  color: inherit;
+  font: 13.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 2;
+  resize: vertical;
+  white-space: pre-wrap;
+}
+
+/* Region control (copy / source) and the selection bubble: dark Astro-style pills in the page margin. */
+.astro-float-region, .astro-float-bubble {
+  position: fixed;
+  z-index: 2000000001;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: linear-gradient(180deg, #13151a 0%, rgba(19, 21, 26, 0.94) 100%);
+  border: 1px solid #343841;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(19, 21, 26, 0.29), 0 4px 4px rgba(19, 21, 26, 0.26), 0 10px 6px rgba(19, 21, 26, 0.15);
+  color: #d5d8de;
+  font: 12px/1 system-ui, -apple-system, sans-serif;
+}
+.astro-float-region[hidden], .astro-float-bubble[hidden] { display: none; }
+.astro-float-region button, .astro-float-bubble button {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: #d5d8de;
+  cursor: pointer;
+  font: inherit;
+}
+.astro-float-region button[data-wide] { padding: 0 8px 0 6px; font-weight: 500; }
+.astro-float-region button:hover, .astro-float-bubble button:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.astro-float-bubble button[data-on] { color: #fff; background: rgba(71, 78, 94, 1); }
+.astro-float-bubble b, .astro-float-bubble i { font-family: Georgia, "Times New Roman", serif; font-size: 14px; }
+.astro-float-bubble input {
+  all: unset;
+  width: 220px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font: 12.5px/1 system-ui, -apple-system, sans-serif;
+}
+.astro-float-bubble input::placeholder { color: #6b7280; }
+.astro-float-bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-bottom: 0;
+  border-top-color: #343841;
+}
+.astro-float-bubble[data-below]::after { top: -6px; bottom: auto; border-top: 0; border-bottom: 5px solid #343841; }
+@media (pointer: coarse) {
+  .astro-float-region button, .astro-float-bubble button { height: 36px; min-width: 36px; }
+  .astro-float-bubble input { height: 36px; font-size: 16px; }
+}
 
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
@@ -142,6 +231,7 @@ export class PageEditor {
   private bar: HTMLElement | null = null;
   private dropLine: HTMLElement | null = null;
   private confirming = false;
+  private bubble: SelectionBubble | null = null;
 
   constructor(private hooks: PageEditorHooks) {}
 
@@ -217,6 +307,10 @@ export class PageEditor {
     } catch {
       /* not supported */
     }
+    this.bubble = new SelectionBubble(
+      () => this.container,
+      () => this.attached && !this.selected,
+    );
 
     el.addEventListener("keydown", this.onKeydown);
     el.addEventListener("keyup", this.onKeyup);
@@ -244,6 +338,8 @@ export class PageEditor {
     const el = this.container;
     if (!el || !this.attached) return;
     this.attached = false;
+    this.bubble?.dispose();
+    this.bubble = null;
     el.contentEditable = "false";
     el.removeAttribute("contenteditable");
     el.removeAttribute("data-float-editing");

@@ -21,7 +21,6 @@ export default defineToolbarApp({
       else sessionStorage.removeItem(EDIT_KEY);
       void float?.setEditing(state);
     });
-    app.onToolbarPlacementUpdated(({ placement }) => float?.setToolbarPlacement(placement));
 
     // Edit mode survives a full reload (e.g. you saved a file in your IDE).
     if (sessionStorage.getItem(EDIT_KEY) === "1") app.toggleState({ state: true });

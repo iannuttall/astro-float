@@ -97,7 +97,17 @@ export class FieldBindings {
     return this.els.has(key);
   }
 
-  /** Push a value from the Fields panel into the page (skipped while that element has the caret). */
+  /** The bound page element for a key, if any. */
+  element(key: string): HTMLElement | undefined {
+    return this.els.get(key);
+  }
+
+  /** Keys bound on the page — the sidebar leaves these out. */
+  keys(): string[] {
+    return Array.from(this.els.keys());
+  }
+
+  /** Push a value from the sidebar into the page (skipped while that element has the caret). */
   setValue(key: string, value: unknown) {
     const el = this.els.get(key);
     if (!el || document.activeElement === el) return;
