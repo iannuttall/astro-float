@@ -194,6 +194,19 @@ const ICON = {
   trash: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>`,
 };
 
+/** Page-side styles (wash, islands, overlays) live for the whole edit session, not just while the body is attached. */
+export function ensurePageStyle() {
+  if (document.getElementById(PAGE_STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = PAGE_STYLE_ID;
+  style.textContent = PAGE_STYLE;
+  document.head.appendChild(style);
+}
+
+export function removePageStyle() {
+  document.getElementById(PAGE_STYLE_ID)?.remove();
+}
+
 /**
  * Makes the rendered Markdown body editable in place and turns it back into
  * Markdown on demand.
@@ -292,13 +305,7 @@ export class PageEditor {
     if (!el || this.attached) return;
     this.attached = true;
 
-    if (!document.getElementById(PAGE_STYLE_ID)) {
-      const style = document.createElement("style");
-      style.id = PAGE_STYLE_ID;
-      style.textContent = PAGE_STYLE;
-      document.head.appendChild(style);
-    }
-
+    ensurePageStyle();
     if (!el.children.length) el.appendChild(emptyParagraph());
     el.contentEditable = "true";
     el.setAttribute("data-float-editing", "");
@@ -365,7 +372,6 @@ export class PageEditor {
     this.select(null);
     this.hovered = null;
     this.hideOverlays();
-    document.getElementById(PAGE_STYLE_ID)?.remove();
   }
 
   unbind() {

@@ -9,7 +9,7 @@ draft: false
 
 Every post in this demo is a folder with an `index.md` inside. That makes the folder a natural home for the post's images.
 
-When you drop an image onto this article (or onto the **Images** panel in the rail), Float copies the file into this folder, shows it right here in the prose, and writes a plain relative Markdown link when you save:
+When you drop an image onto this article, Float copies the file into this folder, shows it right here in the prose, and writes a plain relative Markdown link when you save:
 
 ```md
 ![diagram](./diagram.png)

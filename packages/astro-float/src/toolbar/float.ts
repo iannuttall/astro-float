@@ -1,6 +1,6 @@
 import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
 import { h, replaceChildren } from "./dom";
-import { PageEditor } from "./editor";
+import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
 import { FieldBindings } from "./fields";
 import { icon } from "./icons";
 import { RegionControl } from "./overlays";
@@ -176,6 +176,7 @@ class Float {
     if (on === this.editing) return;
     this.editing = on;
     if (on) {
+      ensurePageStyle();
       if (this.loadedFor !== location.href) {
         await this.loadPage(); // renders the sidebar once it knows the entry
       } else {
@@ -189,6 +190,7 @@ class Float {
       this.fields.detach();
       this.region.hide();
       this.releaseFocus();
+      removePageStyle();
       this.root.textContent = "";
       this.sidebar = null;
       this.fieldsSection = null;
