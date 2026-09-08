@@ -56,7 +56,7 @@ export const STYLES = /* css */ `
   top: 0;
   right: 0;
   bottom: 0;
-  width: 300px;
+  width: var(--sb-width, 300px);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -74,6 +74,23 @@ export const STYLES = /* css */ `
 .sidebar::-webkit-scrollbar { display: none; }
 @keyframes sidebar-in { from { opacity: 0; transform: translateX(8px); } }
 .float[data-panel-hidden] .sidebar { transform: translateX(100%); opacity: 0; pointer-events: none; }
+.float[data-resizing] .sidebar { transition: none; }
+
+/* Only the left edge drags. Invisible until hovered; a hairline while you hold it. */
+.sb-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: calc(var(--sb-width, 300px) - 4px);
+  width: 9px;
+  cursor: col-resize;
+  pointer-events: auto;
+  z-index: 3;
+  touch-action: none;
+}
+.sb-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px; background: transparent; transition: background 120ms ease; }
+.sb-resize:hover::after, .float[data-resizing] .sb-resize::after { background: var(--line-focus); }
+.float[data-panel-hidden] .sb-resize { display: none; }
 
 /* Hidden sidebar: a small tab flush to the edge brings it back and keeps status / Save in view. */
 .sb-tab {
@@ -318,6 +335,7 @@ export const STYLES = /* css */ `
   .float[data-panel-hidden] .sidebar { transform: translateY(100%); }
   .sb-tab { top: auto; bottom: 64px; transform: translate(100%, 0); }
   .float[data-panel-hidden] .sb-tab { transform: translate(0, 0); }
+  .sb-resize { display: none; }
   .input, .textarea, .select { font-size: 16px; }
   .input, .select { min-height: 40px; }
   .select-inline { min-height: 32px; height: 32px; font-size: 13px; }

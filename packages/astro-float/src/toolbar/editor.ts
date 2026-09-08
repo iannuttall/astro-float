@@ -144,15 +144,18 @@ const PAGE_STYLE = /* css */ `
 .astro-float-dp-foot button { height: 24px; padding: 0 8px; font-size: 11.5px; color: #8b93a1; }
 
 /* Overlays live in the page, never inside the editable body. */
-.astro-float-frame, .astro-float-dropline { position: fixed; z-index: 2000000001; pointer-events: none; box-sizing: border-box; }
+.astro-float-frame, .astro-float-dropline { position: fixed; z-index: 1999999999; pointer-events: none; box-sizing: border-box; }
 .astro-float-frame { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 6px; }
 .astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); }
 .astro-float-dropline { height: 2px; background: #8b93a1; border-radius: 1px; }
 
-/* Region control (copy / source), selection bubble and island bar: one quiet dark pill, one icon set. */
+/* Region control (copy / source), selection bubble and island bar: one quiet dark pill, one icon set.
+ * They stack *below* the sidebar (2000000000): when a narrow window puts the prose's edge under the
+ * sidebar, the pill is covered by it, never painted over it. The date picker is the one exception —
+ * it's a dialog opened from either side, so it stays on top. */
 .astro-float-region, .astro-float-bubble, .astro-float-bar {
   position: fixed;
-  z-index: 2000000001;
+  z-index: 1999999999;
   display: flex;
   align-items: center;
   gap: 1px;

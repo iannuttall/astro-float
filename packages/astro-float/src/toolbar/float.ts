@@ -12,6 +12,14 @@ type Status = "idle" | "saving" | "refreshing" | "saved" | "error" | "conflict";
 
 interface Prefs {
   autosave: boolean;
+  /** Sidebar width in px, dragged from its left edge; clamped to the viewport on use. */
+  sidebarWidth?: number;
+}
+
+const SIDEBAR_MIN = 240;
+const SIDEBAR_DEFAULT = 300;
+function sidebarMax() {
+  return Math.max(SIDEBAR_MIN, Math.min(520, Math.floor(window.innerWidth / 2)));
 }
 
 export interface FloatHandle {
@@ -229,6 +237,9 @@ class Float {
   private bindViewport() {
     const vv = window.visualViewport;
     if (!vv) return;
+    window.addEventListener("resize", () => {
+      if (this.sidebar) this.applySidebarWidth();
+    });
     const apply = () => {
       this.root.style.setProperty("--vv-top", `${Math.max(0, vv.offsetTop)}px`);
       this.root.style.setProperty("--vv-left", `${Math.max(0, vv.offsetLeft)}px`);
@@ -717,9 +728,52 @@ class Float {
       h("button", { class: "sb-tab-open", type: "button", "aria-label": "Show the sidebar", title: "Show the sidebar", onClick: () => this.setPanelHidden(false) }, icon("panelOpen", 15)),
       h("div", { class: "sb-tab-status" }),
     );
-    replaceChildren(this.root, this.sidebar, tab);
+    replaceChildren(this.root, this.sidebar, this.renderResizeHandle(), tab);
+    this.applySidebarWidth();
     this.root.toggleAttribute("data-panel-hidden", this.panelHidden);
     this.renderStatus();
+  }
+
+  private applySidebarWidth() {
+    const width = Math.max(SIDEBAR_MIN, Math.min(this.prefs.sidebarWidth ?? SIDEBAR_DEFAULT, sidebarMax()));
+    this.root.style.setProperty("--sb-width", `${width}px`);
+  }
+
+  /** The sidebar's left edge is the only drag target: left widens, right narrows; the width sticks for next time. */
+  private renderResizeHandle(): HTMLElement {
+    const handle = h("div", { class: "sb-resize", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize sidebar", title: "Drag to resize" });
+    let startX = 0;
+    let startWidth = 0;
+    const onMove = (e: PointerEvent) => {
+      const width = Math.max(SIDEBAR_MIN, Math.min(startWidth + (startX - e.clientX), sidebarMax()));
+      this.root.style.setProperty("--sb-width", `${width}px`);
+      this.prefs.sidebarWidth = width;
+    };
+    const onUp = (e: PointerEvent) => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+      this.root.removeAttribute("data-resizing");
+      document.documentElement.style.cursor = "";
+      document.documentElement.style.userSelect = "";
+      this.savePrefs();
+    };
+    handle.addEventListener("pointerdown", (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      startX = e.clientX;
+      startWidth = parseFloat(this.root.style.getPropertyValue("--sb-width")) || SIDEBAR_DEFAULT;
+      handle.setPointerCapture(e.pointerId);
+      this.root.setAttribute("data-resizing", "");
+      // The page under the pointer shouldn't select text or flicker its cursor while dragging.
+      document.documentElement.style.cursor = "col-resize";
+      document.documentElement.style.userSelect = "none";
+      handle.addEventListener("pointermove", onMove);
+      handle.addEventListener("pointerup", onUp);
+      handle.addEventListener("pointercancel", onUp);
+    });
+    return handle;
   }
 
   private setPanelHidden(hidden: boolean) {
@@ -1390,7 +1444,8 @@ function formatDateLabel(iso: string) {
 function loadPrefs(): Prefs {
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    return { autosave: Boolean(stored.autosave) };
+    const width = Number(stored.sidebarWidth);
+    return { autosave: Boolean(stored.autosave), sidebarWidth: Number.isFinite(width) && width > 0 ? width : undefined };
   } catch {
     return { autosave: false };
   }
