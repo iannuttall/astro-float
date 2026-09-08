@@ -28,8 +28,8 @@ Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal 
 | **Grey = editable** | With Edit on, hovering the title, the description, the body or any other bound field paints a soft grey wash behind it (lighter while your caret is inside). The wash is a pseudo-element painted behind the text and takes part in no layout — nothing moves when it appears. |
 | **Type** | The body under `[data-float-body]` is `contenteditable`. Native caret, native undo, native spellcheck. Links don't navigate while editing (⌘-click does). |
 | **Title & co.** | Elements marked `data-float-field="title"` (any string frontmatter key printed verbatim) are plain-text editable — Enter finishes. They save through the same path and are left **out of the sidebar**, since they're already on the page. |
-| **Selection bubble** | Double-click or select text and a tiny bubble appears above it: **B**, *I*, link (inline URL field, Enter applies, Esc cancels). Gone on click-away. ⌘B / ⌘I / ⌘K still work. |
-| **Region control** | While a region has your caret, a small control sits just above its top-right corner: **copy** its Markdown, or — for the body — switch to **Source**: the prose is replaced in place by a Markdown textarea. Type there, click **Rendered** and it saves and re-renders. Never on the words. |
+| **Selection bubble** | Double-click or select text and a tiny bubble appears above it: bold, italic, link (inline URL field, Enter applies, Esc cancels). Gone on click-away. ⌘B / ⌘I / ⌘K still work. |
+| **Region control** | While a region has your caret, a small control sits just above its top-right corner: **copy** its Markdown, or — for the body — switch to **Source**: the prose is replaced in place by a Markdown textarea. Type there, click **Rendered**: it shows *Saving…*, writes the file and swaps in the fresh render. If the save fails it says why right there, stays in source, and offers **Discard** to get back to the page as it was. Never on the words. |
 | **Components** | MDX components and raw-HTML blocks are **islands**: no caret goes in, and clicking one shows a small bar — move up / down, drag grip, remove (inline confirm). Their source is written back verbatim wherever they end up. |
 | **Shortcuts** | At the start of an empty line: `# `…`###### `, `- ` / `* `, `1. `, `> `, ``` ``` ```. **Tab / ⇧Tab** nest lists. In a code block Enter is a newline, ⇧Enter leaves it. **Esc** leaves the field (it never turns Edit off — the pencil does). |
 | **Images** | Drop or paste onto the prose. The file is copied **next to the entry**, appears where you dropped it, and is written as `![alt](./photo.png)`. |
@@ -43,22 +43,31 @@ Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal 
 </p>
 <p>
   <img src="docs/source-view.png" width="480" alt="The body switched to its in-page Markdown source">
+  <img src="docs/source-save-failed.png" width="480" alt="Rendered failed to save: the error and a Discard sit in the region control, the source view stays">
+</p>
+<p>
   <img src="docs/float-island.png" width="480" alt="A selected MDX component block with its move / drag / remove bar">
 </p>
 
 ## The sidebar
 
-Only what isn't already on the page.
+A flush column on the right edge — full height, no card, no gap — holding only what isn't already on the page. It scrolls without ever showing a scrollbar, so opening Settings doesn't change the width of anything.
 
-- **Editing** — the entry, status, **Save**.
-- **Fields** — frontmatter minus anything bound on the page (title, description in the demo). Controls inferred from values: text, long text, number, date, tags, boolean, JSON. `slug` is shown read-only, never edited. Add / remove fields.
+- **Header** — the entry, status, **Save**, and a **hide** button. Hiding tucks the sidebar away while editing carries on; a small tab at the edge brings it back and carries the status dot / Save in the meantime. Only the pencil turns Edit off.
+- **Fields** — frontmatter minus anything bound on the page (title, description in the demo). Controls inferred from values: text, long text, number, date, tags, boolean, JSON. `slug` is shown read-only, never edited. Add / remove fields. Nothing here is a trap: any field that differs from disk gets a **↺** to put it back; a removed field stays listed with **Restore** until you save; an emptied date or number is never written — the last real value is kept (with a note) until you enter a valid one.
 - **Collection** — entries in the selected collection (dropdown if several), current one marked; **+ New entry** asks for a title only and shows the derived path; **New collection** creates `src/content/<name>/`, registers it in `content.config.ts`, seeds a first entry and opens it.
 - **Settings** — autosave, a cheat-sheet, the file path.
 
-On phones (<640px) the sidebar is a bottom sheet above the Astro bar, sized to the visual viewport so the keyboard shrinks it instead of hiding its buttons; inputs are 16px (no iOS focus-zoom); Cancel on a form keeps the list where it was and snaps back a lingering zoom.
+<p>
+  <img src="docs/sidebar-hidden.png" width="480" alt="Sidebar hidden: a clean page with a small tab at the right edge, editing still on">
+  <img src="docs/field-revert.png" width="320" alt="Fields: a changed date with its revert arrow, a removed field with Restore">
+</p>
+
+On phones (<640px) the sidebar is a bottom sheet flush with the bottom edge, sized to the visual viewport so the keyboard shrinks it instead of hiding its buttons; inputs are 16px (no iOS focus-zoom); Cancel on a form keeps the list where it was and snaps back a lingering zoom.
 
 <p>
   <img src="docs/mobile/sidebar.webp" width="200" alt="Sidebar as a bottom sheet on a phone">
+  <img src="docs/mobile/hidden.webp" width="200" alt="Sheet hidden on a phone, tab above the Astro bar">
   <img src="docs/mobile/editing.webp" width="200" alt="Typing into the body on a phone">
 </p>
 
@@ -117,7 +126,8 @@ A collection also needs pages. The demo ships generic `src/pages/[collection]/in
 - **Dev toolbar app.** `addDevToolbarApp()` registers "Edit" (only when `command === "dev"`). The sidebar renders into the app's canvas, so Astro hides it when the app is off; page-side styles (wash, bubble, region control, island bar) are injected for the edit session and removed after. Edit state persists across reloads in `sessionStorage`; `beforeTogglingOff` saves pending work first. Escape keyups are stopped at the document while editing so Astro's "Escape closes the app" never fires mid-edit.
 - **Block-level round trip.** The server parses the body with `mdast-util-from-markdown` (+ GFM, + MDX for `.mdx`) and returns each top-level block's exact source slice. The client lines those up with the body's top-level DOM children. On save it aligns the current DOM against that snapshot (LCS on outerHTML): unchanged blocks emit their **original Markdown byte-for-byte**; only edited or new blocks go through the HTML→Markdown serializer.
 - **Islands.** `mdxJsxFlowElement`, raw `html` blocks and inline-JSX-only paragraphs are flagged by the server. On the client they get `contenteditable="false"`, a stable key, and are matched by that key (not by HTML) when serializing, so moving one just moves its source slice. An `.mdx` whose blocks don't line up is body-read-only (frontmatter still saves).
-- **Source view.** The body's rendered container is hidden and a textarea with the current Markdown takes its place. Leaving it (or saving) writes that text and swaps in Astro's fresh render.
+- **Source view.** The body's rendered container is hidden and a textarea with the current Markdown takes its place. Leaving it (or saving) writes that text and swaps in Astro's fresh render. Saves are serialized, so *Rendered* during an in-flight autosave waits for it rather than dead-clicking; a failed save keeps the source view with the error and a Discard; a saved-but-not-refreshed page falls back to the DOM it had, with a message. The page-side overlays (region control, bubble, island bar) survive the swap — they're dev chrome, not page content.
+- **Icons.** One set: Lucide paths at 1.75 stroke, round caps, 14–15px, in `toolbar/icons.ts`. Sidebar, bubble, region control and island bar all draw from it.
 - **HTML→Markdown** (`src/toolbar/html-to-md.ts`) covers what remark-rehype + Shiki emit: ATX headings, paragraphs, tight/loose/nested lists, task lists, links + titles, images (Vite `/@fs/…` and Astro `/_image?href=…` URLs mapped back to `./relative`), inline code, fenced code with language, blockquotes, rules, GFM tables with alignment, strong / em / strike, hard breaks. Unknown elements pass through as raw HTML.
 - **API.** `astro:server:setup` mounts `/__float/api/*`: collections, read/write entry, create entry, create collection, upload media. Localhost-only (host + socket address), same-origin, custom header on mutations, paths confined to the collection dir, image extension allowlist. Saves carry the file hash as loaded; a 409 gives you Reload / Overwrite.
 - **No reload on save.** Astro's content layer full-reloads after a content change. `sync-gate.js` swallows that reload for a few seconds after a Float write and uses it as the "synced" signal, so save/create responses return once the store has the new content. IDE edits still reload as normal.

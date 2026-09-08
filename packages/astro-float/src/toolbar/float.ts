@@ -98,7 +98,7 @@ class Float {
       "button",
       { class: "btn btn-sm btn-primary", type: "button", hidden: true, title: "Save (⌘S)", onClick: () => void this.save() },
       icon("check", 13),
-      "Save",
+      h("span", {}, "Save"),
     ) as HTMLButtonElement;
     this.statusSlot = h("div", { class: "status-slot" }, this.statusDot, this.saveButton);
 
