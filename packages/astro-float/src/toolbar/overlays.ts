@@ -94,18 +94,10 @@ export class RegionControl {
     }
     this.el.style.opacity = "";
     const above = r.top - hgt - 6;
-    let left: number;
-    let top: number;
-    if (above >= 4) {
-      // Normal case: in the margin above the region's top-right corner, never on the words.
-      left = r.right - w;
-      top = above;
-    } else {
-      // The corner is scrolled off; hold at the viewport top, beside the text column when there's room.
-      top = 8;
-      left = window.innerWidth - r.right >= w + 16 ? r.right + 8 : r.right - w;
-    }
-    left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+    // Always flush with the region's right edge — it never slides sideways. Above the
+    // region while its top is in view; held at the top of the viewport once it scrolls off.
+    const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
+    const top = above >= 4 ? above : 8;
     Object.assign(this.el.style, { left: `${left}px`, top: `${top}px` });
   };
 
@@ -161,8 +153,9 @@ export class RegionControl {
 // ---- selection bubble ----------------------------------------------------------------
 
 /**
- * Bold / italic / link for the current text selection inside a container.
- * Appears above the selection while it's non-collapsed, goes away on click-away.
+ * H1 / H2 / H3 · bold / italic / link for the current text selection inside a
+ * container. Appears above the selection while it's non-collapsed, goes away
+ * on click-away.
  */
 export class SelectionBubble {
   private el: HTMLElement | null = null;
@@ -172,6 +165,7 @@ export class SelectionBubble {
   constructor(
     private container: () => HTMLElement | null,
     private allowed: () => boolean,
+    private onHeading: (level: 1 | 2 | 3) => void,
   ) {
     document.addEventListener("selectionchange", this.onSelectionChange);
     document.addEventListener("mousedown", this.onMouseDown, true);
@@ -232,6 +226,19 @@ export class SelectionBubble {
     const inLink = anchorEl?.closest("a") ?? null;
     const inBold = !!anchorEl?.closest("b, strong");
     const inItalic = !!anchorEl?.closest("i, em");
+    const heading = anchorEl?.closest("h1, h2, h3")?.tagName ?? "";
+    // Headings only make sense on a plain block; inside a list, quote or code the buttons stay out of the way.
+    const plainBlock = !anchorEl?.closest("li, blockquote, pre, td, th");
+    if (plainBlock) {
+      for (const level of [1, 2, 3] as const) {
+        const hb = makeButton(`heading${level}`, heading === `H${level}` ? `Back to paragraph` : `Heading ${level}`, () => this.onHeading(level));
+        if (heading === `H${level}`) hb.setAttribute("data-on", "");
+        el.appendChild(hb);
+      }
+      const sep = document.createElement("span");
+      sep.className = "astro-float-sep";
+      el.appendChild(sep);
+    }
     const b = makeButton("bold", "Bold (⌘B)", () => document.execCommand("bold"));
     const i = makeButton("italic", "Italic (⌘I)", () => document.execCommand("italic"));
     const link = makeButton("link", inLink ? "Edit link (⌘K)" : "Link (⌘K)", () => this.enterLinkMode(range, inLink?.getAttribute("href") ?? ""));

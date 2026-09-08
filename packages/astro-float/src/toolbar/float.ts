@@ -298,6 +298,8 @@ class Float {
     if (this.sourceBusy) return;
     if (this.sourceArea) {
       // Leaving source view: a save re-renders the page from what was typed.
+      // Remember where he is in the text so the rendered page opens on the same block, at the same height.
+      const place = this.sourcePlace(this.sourceArea);
       this.sourceBusy = true;
       this.sourceError = null;
       this.region.refresh();
@@ -312,6 +314,9 @@ class Float {
           }
         }
         if (this.sourceArea) this.exitSourceMode(true); // nothing changed, or the save didn't re-render
+        if (place && this.doc && this.page.bound && !this.bodyReadOnly) {
+          this.page.focusBlock(blockIndexAt(place.offset, this.doc.lead, this.doc.blocks), place.viewportY);
+        }
       } finally {
         this.sourceBusy = false;
         this.region.refresh();
@@ -320,13 +325,25 @@ class Float {
     }
     const container = this.page.container;
     if (!container || this.bodyReadOnly) return;
+
+    // Where he is: the caret's block, else the first block visible in the viewport.
+    const sel = document.getSelection();
+    const caretNode = sel && sel.rangeCount > 0 && sel.anchorNode && container.contains(sel.anchorNode) ? sel.anchorNode : null;
+    const anchorNode = caretNode ?? firstVisibleBlock(container);
+    const where = this.page.markdownOffsetOf(anchorNode);
+    const anchorBlock = anchorNode ? (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement) : null;
+    const anchorTop = anchorBlock ? closestTopLevel(anchorBlock, container)?.getBoundingClientRect().top ?? null : null;
+    const scrollY = window.scrollY;
+    const rect = container.getBoundingClientRect();
+
     this.sourceDraft = this.currentBody();
     const area = document.createElement("textarea");
     area.className = "astro-float-source";
     area.value = this.sourceDraft;
     area.spellcheck = false;
     area.setAttribute("aria-label", "Markdown source");
-    area.style.minHeight = `${Math.max(240, container.getBoundingClientRect().height)}px`;
+    // Same height as the prose it replaces, so nothing below moves and the page keeps its scroll position.
+    area.style.height = `${Math.max(240, rect.height)}px`;
     area.addEventListener("input", () => {
       this.sourceDraft = area.value;
       this.touched();
@@ -351,8 +368,37 @@ class Float {
     container.style.display = "none";
     container.after(area);
     this.sourceArea = area;
-    area.focus();
+    window.scrollTo(0, scrollY);
+    area.focus({ preventScroll: true });
+    // Open on the block he was looking at, at the height it had on the page.
+    if (where) {
+      area.setSelectionRange(where.offset, where.offset);
+      const cs = getComputedStyle(area);
+      const lineHeight = parseFloat(cs.lineHeight) || 21.6;
+      const padTop = parseFloat(cs.paddingTop) || 0;
+      const line = area.value.slice(0, where.offset).split("\n").length - 1;
+      const areaTop = area.getBoundingClientRect().top;
+      const wantedY = anchorTop ?? areaTop + padTop;
+      area.scrollTop = Math.max(0, padTop + line * lineHeight - (wantedY - areaTop));
+      // The textarea couldn't scroll far enough to line up? Only then nudge the page, and only enough to keep the line in view.
+      const lineY = areaTop + padTop + line * lineHeight - area.scrollTop;
+      if (lineY < 72 || lineY > window.innerHeight - 72) window.scrollBy(0, lineY - Math.min(wantedY, window.innerHeight - 120));
+    } else {
+      window.scrollTo(0, scrollY);
+    }
     this.region.show(area, this.bodyRegionActions());
+  }
+
+  /** Caret offset in the source textarea plus the viewport height of its line. */
+  private sourcePlace(area: HTMLTextAreaElement): { offset: number; viewportY: number } | null {
+    if (!area.isConnected) return null;
+    const offset = area.selectionStart;
+    const cs = getComputedStyle(area);
+    const lineHeight = parseFloat(cs.lineHeight) || 21.6;
+    const padTop = parseFloat(cs.paddingTop) || 0;
+    const line = area.value.slice(0, offset).split("\n").length - 1;
+    const y = area.getBoundingClientRect().top + padTop + line * lineHeight - area.scrollTop;
+    return { offset, viewportY: Math.max(72, Math.min(y, window.innerHeight - 72)) };
   }
 
   private exitSourceMode(restoreView: boolean) {
@@ -587,8 +633,10 @@ class Float {
       if (result.changed && refresh) {
         this.setStatus("refreshing");
         try {
+          const scrollY = window.scrollY;
           await swapPage();
           this.exitSourceMode(false);
+          window.scrollTo(0, scrollY);
           this.bindBody();
         } catch (err) {
           // Saved fine, page didn't re-render: fall back to the DOM we have and say so.
@@ -1308,6 +1356,30 @@ function fieldKind(value: unknown): FieldKind {
   if (Array.isArray(value) && value.every((v) => typeof v === "string" || typeof v === "number")) return "tags";
   if (value == null) return "string";
   return "json";
+}
+
+/** The block a Markdown offset falls in, from the server's block list (lead + blocks joined by blank lines). */
+function blockIndexAt(offset: number, lead: string, blocks: Array<{ src: string; trailer: string }>): number {
+  let pos = lead ? lead.length + 2 : 0;
+  for (let i = 0; i < blocks.length; i++) {
+    pos += blocks[i].src.length + 2 + (blocks[i].trailer ? blocks[i].trailer.length + 2 : 0);
+    if (offset < pos) return i;
+  }
+  return Math.max(0, blocks.length - 1);
+}
+
+/** First top-level block of the body whose box reaches into the viewport. */
+function firstVisibleBlock(container: HTMLElement): Element | null {
+  for (const child of Array.from(container.children)) {
+    if (child.getBoundingClientRect().bottom > 0) return child;
+  }
+  return container.firstElementChild;
+}
+
+function closestTopLevel(el: Element, container: HTMLElement): Element | null {
+  let node: Element | null = el;
+  while (node && node.parentElement !== container) node = node.parentElement;
+  return node;
 }
 
 /** "Oct 3, 2026" — the sidebar's compact date label. */

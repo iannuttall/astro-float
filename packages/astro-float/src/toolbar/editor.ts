@@ -218,7 +218,7 @@ const PAGE_STYLE = /* css */ `
 }
 .astro-float-bubble[data-below]::after { top: -5px; bottom: auto; border-top: 0; border-bottom: 4px solid #2a3038; }
 .astro-float-bar button[data-grip] { cursor: grab; }
-.astro-float-bar .astro-float-sep { width: 1px; height: 16px; background: #2a3038; margin: 0 2px; }
+.astro-float-bar .astro-float-sep, .astro-float-bubble .astro-float-sep { width: 1px; height: 16px; background: #2a3038; margin: 0 2px; flex: none; }
 .astro-float-bar .astro-float-confirm { display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; white-space: nowrap; }
 .astro-float-bar .astro-float-confirm button { width: auto; height: 24px; padding: 0 9px; }
 .astro-float-bar .astro-float-confirm button[data-danger] { background: #ef6f6c; color: #0f1114; }
@@ -358,6 +358,7 @@ export class PageEditor {
     this.bubble = new SelectionBubble(
       () => this.container,
       () => this.attached && !this.selected,
+      (level) => this.setHeading(level),
     );
 
     el.addEventListener("keydown", this.onKeydown);
@@ -466,50 +467,139 @@ export class PageEditor {
     return document.activeElement === el || el.contains(document.activeElement);
   }
 
-  /** Current body as Markdown. Unchanged blocks reuse their original source; islands always do. */
-  toMarkdown(): string {
-    if (!this.container) return "";
+  /**
+   * Turn the block under the selection into an h1–h3, or back into a paragraph
+   * when it already is that heading. Only plain blocks convert (paragraphs and
+   * headings) — list items, quotes, code and islands are left alone.
+   */
+  setHeading(level: 1 | 2 | 3) {
+    const range = this.selectionRange();
+    if (!range || !this.container) return;
+    const block = this.topLevelBlock(range.startContainer);
+    if (!block || block.hasAttribute("data-float-island") || !/^(P|DIV|H[1-6])$/.test(block.tagName)) return;
+    const tag = block.tagName === `H${level}` ? "p" : `h${level}`;
+    const replacement = document.createElement(tag);
+    const start: [Node, number] = [range.startContainer, range.startOffset];
+    const end: [Node, number] = [range.endContainer, range.endOffset];
+    while (block.firstChild) replacement.appendChild(block.firstChild);
+    block.replaceWith(replacement);
+    // Text nodes travelled with the children; only endpoints on the block itself need re-homing.
+    const next = document.createRange();
+    next.setStart(start[0] === block ? replacement : start[0], start[1]);
+    next.setEnd(end[0] === block ? replacement : end[0], end[1]);
+    const sel = document.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(next);
+    this.container.focus({ preventScroll: true });
+  }
+
+  /**
+   * Where a DOM block starts in the Markdown `toMarkdown()` produces, so a
+   * source view can open at the block you were looking at. Returns the block
+   * index and its character offset, or null when the body is empty.
+   */
+  markdownOffsetOf(target: Node | null): { index: number; offset: number } | null {
+    if (!this.container) return null;
+    const nodes = this.domBlocks();
+    if (!nodes.length) return null;
+    let index = 0;
+    if (target) {
+      const block = this.topLevelBlock(target);
+      const i = block ? nodes.indexOf(block) : -1;
+      if (i >= 0) index = i;
+    }
+    const md = this.toMarkdown();
+    const parts = this.markdownParts();
+    let offset = 0;
+    if (this.source.lead) offset += this.source.lead.length + 2;
+    for (let i = 0; i < index && i < parts.length; i++) if (parts[i]) offset += parts[i].length + 2;
+    return { index, offset: Math.min(offset, md.length) };
+  }
+
+  /** The block that contains a Markdown character offset (inverse of markdownOffsetOf). */
+  blockAtMarkdownOffset(offset: number): number {
+    const parts = this.markdownParts();
+    let pos = this.source.lead ? this.source.lead.length + 2 : 0;
+    for (let i = 0; i < parts.length; i++) {
+      if (!parts[i]) continue;
+      pos += parts[i].length + 2;
+      if (offset < pos) return i;
+    }
+    return Math.max(0, parts.length - 1);
+  }
+
+  /** Put the caret at the start of the n-th block and scroll so it sits at `viewportY` (or just into view). */
+  focusBlock(index: number, viewportY?: number) {
+    const el = this.container;
+    if (!el) return;
+    const nodes = this.domBlocks();
+    const block = nodes[Math.max(0, Math.min(index, nodes.length - 1))];
+    if (!(block instanceof HTMLElement)) return;
+    if (viewportY !== undefined) {
+      const r = block.getBoundingClientRect();
+      window.scrollBy(0, r.top - viewportY);
+    }
+    el.focus({ preventScroll: true });
+    if (block.hasAttribute("data-float-island")) {
+      this.select(block);
+      return;
+    }
+    const range = document.createRange();
+    range.setStart(block, 0);
+    range.collapse(true);
+    const sel = document.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
+
+  /** Per-block Markdown in DOM order — the pieces `toMarkdown()` joins with blank lines. */
+  private markdownParts(): string[] {
+    if (!this.container) return [];
     const ctx: SerializeContext = { imageSrc: (src) => this.relativeImageSrc(src) };
     const nodes = this.domBlocks();
-    const parts: string[] = [];
-    if (this.source.lead) parts.push(this.source.lead);
-
-    const matches = new Array<number>(nodes.length).fill(-1);
-    if (this.mapped) {
-      // Islands match by identity (their key travels with the element when moved) …
-      const byKey = new Map<string, number>();
-      this.snapshot.forEach((s, j) => {
-        if (s.key.startsWith("key:")) byKey.set(s.key, j);
-      });
-      const restDom: number[] = [];
-      nodes.forEach((node, i) => {
-        const key = keyOf(node);
-        const j = byKey.get(key);
-        if (j !== undefined) matches[i] = j;
-        else restDom.push(i);
-      });
-      // … and everything else lines up by content.
-      const restSnap = this.snapshot.map((s, j) => j).filter((j) => !this.snapshot[j].key.startsWith("key:"));
-      const lcs = alignByLcs(
-        restSnap.map((j) => this.snapshot[j].key),
-        restDom.map((i) => keyOf(nodes[i])),
-      );
-      restDom.forEach((i, k) => {
-        if (lcs[k] >= 0) matches[i] = restSnap[lcs[k]];
-      });
-    }
-
-    nodes.forEach((node, i) => {
+    const matches = this.matchBlocks(nodes);
+    return nodes.map((node, i) => {
       const j = matches[i];
       if (j >= 0) {
         const { block } = this.snapshot[j];
-        parts.push(block.src);
-        if (block.trailer) parts.push(block.trailer);
-      } else {
-        const md = blockToMarkdown(node, ctx);
-        if (md) parts.push(md);
+        return block.trailer ? `${block.src}\n\n${block.trailer}` : block.src;
       }
+      return blockToMarkdown(node, ctx);
     });
+  }
+
+  /** Line up DOM blocks with the source snapshot: islands by key, the rest by content (LCS). -1 = new/changed. */
+  private matchBlocks(nodes: Node[]): number[] {
+    const matches = new Array<number>(nodes.length).fill(-1);
+    if (!this.mapped) return matches;
+    const byKey = new Map<string, number>();
+    this.snapshot.forEach((s, j) => {
+      if (s.key.startsWith("key:")) byKey.set(s.key, j);
+    });
+    const restDom: number[] = [];
+    nodes.forEach((node, i) => {
+      const key = keyOf(node);
+      const j = byKey.get(key);
+      if (j !== undefined) matches[i] = j;
+      else restDom.push(i);
+    });
+    const restSnap = this.snapshot.map((s, j) => j).filter((j) => !this.snapshot[j].key.startsWith("key:"));
+    const lcs = alignByLcs(
+      restSnap.map((j) => this.snapshot[j].key),
+      restDom.map((i) => keyOf(nodes[i])),
+    );
+    restDom.forEach((i, k) => {
+      if (lcs[k] >= 0) matches[i] = restSnap[lcs[k]];
+    });
+    return matches;
+  }
+
+  /** Current body as Markdown. Unchanged blocks reuse their original source; islands always do. */
+  toMarkdown(): string {
+    if (!this.container) return "";
+    const parts: string[] = [];
+    if (this.source.lead) parts.push(this.source.lead);
+    for (const part of this.markdownParts()) if (part) parts.push(part);
     return parts.join("\n\n").replace(/\n{3,}/g, "\n\n") + "\n";
   }
 
