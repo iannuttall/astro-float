@@ -15,7 +15,7 @@ pnpm install
 pnpm dev            # or: pnpm --filter demo exec astro dev
 ```
 
-Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal the Astro toolbar, and click the pencil (**Edit**). Hover the title or the article — grey means editable — and type. Click the pencil again to leave (unsaved work is saved first).
+Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal the Astro toolbar, and click the pencil (**Edit**). Hover the date, the title or the article — grey means editable — and type. Click the pencil again to leave (unsaved work is saved first).
 
 > Local `astro dev` is the only real preview path — the editor writes to your filesystem. A Vercel/Netlify preview would only show the plain blog, since the integration is stripped from builds. Set `allowRemote: true` to preview through a tunnel.
 
@@ -27,13 +27,13 @@ Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal 
 | --- | --- |
 | **Grey = editable** | With Edit on, hovering the title, the description, the body or any other bound field paints a soft grey wash behind it (lighter while your caret is inside). The wash is a pseudo-element painted behind the text and takes part in no layout — nothing moves when it appears. |
 | **Type** | The body under `[data-float-body]` is `contenteditable`. Native caret, native undo, native spellcheck. Links don't navigate while editing (⌘-click does). |
-| **Title & co.** | Elements marked `data-float-field="title"` (any string frontmatter key printed verbatim) are plain-text editable — Enter finishes. They save through the same path and are left **out of the sidebar**, since they're already on the page. |
+| **Title, description, date** | Elements marked `data-float-field="<key>"` are plain-text editable in place — Enter finishes. Strings bind when they're printed verbatim. A **date** (`YYYY-MM-DD` in frontmatter) binds when the element prints it formatted: Float finds the Intl format that reproduces the text (or trusts a matching `<time datetime>`), parses what you type back to `YYYY-MM-DD` ("October 3, 2026", "3 Oct 2026", "2026-10-03" all work), and re-formats on blur; an unparseable edit falls back to the last real date. The same fields also appear in the sidebar — **two-way**: type on the page and the sidebar input follows, edit the sidebar and the page follows. |
 | **Selection bubble** | Double-click or select text and a tiny bubble appears above it: bold, italic, link (inline URL field, Enter applies, Esc cancels). Gone on click-away. ⌘B / ⌘I / ⌘K still work. |
 | **Region control** | While a region has your caret, a small control sits just above its top-right corner: **copy** its Markdown, or — for the body — switch to **Source**: the prose is replaced in place by a Markdown textarea. Type there, click **Rendered**: it shows *Saving…*, writes the file and swaps in the fresh render. If the save fails it says why right there, stays in source, and offers **Discard** to get back to the page as it was. Never on the words. |
 | **Components** | MDX components and raw-HTML blocks are **islands**: no caret goes in, and clicking one shows a small bar — move up / down, drag grip, remove (inline confirm). Their source is written back verbatim wherever they end up. |
 | **Shortcuts** | At the start of an empty line: `# `…`###### `, `- ` / `* `, `1. `, `> `, ``` ``` ```. **Tab / ⇧Tab** nest lists. In a code block Enter is a newline, ⇧Enter leaves it. **Esc** leaves the field (it never turns Edit off — the pencil does). |
 | **Images** | Drop or paste onto the prose. The file is copied **next to the entry**, appears where you dropped it, and is written as `![alt](./photo.png)`. |
-| **Save** | Top of the sidebar: status text, and a **Save** button the moment the page differs from disk (it stays put while you type). **⌘S / Ctrl+S** anywhere. Optional autosave (800ms after you stop typing). Turning Edit off saves first. |
+| **Save / Discard** | Top of the sidebar: status text, and **Discard** + **Save** the moment the page differs from disk (they stay put while you type). Discard puts the body, the frontmatter, the on-page fields and the source view back to what's on disk without writing anything. **⌘S / Ctrl+S** anywhere. Optional autosave (800ms after you stop typing). Turning Edit off saves first. |
 | **Live preview** | While your caret is in the text, a save doesn't touch the DOM. Save from the sidebar (caret elsewhere) and Astro re-renders the page in place, no reload. |
 | **Moving around** | While Edit is on, same-origin links, back/forward and Float's own create flows are soft navigations — fetch + swap under the sidebar, pending edits saved first, no "Leave site?". Edit off: links behave exactly as normal. |
 
@@ -51,16 +51,19 @@ Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal 
 
 ## The sidebar
 
-A flush column on the right edge — full height, no card, no gap — holding only what isn't already on the page. It scrolls without ever showing a scrollbar, so opening Settings doesn't change the width of anything.
+A flush column on the right edge — full height, no card, no gap. Cool neutral grays, one hairline weight, one radius, 12–13px type; the only strong element is Save. It scrolls without ever showing a scrollbar, so opening Settings doesn't change the width of anything.
 
-- **Header** — the entry, status, **Save**, and a **hide** button. Hiding tucks the sidebar away while editing carries on; a small tab at the edge brings it back and carries the status dot / Save in the meantime. Only the pencil turns Edit off.
-- **Fields** — frontmatter minus anything bound on the page (title, description in the demo). Controls inferred from values: text, long text, number, date, tags, boolean, JSON. `slug` is shown read-only, never edited. Add / remove fields. Nothing here is a trap: any field that differs from disk gets a **↺** to put it back; a removed field stays listed with **Restore** until you save; an emptied date or number is never written — the last real value is kept (with a note) until you enter a valid one.
-- **Collection** — entries in the selected collection (dropdown if several), current one marked; **+ New entry** asks for a title only and shows the derived path; **New collection** creates `src/content/<name>/`, registers it in `content.config.ts`, seeds a first entry and opens it.
+- **Header** — the entry, status, **Discard** / **Save**, and a **hide** button. Hiding tucks the sidebar away while editing carries on; a small tab at the edge brings it back and carries the status dot / Save in the meantime. Only the pencil turns Edit off.
+- **Fields** — the whole frontmatter as a form, in file order. Fields that are also on the page (title, description, date in the demo) say so and stay in sync both ways. Controls inferred from values: text, long text, number, date, tags, boolean, JSON. `slug` is shown read-only, never edited. Add / remove fields. Nothing here is a trap: any field that differs from disk gets a **↺** to put it back; a removed field stays listed with **Restore** until you save; an emptied date or number is never written — the last real value is kept (with a note) until you enter a valid one.
+- **Collection** — entries in the selected collection (dropdown if several), current one marked; **New entry** asks for a title only and shows the derived path; **New collection** creates `src/content/<name>/`, registers it in `content.config.ts`, seeds a first entry and opens it.
 - **Settings** — autosave, a cheat-sheet, the file path.
 
 <p>
   <img src="docs/sidebar-hidden.png" width="480" alt="Sidebar hidden: a clean page with a small tab at the right edge, editing still on">
-  <img src="docs/field-revert.png" width="320" alt="Fields: a changed date with its revert arrow, a removed field with Restore">
+  <img src="docs/field-revert.png" width="300" alt="Fields: title, description and date mirrored from the page, a changed date with its revert arrow, a removed field with Restore, Discard and Save in the header">
+</p>
+<p>
+  <img src="docs/date-on-page.png" width="800" alt="Typing a new date straight into the article's date; the sidebar's date input follows">
 </p>
 
 On phones (<640px) the sidebar is a bottom sheet flush with the bottom edge, sized to the visual viewport so the keyboard shrinks it instead of hiding its buttons; inputs are 16px (no iOS focus-zoom); Cancel on a form keeps the list where it was and snaps back a lingering zoom.

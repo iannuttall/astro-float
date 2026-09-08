@@ -88,14 +88,15 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
 [data-float-editing] [data-float-island] * { cursor: default; }
 
-/* Frontmatter fields edited in place (title, description, …). */
+/* Frontmatter fields edited in place (title, description, date, …). */
 [data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
+[data-float-editing-field][data-float-invalid] { text-decoration: underline wavy #ef6f6c; text-decoration-skip-ink: none; text-underline-offset: 3px; }
 
 /* Overlays live in the page, never inside the editable body. */
 .astro-float-frame, .astro-float-dropline { position: fixed; z-index: 2000000001; pointer-events: none; box-sizing: border-box; }
 .astro-float-frame { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 6px; }
 .astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); }
-.astro-float-dropline { height: 2px; background: #6b7280; border-radius: 1px; }
+.astro-float-dropline { height: 2px; background: #8b93a1; border-radius: 1px; }
 
 /* Region control (copy / source), selection bubble and island bar: one quiet dark pill, one icon set. */
 .astro-float-region, .astro-float-bubble, .astro-float-bar {
@@ -103,15 +104,17 @@ const PAGE_STYLE = /* css */ `
   z-index: 2000000001;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 3px;
-  background: #16181d;
-  border: 1px solid #2c3037;
-  border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(19, 21, 26, 0.25), 0 6px 16px -6px rgba(19, 21, 26, 0.35);
-  color: #c7ccd4;
-  font: 12px/1 system-ui, -apple-system, sans-serif;
+  gap: 1px;
+  padding: 2px;
+  background: #15181c;
+  border: 1px solid #2a3038;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -12px rgba(0, 0, 0, 0.4);
+  color: #b4bac4;
+  font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.005em;
   box-sizing: border-box;
+  -webkit-font-smoothing: antialiased;
 }
 .astro-float-region[hidden], .astro-float-bubble[hidden], .astro-float-bar[hidden] { display: none; }
 .astro-float-region button, .astro-float-bubble button, .astro-float-bar button {
@@ -120,54 +123,58 @@ const PAGE_STYLE = /* css */ `
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 26px;
-  min-width: 26px;
-  padding: 0 6px;
-  border-radius: 5px;
-  color: #c7ccd4;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: #b4bac4;
   cursor: pointer;
   font: inherit;
   font-weight: 500;
   box-sizing: border-box;
+  transition: background 100ms ease, color 100ms ease;
 }
 .astro-float-region button svg, .astro-float-bubble button svg, .astro-float-bar button svg { width: 14px; height: 14px; display: block; }
 .astro-float-region button[data-wide] { padding: 0 8px 0 6px; }
-.astro-float-region button:hover, .astro-float-bubble button:hover, .astro-float-bar button:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
-.astro-float-region button:disabled, .astro-float-bar button:disabled { opacity: 0.45; cursor: default; background: none; }
-.astro-float-bubble button[data-on] { color: #fff; background: rgba(255, 255, 255, 0.12); }
-.astro-float-region button[data-danger], .astro-float-bar button[data-danger]:hover { color: #f8a5a5; }
-.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: #f8a5a5; white-space: nowrap; border-left: 1px solid #2c3037; margin-left: 2px; }
+.astro-float-region button:hover, .astro-float-bubble button:hover, .astro-float-bar button:hover { background: #22262c; color: #e6e8eb; }
+.astro-float-region button:disabled, .astro-float-bar button:disabled { opacity: 0.4; cursor: default; background: none; }
+.astro-float-bubble button[data-on] { color: #e6e8eb; background: #22262c; }
+.astro-float-region button[data-danger], .astro-float-bar button[data-danger]:hover { color: #ef6f6c; }
+.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: #ef6f6c; white-space: nowrap; border-left: 1px solid #2a3038; margin-left: 2px; }
 .astro-float-bubble input {
   all: unset;
   width: 220px;
-  height: 26px;
+  height: 24px;
   padding: 0 8px;
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
-  font: 12.5px/1 system-ui, -apple-system, sans-serif;
+  border-radius: 4px;
+  background: #0b0d10;
+  border: 1px solid #2a3038;
+  color: #e6e8eb;
+  font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   box-sizing: border-box;
 }
-.astro-float-bubble input::placeholder { color: #6b7280; }
+.astro-float-bubble input:focus { border-color: #4a5260; }
+.astro-float-bubble input::placeholder { color: #5c6470; }
 .astro-float-bubble::after {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: -6px;
+  bottom: -5px;
   transform: translateX(-50%);
-  border: 5px solid transparent;
+  border: 4px solid transparent;
   border-bottom: 0;
-  border-top-color: #2c3037;
+  border-top-color: #2a3038;
 }
-.astro-float-bubble[data-below]::after { top: -6px; bottom: auto; border-top: 0; border-bottom: 5px solid #2c3037; }
+.astro-float-bubble[data-below]::after { top: -5px; bottom: auto; border-top: 0; border-bottom: 4px solid #2a3038; }
 .astro-float-bar button[data-grip] { cursor: grab; }
-.astro-float-bar .astro-float-sep { width: 1px; height: 18px; background: #2c3037; margin: 0 2px; }
+.astro-float-bar .astro-float-sep { width: 1px; height: 16px; background: #2a3038; margin: 0 2px; }
 .astro-float-bar .astro-float-confirm { display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; white-space: nowrap; }
-.astro-float-bar .astro-float-confirm button { width: auto; height: 26px; padding: 0 9px; }
-.astro-float-bar .astro-float-confirm button[data-danger] { background: #f87171; color: #13151a; }
-.astro-float-bar .astro-float-confirm button[data-danger]:hover { background: #fca5a5; color: #13151a; }
+.astro-float-bar .astro-float-confirm button { width: auto; height: 24px; padding: 0 9px; }
+.astro-float-bar .astro-float-confirm button[data-danger] { background: #ef6f6c; color: #0f1114; }
+.astro-float-bar .astro-float-confirm button[data-danger]:hover { background: #f58c89; color: #0f1114; }
 @media (pointer: coarse) {
   .astro-float-region button, .astro-float-bubble button, .astro-float-bar button { height: 36px; min-width: 36px; }
+  .astro-float-region, .astro-float-bubble, .astro-float-bar { padding: 3px; }
   .astro-float-bubble input { height: 36px; font-size: 16px; }
   .astro-float-bar .astro-float-confirm button { height: 34px; }
 }
@@ -364,6 +371,13 @@ export class PageEditor {
 
   isDirty() {
     return this.container ? this.container.innerHTML !== this.baselineHTML : false;
+  }
+
+  /** Throw away every unsaved edit: the DOM goes back to the last clean baseline. Listeners are delegated, so nothing else to redo. */
+  restoreBaseline() {
+    if (!this.container) return;
+    this.select(null);
+    if (this.container.innerHTML !== this.baselineHTML) this.container.innerHTML = this.baselineHTML;
   }
 
   /** Where the live DOM first departs from the clean baseline (for bug reports). */

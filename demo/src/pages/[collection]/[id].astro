@@ -38,7 +38,7 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
       <div class="meta">
         <a href={`/${collection}/`}>{collection}</a>
         {date && <span>·</span>}
-        {date && <time datetime={date.toISOString()}>{fmt.format(date)}</time>}
+        {date && <time datetime={date.toISOString()} data-float-field="pubDate">{fmt.format(date)}</time>}
         {data.draft === true && <span class="badge">Draft</span>}
       </div>
       <h1 data-float-field="title">{title}</h1>

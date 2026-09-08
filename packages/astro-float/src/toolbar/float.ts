@@ -44,6 +44,7 @@ class Float {
   private statusSlot: HTMLElement;
   private statusDot: HTMLElement;
   private saveButton: HTMLButtonElement;
+  private discardButton: HTMLButtonElement;
   private statusText: HTMLElement | null = null;
   private statusActions: HTMLElement | null = null;
 
@@ -63,7 +64,8 @@ class Float {
 
   private page: PageEditor;
   private fields: FieldBindings;
-  private fieldInputs = new Map<string, HTMLInputElement | HTMLTextAreaElement>();
+  /** Per-field "re-read the draft into your control" hooks, so page edits show up in the sidebar live. */
+  private fieldSyncs = new Map<string, () => void>();
   private region = new RegionControl();
 
   /** In-page source view of the body: a textarea standing in for the prose. */
@@ -100,7 +102,12 @@ class Float {
       icon("check", 13),
       h("span", {}, "Save"),
     ) as HTMLButtonElement;
-    this.statusSlot = h("div", { class: "status-slot" }, this.statusDot, this.saveButton);
+    this.discardButton = h(
+      "button",
+      { class: "btn btn-sm btn-ghost btn-discard", type: "button", hidden: true, title: "Throw away unsaved changes and show what's on disk", onClick: () => this.discardChanges() },
+      "Discard",
+    ) as HTMLButtonElement;
+    this.statusSlot = h("div", { class: "status-slot" }, this.statusDot, this.discardButton, this.saveButton);
 
     this.root = h("div", { class: "float" });
     canvas.appendChild(this.root);
@@ -112,8 +119,7 @@ class Float {
     this.fields = new FieldBindings({
       onChange: (key, value) => {
         this.draftFrontmatter[key] = value;
-        const input = this.fieldInputs.get(key);
-        if (input && input.value !== value) input.value = value;
+        this.fieldSyncs.get(key)?.();
         this.touched();
       },
     });
@@ -514,6 +520,28 @@ class Float {
     localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs));
   }
 
+  /**
+   * Discard: everything goes back to what's on disk — body DOM, frontmatter,
+   * the fields on the page, the source view — without writing anything.
+   */
+  private discardChanges() {
+    if (!this.doc) return;
+    window.clearTimeout(this.autosaveTimer);
+    this.releaseFocus();
+    (document.activeElement as HTMLElement | null)?.blur();
+    if (this.sourceArea) {
+      this.sourceDraft = this.doc.body;
+      this.sourceError = null;
+      this.exitSourceMode(true);
+    }
+    this.page.restoreBaseline();
+    this.draftBody = this.doc.body;
+    this.draftFrontmatter = clone(this.doc.frontmatter);
+    for (const key of this.fields.keys()) this.fields.setValue(key, this.draftFrontmatter[key]);
+    this.renderFieldsSection();
+    this.setStatus("idle");
+  }
+
   // ---- saving -----------------------------------------------------------------
 
   private save(force = false): Promise<void> {
@@ -604,7 +632,7 @@ class Float {
 
   private renderSidebar() {
     if (!this.editing) return;
-    this.fieldInputs.clear();
+    this.fieldSyncs.clear();
     this.lastFoot = "";
 
     this.statusText = h("span", { class: "foot-status" });
@@ -665,11 +693,13 @@ class Float {
             ? "dirty"
             : "idle";
     const showSave = dirty && !busy && !this.prefs.autosave && this.status !== "conflict" && this.status !== "error";
-    const slot = `${showSave}|${dotState}|${this.statusMessage}|${this.panelHidden}`;
+    const showDiscard = dirty && !busy;
+    const slot = `${showSave}|${showDiscard}|${dotState}|${this.statusMessage}|${this.panelHidden}`;
     if (slot !== this.lastSlot) {
       this.lastSlot = slot;
       this.saveButton.hidden = !showSave;
-      this.statusDot.hidden = showSave;
+      this.discardButton.hidden = !showDiscard;
+      this.statusDot.hidden = showSave || showDiscard;
       this.statusDot.dataset.state = dotState;
       this.statusDot.title = dotState === "dirty" ? "Unsaved changes" : dotState === "saved" ? "Saved" : this.statusMessage || "";
       const tabStatus = this.root.querySelector(".sb-tab-status");
@@ -718,33 +748,29 @@ class Float {
     replaceChildren(this.statusActions, ...actions, ...(this.panelHidden ? [] : [this.statusSlot]));
   }
 
-  // ---- fields (only what isn't already on the page) ----------------------------------------
+  // ---- fields ---------------------------------------------------------------------------
 
   private renderFieldsSection() {
     const section = this.fieldsSection;
     if (!section) return;
-    this.fieldInputs.clear();
+    this.fieldSyncs.clear();
     if (!this.doc) {
       section.hidden = true;
       return;
     }
     section.hidden = false;
 
-    const onPage = new Set(this.fields.keys());
     const rows: HTMLElement[] = [];
     for (const [key, value] of Object.entries(this.draftFrontmatter)) {
-      if (onPage.has(key)) continue;
       if (READ_ONLY_KEYS.has(key)) {
-        rows.push(
-          h("div", { class: "field" }, h("div", { class: "field-head" }, h("span", { class: "field-key" }, key), h("span", { class: "field-type" }, "read-only")), h("div", { class: "field-static mono" }, String(value))),
-        );
+        rows.push(h("div", { class: "field" }, h("div", { class: "field-head" }, h("span", { class: "field-key" }, key), h("span", { class: "field-meta" }, "read-only")), h("div", { class: "field-static mono" }, String(value))));
         continue;
       }
       rows.push(this.renderField(key, value));
     }
     // Fields removed since the last save stay listed so the removal can be undone before it's written.
     for (const key of Object.keys(this.doc.frontmatter)) {
-      if (key in this.draftFrontmatter || onPage.has(key)) continue;
+      if (key in this.draftFrontmatter) continue;
       rows.push(
         h(
           "div",
@@ -753,14 +779,14 @@ class Float {
             "div",
             { class: "field-head" },
             h("span", { class: "field-key" }, key),
-            h("span", { class: "field-type" }, "removed on save"),
+            h("span", { class: "field-meta" }, "removed on save"),
             h("button", { class: "btn btn-sm btn-ghost", type: "button", onClick: () => this.revertField(key) }, icon("undo", 13), "Restore"),
           ),
         ),
       );
     }
 
-    const newKey = h("input", { class: "input", placeholder: "New field name", "aria-label": "New field name" }) as HTMLInputElement;
+    const newKey = h("input", { class: "input", placeholder: "New field", "aria-label": "New field name" }) as HTMLInputElement;
     const add = () => {
       const key = newKey.value.trim();
       if (!key || key in this.draftFrontmatter || READ_ONLY_KEYS.has(key)) return;
@@ -774,9 +800,9 @@ class Float {
 
     replaceChildren(
       section,
-      h("h3", { class: "sb-heading" }, "Fields", onPage.size ? h("span", { class: "sb-hint" }, `${[...onPage].join(", ")} are on the page`) : null),
-      rows.length ? rows : h("p", { class: "empty" }, "Everything else is on the page."),
-      h("div", { class: "field-add" }, newKey, h("button", { class: "btn", type: "button", onClick: add }, icon("plus", 13), "Add")),
+      h("h3", { class: "sb-heading" }, "Fields"),
+      rows.length ? h("div", { class: "fields" }, rows) : h("p", { class: "empty" }, "No frontmatter yet."),
+      h("div", { class: "field-add" }, newKey, h("button", { class: "btn btn-icon", type: "button", "aria-label": "Add field", title: "Add field", onClick: add }, icon("plus", 14))),
     );
   }
 
@@ -807,6 +833,7 @@ class Float {
   private renderField(key: string, value: unknown): HTMLElement {
     const kind = fieldKind(value);
     const original = this.doc?.frontmatter[key];
+    const onPage = this.fields.has(key);
     const revert = h(
       "button",
       { class: "field-revert", type: "button", "aria-label": `Revert ${key}`, title: "Back to the saved value", hidden: !this.fieldChanged(key), onClick: () => this.revertField(key) },
@@ -819,11 +846,16 @@ class Float {
       revert.hidden = !this.fieldChanged(key);
       this.touched();
     };
+    // The page can change this field too (title typed on the page): mirror it here unless this control has the caret.
+    const mirror = (apply: (v: unknown) => void) =>
+      this.fieldSyncs.set(key, () => {
+        revert.hidden = !this.fieldChanged(key);
+        apply(this.draftFrontmatter[key]);
+      });
 
     let control: HTMLElement;
     switch (kind) {
       case "boolean": {
-        const label = h("span", { class: "field-hint" }, value ? "true" : "false");
         const row = h(
           "button",
           {
@@ -835,11 +867,9 @@ class Float {
             onClick: () => {
               const next = row.getAttribute("aria-checked") !== "true";
               row.setAttribute("aria-checked", String(next));
-              label.textContent = next ? "true" : "false";
               set(next);
             },
           },
-          label,
           h("span", { class: "switch" }),
         );
         control = row;
@@ -875,6 +905,11 @@ class Float {
           hint.textContent = "";
           set(input.value);
         });
+        mirror((v) => {
+          if (this.canvas.activeElement === input) return;
+          const iso = typeof v === "string" ? v.slice(0, 10) : "";
+          if (input.value !== iso) input.value = iso;
+        });
         control = input;
         break;
       }
@@ -891,7 +926,11 @@ class Float {
       case "text": {
         const ta = h("textarea", { class: "textarea", rows: 3, value: String(value) }) as HTMLTextAreaElement;
         ta.addEventListener("input", () => set(ta.value));
-        this.fieldInputs.set(key, ta);
+        mirror((v) => {
+          if (this.canvas.activeElement === ta) return;
+          const text = typeof v === "string" ? v : "";
+          if (ta.value !== text) ta.value = text;
+        });
         control = ta;
         break;
       }
@@ -913,20 +952,25 @@ class Float {
       default: {
         const input = h("input", { class: "input", type: "text", value: value == null ? "" : String(value) }) as HTMLInputElement;
         input.addEventListener("input", () => set(input.value));
-        this.fieldInputs.set(key, input);
+        mirror((v) => {
+          if (this.canvas.activeElement === input) return;
+          const text = typeof v === "string" ? v : "";
+          if (input.value !== text) input.value = text;
+        });
         control = input;
       }
     }
 
     return h(
       "div",
-      { class: "field" },
+      { class: "field", "data-kind": kind, "data-on-page": onPage ? "" : null },
       h(
         "div",
         { class: "field-head" },
-        h("span", { class: "field-key" }, key),
+        h("span", { class: "field-key", title: onPage ? `${key} · ${kind} · also editable on the page` : `${key} · ${kind}` }, key),
         revert,
-        h("span", { class: "field-type" }, kind === "string" ? "text" : kind),
+        onPage ? h("span", { class: "field-meta", title: "Also editable on the page" }, "on page") : null,
+        kind === "boolean" ? control : null,
         h(
           "button",
           {
@@ -943,7 +987,7 @@ class Float {
           icon("close", 12),
         ),
       ),
-      control,
+      kind === "boolean" ? null : control,
       hint,
     );
   }
@@ -1017,7 +1061,7 @@ class Float {
         ? (h(
             "select",
             {
-              class: "select",
+              class: "select select-inline",
               "aria-label": "Collection",
               onChange: (e: Event) => {
                 this.listCollection = (e.target as HTMLSelectElement).value;
@@ -1041,42 +1085,37 @@ class Float {
               class: "list-item",
               href: route.href,
               "aria-current": isCurrent ? "page" : null,
-              title: route.guessed ? `${route.href} (guessed route)` : route.href,
+              title: `${entry.id}${route.guessed ? " (guessed route)" : ""}`,
             },
             h("span", { class: "title" }, entry.title),
-            h("span", { class: "id" }, entry.id),
-            isCurrent ? icon("check", 13) : icon("chevron", 13),
+            isCurrent ? icon("check", 13) : null,
           ),
         );
       }
+      // Two distinct, quiet rows: a new entry here, or a whole new collection.
+      list.appendChild(
+        h(
+          "button",
+          { class: "list-item list-action", type: "button", title: `New entry in ${selected.name}`, onClick: () => setForm(openForm === "entry" ? null : "entry") },
+          icon("plus", 14),
+          h("span", { class: "title" }, "New entry"),
+        ),
+      );
     }
+    list.appendChild(
+      h(
+        "button",
+        { class: "list-item list-action", type: "button", title: "New collection under src/content/", onClick: () => setForm(openForm === "collection" ? null : "collection") },
+        icon("folderPlus", 14),
+        h("span", { class: "title" }, "New collection"),
+      ),
+    );
 
     replaceChildren(
       section,
-      h("h3", { class: "sb-heading" }, "Collection"),
-      h(
-        "div",
-        { class: "toolbar-row" },
-        h("div", { class: "grow" }, picker),
-        selected
-          ? h(
-              "button",
-              { class: "btn", type: "button", title: `New entry in ${selected.name}`, onClick: () => setForm(openForm === "entry" ? null : "entry") },
-              icon("plus", 13),
-              "New entry",
-            )
-          : null,
-      ),
+      h("div", { class: "sb-heading sb-heading-row" }, h("span", null, "Collection"), h("div", { class: "sb-heading-aside" }, picker)),
       formHost,
       list,
-      // A separate, explicit control so "new collection" can never be mistaken for "new post".
-      h(
-        "button",
-        { class: "row-action", type: "button", onClick: () => setForm(openForm === "collection" ? null : "collection") },
-        icon("folderPlus", 14),
-        h("span", null, "New collection"),
-        h("span", { class: "row-action-hint" }, "src/content/…"),
-      ),
       !this.doc
         ? h(
             "p",

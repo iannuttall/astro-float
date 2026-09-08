@@ -19,11 +19,11 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
       - data-float-body marks the element that wraps the rendered Markdown body;
         it becomes editable in place in dev
       - data-float-field="<frontmatter key>" on an element that prints a string
-        field verbatim makes that field editable in place too */}
+        field verbatim — or a formatted date — makes that field editable in place too */}
   <article data-float-entry={`blog:${post.id}`}>
     <header>
       <div class="meta">
-        <time datetime={post.data.pubDate.toISOString()}>{fmt.format(post.data.pubDate)}</time>
+        <time datetime={post.data.pubDate.toISOString()} data-float-field="pubDate">{fmt.format(post.data.pubDate)}</time>
         {post.data.draft && <span class="badge">Draft</span>}
       </div>
       <h1 data-float-field="title">{post.data.title}</h1>
