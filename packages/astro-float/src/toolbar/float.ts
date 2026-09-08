@@ -680,16 +680,16 @@ class Float {
         h(
           "button",
           {
-            class: "icon-btn tip",
+            class: "btn btn-sm btn-ghost sheet-hide",
             type: "button",
-            "aria-label": "Collapse",
-            "data-tip": "Collapse",
+            "aria-label": "Hide the panel (a small Edit handle stays at the edge)",
             onClick: () => {
               this.sheetCollapsed = true;
               this.root.setAttribute("data-sheet-collapsed", "");
             },
           },
-          icon("chevron", 14),
+          "Hide",
+          icon("chevron", 13),
         ),
       ),
       this.sheetTabs,

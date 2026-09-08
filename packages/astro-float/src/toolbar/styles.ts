@@ -253,8 +253,9 @@ export const STYLES = /* css */ `
 .float[data-side="left"][data-sheet-collapsed] .sheet { transform: translateX(calc(-100% - 24px)); opacity: 0; pointer-events: none; }
 .sheet-head { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); }
 .sheet-head .chrome-entry { flex: 1; min-width: 0; }
-.sheet-head .icon-btn svg { transform: rotate(0deg); }
-.float[data-side="left"] .sheet-head .icon-btn svg { transform: rotate(180deg); }
+.sheet-hide { color: var(--fg-muted); gap: 2px; padding: 0 6px 0 8px; }
+.sheet-hide:hover { color: var(--fg); }
+.float[data-side="left"] .sheet-hide svg { transform: rotate(180deg); }
 .sheet-tabs { display: flex; gap: 0; padding: 8px 6px 0; border-bottom: 1px solid var(--line); }
 .sheet-tabs button {
   display: inline-flex;
