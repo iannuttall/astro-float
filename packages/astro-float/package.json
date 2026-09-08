@@ -8,8 +8,7 @@
     ".": {
       "types": "./index.d.ts",
       "default": "./src/index.js"
-    },
-    "./client": "./src/toolbar/client.ts"
+    }
   },
   "types": "./index.d.ts",
   "files": [

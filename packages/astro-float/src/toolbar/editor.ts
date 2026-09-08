@@ -30,32 +30,24 @@ const ISLAND_DRAG_TYPE = "text/x-astro-float-island";
 const ISLAND_SELECTOR = "astro-island, iframe, video, [data-float-island]";
 
 const PAGE_STYLE = /* css */ `
-[data-float-editing] {
-  position: relative;
+/*
+ * One convention for "you can edit this": a quiet grey wash on hover, a
+ * lighter one while you're in it. Same treatment for the title, the
+ * description, the body and any other bound field. Nothing else.
+ */
+[data-float-editing], [data-float-editing-field] {
+  --float-wash: transparent;
   outline: none;
   caret-color: currentColor;
-  --float-edge: transparent;
+  border-radius: 6px;
+  background-color: var(--float-wash);
+  box-shadow: 0 0 0 var(--float-wash-spread, 8px) var(--float-wash);
+  transition: background-color 120ms ease, box-shadow 120ms ease;
 }
-/* A quiet dashed frame: 1px edges drawn as gradients so the dash/gap rhythm is ours (5px on, 9px off), square corners. */
-[data-float-editing]::before {
-  content: "";
-  position: absolute;
-  inset: -16px -18px;
-  pointer-events: none;
-  background-image:
-    repeating-linear-gradient(90deg, var(--float-edge) 0 5px, transparent 5px 14px),
-    repeating-linear-gradient(90deg, var(--float-edge) 0 5px, transparent 5px 14px),
-    repeating-linear-gradient(180deg, var(--float-edge) 0 5px, transparent 5px 14px),
-    repeating-linear-gradient(180deg, var(--float-edge) 0 5px, transparent 5px 14px);
-  background-size: 100% 1px, 100% 1px, 1px 100%, 1px 100%;
-  background-position: 0 0, 0 100%, 0 0, 100% 0;
-  background-repeat: no-repeat;
-  transition: background-color 150ms ease;
-}
-[data-float-editing]:hover { --float-edge: color-mix(in srgb, currentColor 16%, transparent); }
-[data-float-editing]:focus { --float-edge: color-mix(in srgb, currentColor 24%, transparent); }
-[data-float-editing][data-float-dragging] { --float-edge: color-mix(in srgb, currentColor 55%, transparent); }
-[data-float-editing][data-float-dragging]::before { background-color: color-mix(in srgb, currentColor 3%, transparent); }
+[data-float-editing] { --float-wash-spread: 14px; }
+[data-float-editing]:hover, [data-float-editing-field]:hover { --float-wash: color-mix(in srgb, currentColor 4.5%, transparent); }
+[data-float-editing]:focus, [data-float-editing-field]:focus { --float-wash: color-mix(in srgb, currentColor 2.5%, transparent); }
+[data-float-editing][data-float-dragging] { --float-wash: color-mix(in srgb, currentColor 7%, transparent); }
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
 
@@ -64,9 +56,6 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing] [data-float-island] * { cursor: default; }
 
 /* Frontmatter fields edited in place (title, description, …). */
-[data-float-editing-field] { outline: none; caret-color: currentColor; border-radius: 3px; transition: background-color 120ms ease; }
-[data-float-editing-field]:hover { background-color: color-mix(in srgb, currentColor 4%, transparent); box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 4%, transparent); }
-[data-float-editing-field]:focus { background-color: transparent; box-shadow: none; }
 [data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
 
 /* Overlays live in the page, never inside the editable body. */

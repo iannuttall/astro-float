@@ -9,16 +9,29 @@ import { STYLES } from "./styles";
 type PanelId = "fields" | "collection" | "source" | "settings";
 type Side = "left" | "right";
 type Status = "idle" | "saving" | "refreshing" | "saved" | "error" | "conflict";
+/** The three chrome experiments. Same panels, different shells. */
+export type ChromeMode = "toolbar" | "float" | "sheet";
+type Placement = "bottom-left" | "bottom-center" | "bottom-right";
 
 interface Prefs {
   side: Side;
   autosave: boolean;
+  mode: ChromeMode;
+}
+
+export interface FloatHandle {
+  setEditing(on: boolean): Promise<void>;
+  beforeEditOff(): Promise<boolean>;
+  setToolbarPlacement(placement: Placement): void;
+}
+
+export interface FloatHost {
+  /** Ask the toolbar to switch the Edit app off. */
+  requestOff(): void;
 }
 
 const PREFS_KEY = "astro-float:prefs";
 const AUTOSAVE_DELAY = 800;
-/** How long the rail stays fully out after sliding in, before tucking (Astro's bar does the same). */
-const ENTRANCE_HOLD_MS = 1400;
 const HOVER_LEAVE_MS = 450;
 
 const ENTRY_PANELS: PanelId[] = ["fields", "source"];
@@ -28,22 +41,40 @@ const PANEL_TITLES: Record<PanelId, string> = {
   source: "Source",
   settings: "Settings",
 };
+const MODE_LABEL: Record<ChromeMode, string> = { toolbar: "Toolbar", float: "Float", sheet: "Sheet" };
+const MODE_BLURB: Record<ChromeMode, string> = {
+  toolbar: "Everything hangs off the Astro bar: a small popover while Edit is on, panels open above it.",
+  float: "A rail sits tucked at the edge while Edit is on. Hover (or tap) to bring it out.",
+  sheet: "A docked panel with tabs lives beside the page while Edit is on, and leaves when it's off.",
+};
 
-export function mountFloat(canvas: ShadowRoot): void {
-  new Float(canvas);
+export function mountFloat(canvas: ShadowRoot, host: FloatHost): FloatHandle {
+  const float = new Float(canvas, host);
+  return {
+    setEditing: (on) => float.setEditing(on),
+    beforeEditOff: () => float.beforeEditOff(),
+    setToolbarPlacement: (p) => float.setToolbarPlacement(p),
+  };
 }
 
 class Float {
   private root: HTMLElement;
-  private rail: HTMLElement;
+  private chromeHost: HTMLElement;
   private panelHost: HTMLElement;
   private statusSlot: HTMLElement;
   private statusDot: HTMLElement;
   private saveButton: HTMLButtonElement;
+  private rail: HTMLElement | null = null;
+  private sheetBody: HTMLElement | null = null;
+  private sheetTabs: HTMLElement | null = null;
+  private popoverButtons: HTMLElement | null = null;
 
   private prefs: Prefs = loadPrefs();
+  private editing = false;
+  private loadedFor: string | null = null;
   /** Open panel. In-memory only: nothing re-opens on load or navigation. */
   private panel: PanelId | null = null;
+  private placement: Placement = readToolbarPlacement();
 
   private collections: Collection[] = [];
   private detected: DetectedEntry | null = null;
@@ -67,12 +98,12 @@ class Float {
   private autosaveTimer: number | undefined;
   private savedTimer: number | undefined;
 
-  // rail tuck state
+  // rail (mode 2) tuck state
   private coarse = isTouchDevice();
-  private entering = true;
   private hovering = false;
   private touchExpanded = false;
   private hoverTimer: number | undefined;
+  private sheetCollapsed = false;
 
   private footStatus: HTMLElement | null = null;
   private footActions: HTMLElement | null = null;
@@ -80,7 +111,10 @@ class Float {
   private lastSlot = "";
   private lastFoot = "";
 
-  constructor(private canvas: ShadowRoot) {
+  constructor(
+    private canvas: ShadowRoot,
+    private host: FloatHost,
+  ) {
     const style = document.createElement("style");
     style.textContent = STYLES;
     canvas.appendChild(style);
@@ -93,9 +127,9 @@ class Float {
     ) as HTMLButtonElement;
     this.statusSlot = h("div", { class: "status-slot" }, this.statusDot, this.saveButton);
 
-    this.rail = h("nav", { class: "rail", "aria-label": "Float" });
+    this.chromeHost = h("div", { class: "chrome-host" });
     this.panelHost = h("div", { class: "panel-host" });
-    this.root = h("div", { class: "float", "data-side": this.prefs.side, "data-coarse": this.coarse ? "" : null }, this.rail, this.panelHost);
+    this.root = h("div", { class: "float", "data-mode": this.prefs.mode, "data-side": this.prefs.side, "data-placement": this.placement, "data-coarse": this.coarse ? "" : null }, this.chromeHost);
     canvas.appendChild(this.root);
 
     this.page = new PageEditor({
@@ -111,42 +145,41 @@ class Float {
       },
     });
 
-    this.bindRailInteractions();
     this.bindViewport();
 
-    // Escape inside the rail: leave the field first, then close the panel.
+    // Escape inside our chrome: leave the field first, then close the panel.
     this.root.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();
       const active = this.canvas.activeElement as HTMLElement | null;
       if (active && active.matches("input, textarea, select")) active.blur();
-      else this.closePanel();
+      else if (this.prefs.mode !== "sheet") this.closePanel();
     });
     this.root.addEventListener("keyup", (e) => {
       if (e.key === "Escape") e.stopPropagation();
     });
     document.addEventListener("keydown", (e) => {
+      if (!this.editing) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         void this.save();
-        return;
       }
-      if (e.key === "Escape" && this.panel) this.closePanel();
     });
     // Only real unloads (tab close, hard refresh) should ever warn — Float's own
     // navigations are soft swaps and never reach here.
     window.addEventListener("beforeunload", (e) => {
-      if (this.isDirty() && !this.navigating) e.preventDefault();
+      if (this.editing && this.isDirty() && !this.navigating) e.preventDefault();
     });
     document.addEventListener("click", this.onDocumentClick);
-    window.addEventListener("popstate", () => void this.navigate(location.href, { push: false }));
-
-    this.renderRail();
-    void this.loadPage();
+    window.addEventListener("popstate", (e) => {
+      if (this.editing || (e.state && (e.state as { astroFloat?: boolean }).astroFloat)) void this.navigate(location.href, { push: false });
+    });
 
     // Read-only introspection for tests and bug reports: host.__astroFloat.state()
     (this.canvas.host as HTMLElement & { __astroFloat?: unknown }).__astroFloat = {
       state: () => ({
+        editing: this.editing,
+        mode: this.prefs.mode,
         panel: this.panel,
         tucked: this.root.hasAttribute("data-tucked"),
         touchExpanded: this.touchExpanded,
@@ -161,34 +194,76 @@ class Float {
         entry: this.doc ? `${this.doc.collection}/${this.doc.id}` : null,
       }),
     };
-
-    // Slide in from the edge once the initial styles have applied, hold, then tuck.
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        this.root.dataset.entered = "";
-        window.setTimeout(() => {
-          this.entering = false;
-          this.updateTuck();
-        }, ENTRANCE_HOLD_MS);
-      }),
-    );
   }
 
-  // ---- rail tuck / reveal -----------------------------------------------------------
+  // ---- edit mode ---------------------------------------------------------------
+
+  async setEditing(on: boolean) {
+    if (on === this.editing) return;
+    this.editing = on;
+    if (on) {
+      this.touchExpanded = false;
+      if (this.loadedFor !== location.href) {
+        await this.loadPage(); // renders the chrome once it knows the entry
+      } else {
+        this.attachEditors();
+        this.renderChrome();
+      }
+    } else {
+      window.clearTimeout(this.autosaveTimer);
+      this.page.detach();
+      this.fields.detach();
+      this.panel = null;
+      this.releaseFocus();
+      this.chromeHost.textContent = "";
+      this.rail = null;
+      this.sheetBody = null;
+      this.sheetTabs = null;
+      this.popoverButtons = null;
+    }
+  }
+
+  /** Called by the toolbar right before it switches the app off. */
+  async beforeEditOff(): Promise<boolean> {
+    if (!this.editing || !this.isDirty()) return true;
+    await this.save();
+    return !this.isDirty();
+  }
+
+  setToolbarPlacement(placement: Placement) {
+    this.placement = placement;
+    this.root.dataset.placement = placement;
+  }
+
+  private setMode(mode: ChromeMode) {
+    if (mode === this.prefs.mode) return;
+    this.prefs.mode = mode;
+    this.savePrefs();
+    this.root.dataset.mode = mode;
+    this.touchExpanded = false;
+    this.sheetCollapsed = false;
+    // Keep the Settings panel open across the switch so the change reads instantly.
+    const keep = this.panel;
+    this.panel = null;
+    this.renderChrome();
+    if (keep) this.showPanel(keep);
+  }
+
+  // ---- rail tuck / reveal (mode 2) ------------------------------------------------
 
   /**
-   * Resting state is tucked (a sliver showing at the edge). Anything that means
-   * "I'm using it" keeps it out: hover (fine pointers), a tap (coarse pointers),
-   * an open panel, or unsaved work with autosave off.
+   * The rail rests tucked (a sliver at the edge) from the moment it appears.
+   * Hover (mouse), a tap (touch), an open panel or unsaved work bring it out.
    */
   private updateTuck() {
+    if (this.prefs.mode !== "float") return;
     const dirtyWork = this.isDirty() && !this.prefs.autosave;
-    const out = this.entering || this.hovering || this.touchExpanded || this.panel !== null || dirtyWork;
+    const out = this.hovering || this.touchExpanded || this.panel !== null || dirtyWork;
     this.root.toggleAttribute("data-tucked", !out);
     this.root.toggleAttribute("data-expanded", this.touchExpanded);
   }
 
-  private bindRailInteractions() {
+  private bindRailInteractions(rail: HTMLElement) {
     const reveal = () => {
       window.clearTimeout(this.hoverTimer);
       if (!this.hovering) {
@@ -203,23 +278,22 @@ class Float {
         this.updateTuck();
       }, HOVER_LEAVE_MS);
     };
-    this.rail.addEventListener("mouseenter", () => {
+    rail.addEventListener("mouseenter", () => {
       if (!this.coarse) reveal();
     });
-    this.rail.addEventListener("mouseleave", () => {
+    rail.addEventListener("mouseleave", () => {
       if (!this.coarse) leave();
     });
     // Keyboard users: focusing a rail button reveals it. On touch, focus arrives
     // with the tap itself and must not pre-empt the tap-to-expand step below.
-    this.rail.addEventListener("focusin", () => {
+    rail.addEventListener("focusin", () => {
       if (!this.coarse) reveal();
     });
-    this.rail.addEventListener("focusout", () => {
+    rail.addEventListener("focusout", () => {
       if (!this.coarse) leave();
     });
-
     // Coarse pointers: the first tap on a tucked rail only expands it.
-    this.rail.addEventListener(
+    rail.addEventListener(
       "click",
       (e) => {
         if (!this.coarse) return;
@@ -230,19 +304,11 @@ class Float {
           this.updateTuck();
           return;
         }
-        // A tap on the rail's own background, the separator or the idle status dot collapses it again.
         const t = e.target as HTMLElement;
-        if (t === this.rail || t.classList?.contains("rail-sep") || t === this.statusSlot || t === this.statusDot) {
-          this.collapse();
-        }
+        if (t === rail || t.classList?.contains("rail-sep") || t === this.statusSlot || t === this.statusDot) this.collapse();
       },
       true,
     );
-
-    matchMedia("(hover: none)").addEventListener("change", () => {
-      this.coarse = isTouchDevice();
-      this.root.toggleAttribute("data-coarse", this.coarse);
-    });
   }
 
   /** Close the panel and, on touch devices, tuck the rail. */
@@ -271,7 +337,7 @@ class Float {
     apply();
   }
 
-  /** Blur whatever has the caret in the rail and undo an iOS focus-zoom if one slipped through. */
+  /** Blur whatever has the caret in our chrome and undo an iOS focus-zoom if one slipped through. */
   private releaseFocus() {
     const active = this.canvas.activeElement as HTMLElement | null;
     active?.blur();
@@ -280,7 +346,7 @@ class Float {
 
   // ---- page lifecycle ---------------------------------------------------------
 
-  /** (Re)read the current URL: which entry is this, bind the body, keep the rail calm. */
+  /** (Re)read the current URL: which entry is this, bind the editors, keep the chrome calm. */
   private async loadPage() {
     this.page.unbind();
     this.fields.unbind();
@@ -289,7 +355,8 @@ class Float {
     this.draftFrontmatter = {};
     this.draftBody = "";
     this.bodyReadOnly = false;
-    this.touchExpanded = false; // a fresh page starts from the calm, tucked state
+    this.touchExpanded = false;
+    this.loadedFor = location.href;
     this.closePanel();
 
     try {
@@ -311,33 +378,34 @@ class Float {
     } catch (err) {
       this.setStatus("error", describe(err));
     }
-    this.renderRail();
+    this.renderChrome();
   }
 
-  /** Attach the in-place editors to `[data-float-body]` and `[data-float-field]` on the current DOM. */
+  /** Bind the in-place editors to `[data-float-body]` and `[data-float-field]`; attach them if Edit is on. */
   private bindBody() {
     if (!this.doc) return;
     this.fields.bind(this.doc.frontmatter);
-    this.fields.attach();
-
     const container = PageEditor.find();
-    if (!container) {
+    if (container) {
+      this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
+      // MDX we can't line up with the source would be written back as HTML — never do that.
+      this.bodyReadOnly = this.doc.mdx && !this.page.mapped;
+      if (this.bodyReadOnly) this.setStatus("error", "MDX blocks didn't line up with the source — body is read-only here; fields still save");
+    } else {
       this.page.unbind();
-      return;
     }
-    this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
-    // MDX we can't line up with the source would be written back as HTML — never do that.
-    this.bodyReadOnly = this.doc.mdx && !this.page.mapped;
-    if (this.bodyReadOnly) {
-      this.setStatus("error", "MDX blocks didn't line up with the source — body is read-only here; fields still save");
-      return;
-    }
-    this.page.attach();
+    this.attachEditors();
+  }
+
+  private attachEditors() {
+    if (!this.editing || !this.doc) return;
+    this.fields.attach();
+    if (this.page.bound && !this.bodyReadOnly) this.page.attach();
   }
 
   /**
    * Soft navigation: save anything pending, fetch the next page's HTML and swap
-   * it in under the rail. No unload, no "Leave site?", no rail re-animating.
+   * it in under the chrome. No unload, no "Leave site?", nothing re-animating.
    */
   private async navigate(href: string, { push = true, focusBody = false } = {}) {
     const url = new URL(href, location.href);
@@ -363,11 +431,12 @@ class Float {
   }
 
   private onDocumentClick = (e: MouseEvent) => {
+    if (!this.editing) return;
     const path = e.composedPath();
     const insideFloat = path.includes(this.canvas.host);
 
-    // Touch: tapping the page while the rail is out (or a panel is open) puts it away.
-    if (this.coarse && !insideFloat && (this.touchExpanded || this.panel)) this.collapse();
+    // Touch: tapping the page while the rail is out (or a popover panel is open) puts it away.
+    if (this.coarse && !insideFloat && this.prefs.mode !== "sheet" && (this.touchExpanded || this.panel)) this.collapse();
 
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const anchor = path.find((n) => n instanceof HTMLAnchorElement) as HTMLAnchorElement | undefined;
@@ -505,82 +574,212 @@ class Float {
     }
   }
 
-  // ---- rail -------------------------------------------------------------------
+  // ---- chrome: three shells over the same panels -----------------------------------
 
-  private renderRail() {
+  private renderChrome() {
+    if (!this.editing) return;
+    this.root.dataset.mode = this.prefs.mode;
+    this.rail = null;
+    this.sheetBody = null;
+    this.sheetTabs = null;
+    this.popoverButtons = null;
+    this.panelHost.textContent = "";
+    this.root.removeAttribute("data-tucked");
+    this.root.removeAttribute("data-expanded");
+    this.root.removeAttribute("data-sheet-collapsed");
+
+    switch (this.prefs.mode) {
+      case "toolbar":
+        this.renderToolbarChrome();
+        break;
+      case "float":
+        this.renderFloatChrome();
+        break;
+      case "sheet":
+        this.renderSheetChrome();
+        break;
+    }
+    this.renderStatus();
+    if (this.panel) this.renderPanel();
+  }
+
+  private panelButton(id: PanelId, cls: string) {
     const hasEntry = !!this.doc;
-    const button = (id: PanelId, tip: string) =>
+    const tip = PANEL_TITLES[id];
+    return h(
+      "button",
+      {
+        class: cls,
+        type: "button",
+        "data-tip": ENTRY_PANELS.includes(id) && !hasEntry ? `${tip} · no entry here` : tip,
+        "aria-label": tip,
+        "aria-pressed": String(this.panel === id),
+        disabled: ENTRY_PANELS.includes(id) && !hasEntry,
+        onClick: () => this.togglePanel(id),
+      },
+      icon(id, 16),
+    );
+  }
+
+  /** Mode 1 — a horizontal pill just above the Astro bar; panels open above it. */
+  private renderToolbarChrome() {
+    this.popoverButtons = h(
+      "div",
+      { class: "pop-actions" },
+      this.panelButton("fields", "rail-btn tip"),
+      this.panelButton("collection", "rail-btn tip"),
+      this.panelButton("source", "rail-btn tip"),
+      this.panelButton("settings", "rail-btn tip"),
+    );
+    const popover = h(
+      "div",
+      { class: "popover" },
+      h("span", { class: "chrome-mode", title: MODE_BLURB.toolbar }, "Toolbar"),
+      h("span", { class: "chrome-entry" }, this.doc ? `${this.doc.collection}/${this.doc.id}` : "no entry here"),
+      h("span", { class: "pop-sep" }),
+      this.popoverButtons,
+      h("span", { class: "pop-sep" }),
+      this.statusSlot,
+    );
+    replaceChildren(this.chromeHost, popover, this.panelHost);
+  }
+
+  /** Mode 2 — the tucked rail. It is *born* tucked: no slide-out-then-hide. */
+  private renderFloatChrome() {
+    const rail = h(
+      "nav",
+      { class: "rail", "aria-label": "Float" },
+      this.panelButton("fields", "rail-btn tip"),
+      this.panelButton("collection", "rail-btn tip"),
+      h("span", { class: "rail-sep" }),
+      this.panelButton("source", "rail-btn tip"),
+      this.panelButton("settings", "rail-btn tip"),
+      this.statusSlot,
+    );
+    this.rail = rail;
+    this.bindRailInteractions(rail);
+    // Tucked before first paint, so the only motion is a short fade.
+    this.updateTuck();
+    replaceChildren(this.chromeHost, rail, this.panelHost);
+  }
+
+  /** Mode 3 — a docked sheet with tabs; present for as long as Edit is on. */
+  private renderSheetChrome() {
+    this.sheetTabs = h("nav", { class: "sheet-tabs" });
+    this.sheetBody = h("div", { class: "sheet-body" });
+    this.footStatus = h("span", { class: "foot-status" });
+    this.footActions = h("div", { class: "foot-actions" });
+    const sheet = h(
+      "aside",
+      { class: "sheet" },
+      h(
+        "header",
+        { class: "sheet-head" },
+        h("span", { class: "chrome-mode", title: MODE_BLURB.sheet }, "Sheet"),
+        h("span", { class: "chrome-entry" }, this.doc ? `${this.doc.collection}/${this.doc.id}` : "no entry here"),
+        h(
+          "button",
+          {
+            class: "icon-btn tip",
+            type: "button",
+            "aria-label": "Collapse",
+            "data-tip": "Collapse",
+            onClick: () => {
+              this.sheetCollapsed = true;
+              this.root.setAttribute("data-sheet-collapsed", "");
+            },
+          },
+          icon("chevron", 14),
+        ),
+      ),
+      this.sheetTabs,
+      this.sheetBody,
+      h("footer", { class: "panel-foot" }, this.footStatus, this.footActions),
+    );
+    const handle = h(
+      "button",
+      {
+        class: "sheet-handle",
+        type: "button",
+        "aria-label": "Expand editor panel",
+        onClick: () => {
+          this.sheetCollapsed = false;
+          this.root.removeAttribute("data-sheet-collapsed");
+        },
+      },
+      icon("panelRight", 15),
+      h("span", null, "Edit"),
+      this.statusSlot,
+    );
+    if (this.sheetCollapsed) this.root.setAttribute("data-sheet-collapsed", "");
+    replaceChildren(this.chromeHost, sheet, handle);
+    this.renderSheetTabs();
+    if (!this.panel) this.panel = this.doc ? "fields" : "collection";
+  }
+
+  private renderSheetTabs() {
+    if (!this.sheetTabs) return;
+    const tab = (id: PanelId) =>
       h(
         "button",
         {
-          class: "rail-btn tip",
           type: "button",
-          "data-tip": ENTRY_PANELS.includes(id) && !hasEntry ? `${tip} · no entry here` : tip,
-          "aria-label": tip,
           "aria-pressed": String(this.panel === id),
-          disabled: ENTRY_PANELS.includes(id) && !hasEntry,
-          onClick: () => this.togglePanel(id),
+          disabled: ENTRY_PANELS.includes(id) && !this.doc,
+          onClick: () => this.showPanel(id),
         },
-        icon(id, 16),
+        icon(id, 14),
+        PANEL_TITLES[id],
       );
-
-    replaceChildren(
-      this.rail,
-      button("fields", "Fields"),
-      button("collection", "Collection"),
-      h("span", { class: "rail-sep" }),
-      button("source", "Source"),
-      button("settings", "Settings"),
-      this.statusSlot,
-    );
-    this.renderStatus();
+    replaceChildren(this.sheetTabs, tab("fields"), tab("collection"), tab("source"), tab("settings"));
   }
 
   private togglePanel(id: PanelId) {
-    if (this.panel === id) this.closePanel();
+    if (this.panel === id && this.prefs.mode !== "sheet") this.closePanel();
     else this.showPanel(id);
   }
 
   private closePanel() {
+    if (this.prefs.mode === "sheet" && this.editing && this.chromeHost.childElementCount) return; // the sheet always shows something
     if (this.panel === null && !this.panelHost.childElementCount) return;
     this.releaseFocus();
     this.panel = null;
     this.panelHost.textContent = "";
     this.sourceView = null;
-    this.footStatus = null;
-    this.footActions = null;
+    if (this.prefs.mode !== "sheet") {
+      this.footStatus = null;
+      this.footActions = null;
+    }
     this.fieldInputs.clear();
     this.lastFoot = "";
-    this.renderRail();
+    this.syncPressed();
     this.updateTuck();
   }
 
   private showPanel(id: PanelId) {
     this.panel = id;
     this.renderPanel();
-    this.renderRail();
+    this.syncPressed();
     this.updateTuck();
+  }
+
+  private syncPressed() {
+    for (const b of Array.from(this.chromeHost.querySelectorAll<HTMLElement>("[aria-pressed][aria-label]"))) {
+      const label = b.getAttribute("aria-label");
+      const id = (Object.keys(PANEL_TITLES) as PanelId[]).find((k) => PANEL_TITLES[k] === label);
+      if (id) b.setAttribute("aria-pressed", String(this.panel === id));
+    }
+    this.renderSheetTabs();
   }
 
   // ---- panel shell --------------------------------------------------------------
 
   private renderPanel() {
     const id = this.panel;
-    if (!id) return;
-    this.footStatus = null;
-    this.footActions = null;
+    if (!id || !this.editing) return;
     this.sourceView = null;
     this.fieldInputs.clear();
     this.lastFoot = "";
-
-    const sub = this.doc ? `${this.doc.collection}/${this.doc.id}` : "no entry on this page";
-    const head = h(
-      "header",
-      { class: "panel-head" },
-      h("span", { class: "panel-title" }, PANEL_TITLES[id]),
-      h("span", { class: "panel-sub", title: this.doc?.file ?? "" }, sub),
-      h("button", { class: "icon-btn", type: "button", "aria-label": "Close panel", onClick: () => this.collapse() }, icon("close", 14)),
-    );
 
     let body: HTMLElement;
     let showFoot = false;
@@ -600,6 +799,23 @@ class Float {
         body = this.renderSettings();
     }
 
+    if (this.prefs.mode === "sheet") {
+      // The sheet supplies tabs and a footer of its own; the panel body drops straight in.
+      if (this.sheetBody) replaceChildren(this.sheetBody, body);
+      this.renderStatus();
+      return;
+    }
+
+    this.footStatus = null;
+    this.footActions = null;
+    const sub = this.doc ? `${this.doc.collection}/${this.doc.id}` : "no entry on this page";
+    const head = h(
+      "header",
+      { class: "panel-head" },
+      h("span", { class: "panel-title" }, PANEL_TITLES[id]),
+      h("span", { class: "panel-sub", title: this.doc?.file ?? "" }, sub),
+      h("button", { class: "icon-btn", type: "button", "aria-label": "Close panel", onClick: () => (this.prefs.mode === "float" ? this.collapse() : this.closePanel()) }, icon("close", 14)),
+    );
     const panel = h("section", { class: "panel", "data-panel": id }, head, body);
     if (showFoot && this.doc) {
       this.footStatus = h("span", { class: "foot-status" });
@@ -635,7 +851,8 @@ class Float {
     }
 
     if (!this.footStatus || !this.footActions) return;
-    const foot = `${this.status}|${dirty}|${this.prefs.autosave}|${this.statusMessage}|${this.savedAt}`;
+    const showFootActions = this.prefs.mode === "sheet" ? this.panel !== "collection" && this.panel !== "settings" && !!this.doc : true;
+    const foot = `${this.status}|${dirty}|${this.prefs.autosave}|${this.statusMessage}|${this.savedAt}|${this.panel}|${showFootActions}`;
     if (foot === this.lastFoot) return;
     this.lastFoot = foot;
 
@@ -672,10 +889,10 @@ class Float {
             actions.push(h("button", { class: "btn btn-sm btn-primary", type: "button", onClick: () => void this.save() }, "Save"));
           }
         } else {
-          text = this.savedAt ? `Saved ${formatTime(this.savedAt)}` : "Up to date";
+          text = this.doc ? (this.savedAt ? `Saved ${formatTime(this.savedAt)}` : "Up to date") : "";
         }
     }
-    if (this.panel === "source") {
+    if (this.panel === "source" && this.doc) {
       actions.unshift(
         h(
           "button",
@@ -1117,6 +1334,9 @@ class Float {
   // ---- settings -------------------------------------------------------------------
 
   private renderSettings(): HTMLElement {
+    const modeButton = (mode: ChromeMode) =>
+      h("button", { type: "button", "aria-pressed": String(this.prefs.mode === mode), onClick: () => this.setMode(mode) }, MODE_LABEL[mode]);
+
     const sideButton = (side: Side, label: string) =>
       h(
         "button",
@@ -1167,10 +1387,19 @@ class Float {
       { class: "panel-body pad" },
       h(
         "div",
-        { class: "setting" },
-        h("div", null, h("div", { class: "label" }, "Dock"), h("div", { class: "desc" }, "Which edge the rail lives on")),
-        h("div", { class: "segmented" }, sideButton("left", "Left"), sideButton("right", "Right")),
+        { class: "setting setting-stack" },
+        h("div", null, h("div", { class: "label" }, "Chrome"), h("div", { class: "desc" }, "Three ways to hang the editor off the Astro bar. Dev-only preview switch; remembered in this browser.")),
+        h("div", { class: "segmented segmented-wide" }, modeButton("toolbar"), modeButton("float"), modeButton("sheet")),
+        h("div", { class: "desc mode-blurb" }, `${MODE_LABEL[this.prefs.mode]} — ${MODE_BLURB[this.prefs.mode]}`),
       ),
+      this.prefs.mode === "float" || this.prefs.mode === "sheet"
+        ? h(
+            "div",
+            { class: "setting" },
+            h("div", null, h("div", { class: "label" }, "Dock"), h("div", { class: "desc" }, "Which edge the chrome lives on")),
+            h("div", { class: "segmented" }, sideButton("left", "Left"), sideButton("right", "Right")),
+          )
+        : null,
       autosave,
       h(
         "div",
@@ -1182,7 +1411,7 @@ class Float {
           h(
             "div",
             { class: "desc" },
-            "⌘/Ctrl+S save · ⌘B / ⌘I / ⌘K format · Tab / ⇧Tab nest lists · type “# ”, “- ”, “1. ”, “> ”, “```” at a line start · drop or paste images into the text · click a component block to move or remove it · Esc leaves the text",
+            "Hover anything grey to edit it · ⌘/Ctrl+S save · ⌘B / ⌘I / ⌘K format · Tab / ⇧Tab nest lists · type “# ”, “- ”, “1. ”, “> ”, “```” at a line start · drop or paste images into the text · click a component block to move or remove it · Esc leaves the text",
           ),
         ),
       ),
@@ -1224,11 +1453,21 @@ function isTouchDevice(): boolean {
   return matchMedia("(hover: none)").matches && navigator.maxTouchPoints > 0;
 }
 
+function readToolbarPlacement(): Placement {
+  const root = document.querySelector("astro-dev-toolbar")?.shadowRoot?.querySelector<HTMLElement>("#dev-toolbar-root");
+  const p = root?.dataset.placement;
+  return p === "bottom-left" || p === "bottom-right" ? p : "bottom-center";
+}
+
 function loadPrefs(): Prefs {
-  const defaults: Prefs = { side: "right", autosave: false };
+  const defaults: Prefs = { side: "right", autosave: false, mode: "toolbar" };
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    return { side: stored.side === "left" ? "left" : "right", autosave: Boolean(stored.autosave ?? defaults.autosave) };
+    return {
+      side: stored.side === "left" ? "left" : "right",
+      autosave: Boolean(stored.autosave ?? defaults.autosave),
+      mode: stored.mode === "float" || stored.mode === "sheet" ? stored.mode : "toolbar",
+    };
   } catch {
     return defaults;
   }
