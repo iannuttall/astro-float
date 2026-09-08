@@ -1,7 +1,8 @@
 import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
 import { h, replaceChildren } from "./dom";
 import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
-import { FieldBindings } from "./fields";
+import { DatePicker } from "./datepicker";
+import { DATE_LIKE, FieldBindings } from "./fields";
 import { icon } from "./icons";
 import { RegionControl } from "./overlays";
 import { detectEntry, routeFor, swapPage, type DetectedEntry } from "./page";
@@ -197,6 +198,7 @@ class Float {
     } else {
       window.clearTimeout(this.autosaveTimer);
       this.panelHidden = false;
+      DatePicker.close();
       this.exitSourceMode(false);
       this.page.detach();
       this.fields.detach();
@@ -369,6 +371,7 @@ class Float {
 
   /** (Re)read the current URL: which entry is this, bind the editors, draw the sidebar. */
   private async loadPage() {
+    DatePicker.close();
     this.exitSourceMode(false);
     this.page.unbind();
     this.fields.unbind();
@@ -673,6 +676,7 @@ class Float {
 
   private setPanelHidden(hidden: boolean) {
     this.panelHidden = hidden;
+    DatePicker.close();
     this.root.toggleAttribute("data-panel-hidden", hidden);
     if (hidden) this.releaseFocus();
     this.lastSlot = ""; // the status slot moves between the header and the tab
@@ -893,24 +897,35 @@ class Float {
         break;
       }
       case "date": {
-        // An emptied date is never written: the draft keeps the last real value until a date is picked.
-        const input = h("input", { class: "input", type: "date", value: String(value).slice(0, 10) }) as HTMLInputElement;
-        input.addEventListener("input", () => {
-          if (!input.value) {
-            input.dataset.invalid = "";
-            hint.textContent = `Empty — keeping ${String(this.draftFrontmatter[key] ?? original ?? "")} until you pick a date.`;
-            return;
-          }
-          delete input.dataset.invalid;
-          hint.textContent = "";
-          set(input.value);
+        // A real picker, shared with the date on the page. The stored shape is kept: date part swapped, any time suffix preserved.
+        const suffix = String(value).slice(10);
+        const label = h("span", { class: "date-field-label" }) as HTMLElement;
+        const button = h(
+          "button",
+          { class: "input date-field", type: "button", "aria-haspopup": "dialog", title: "Change the date" },
+          label,
+          icon("calendar", 14),
+        ) as HTMLButtonElement;
+        const paint = (v: unknown) => {
+          const iso = typeof v === "string" && DATE_LIKE.test(v) ? v.slice(0, 10) : "";
+          label.textContent = iso ? formatDateLabel(iso) : "Pick a date";
+          button.dataset.iso = iso;
+        };
+        paint(value);
+        button.addEventListener("click", (e) => {
+          e.preventDefault();
+          DatePicker.toggle({
+            anchor: button,
+            value: button.dataset.iso || null,
+            onPick: (iso) => {
+              const next = iso + suffix;
+              paint(next);
+              set(next);
+            },
+          });
         });
-        mirror((v) => {
-          if (this.canvas.activeElement === input) return;
-          const iso = typeof v === "string" ? v.slice(0, 10) : "";
-          if (input.value !== iso) input.value = iso;
-        });
-        control = input;
+        mirror((v) => paint(v));
+        control = button;
         break;
       }
       case "tags": {
@@ -1286,13 +1301,18 @@ function fieldKind(value: unknown): FieldKind {
   if (typeof value === "boolean") return "boolean";
   if (typeof value === "number") return "number";
   if (typeof value === "string") {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return "date";
+    if (DATE_LIKE.test(value)) return "date";
     if (value.length > 80 || value.includes("\n")) return "text";
     return "string";
   }
   if (Array.isArray(value) && value.every((v) => typeof v === "string" || typeof v === "number")) return "tags";
   if (value == null) return "string";
   return "json";
+}
+
+/** "Oct 3, 2026" — the sidebar's compact date label. */
+function formatDateLabel(iso: string) {
+  return new Intl.DateTimeFormat(document.documentElement.lang || navigator.language || "en", { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${iso}T00:00:00Z`));
 }
 
 function loadPrefs(): Prefs {

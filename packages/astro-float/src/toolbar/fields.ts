@@ -1,13 +1,16 @@
+import { DatePicker } from "./datepicker";
+
 /**
  * Frontmatter fields rendered on the page (`<h1 data-float-field="title">`)
  * become editable in place.
  *
  * - String fields bind when the rendered text matches the frontmatter value
- *   verbatim (title, description).
- * - Date fields (`YYYY-MM-DD` in frontmatter) bind when the element prints a
- *   formatted version of that date. Float works out which Intl format the page
- *   used by reproducing the rendered text, so what you type is parsed back to
- *   `YYYY-MM-DD` for the file and re-formatted the same way on the page.
+ *   verbatim (title, description). Plain-text caret.
+ * - Date fields (`YYYY-MM-DD`, optionally with a time suffix, in frontmatter)
+ *   bind when the element prints a formatted version of that date. Clicking
+ *   the date opens a calendar; the pick is written back in the value's
+ *   original shape (date part swapped, any suffix kept) and re-formatted on
+ *   the page the same way the page did it.
  *
  * Everything else (joined tags, booleans, numbers) stays sidebar-only.
  */
@@ -17,10 +20,12 @@ export interface FieldBindingHooks {
 
 type Binding =
   | { kind: "string"; el: HTMLElement }
-  | { kind: "date"; el: HTMLElement; format: (iso: string) => string; last: string };
+  | { kind: "date"; el: HTMLElement; format: (iso: string) => string; last: string; suffix: string };
 
 const PLACEHOLDERS: Record<string, string> = { title: "Untitled", description: "Add a description…", pubDate: "Add a date…" };
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+/** `2026-09-01`, `2026-09-01T10:00:00Z`, `2026-09-01 10:00` … — a date we can put a picker on. */
+export const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
 
 export class FieldBindings {
   private els = new Map<string, Binding>();
@@ -36,9 +41,10 @@ export class FieldBindings {
       if (!key || this.els.has(key)) continue;
       const value = frontmatter[key];
       const text = normalize(el.textContent ?? "");
-      if (typeof value === "string" && ISO_DATE.test(value)) {
-        const format = detectDateFormat(el, value, text);
-        if (format) this.els.set(key, { kind: "date", el, format, last: value });
+      if (typeof value === "string" && DATE_LIKE.test(value)) {
+        const iso = value.slice(0, 10);
+        const format = detectDateFormat(el, iso, text);
+        if (format) this.els.set(key, { kind: "date", el, format, last: iso, suffix: value.slice(10) });
         continue;
       }
       if (typeof value !== "string" && value !== undefined && value !== null) continue;
@@ -51,65 +57,107 @@ export class FieldBindings {
     if (this.attached) return;
     this.attached = true;
     for (const [key, binding] of this.els) {
-      const { el } = binding;
-      el.contentEditable = "plaintext-only";
-      if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
-      el.setAttribute("data-float-editing-field", "");
-      el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
-      el.spellcheck = binding.kind === "string";
-
-      const onInput = () => {
-        const text = normalize(el.textContent ?? "");
-        // Chrome leaves a <br> behind when the last character goes; clear it so :empty (placeholder) applies.
-        if (text === "" && el.innerHTML !== "") el.textContent = "";
-        if (binding.kind === "date") {
-          const iso = parseDateText(text);
-          el.toggleAttribute("data-float-invalid", !iso && text !== "");
-          if (iso) {
-            binding.last = iso;
-            this.hooks.onChange(key, iso);
-          }
-          return;
-        }
-        this.hooks.onChange(key, text);
-      };
-      const onBlur = () => {
-        if (binding.kind !== "date") return;
-        // Settle on the page's own format; an unparseable edit falls back to the last real date.
-        el.removeAttribute("data-float-invalid");
-        this.paintDate(binding, binding.last);
-      };
-      const onKeydown = (e: KeyboardEvent) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          el.blur();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          e.stopPropagation();
-          el.blur();
-        }
-      };
-      const onKeyup = (e: KeyboardEvent) => {
-        if (e.key === "Escape") e.stopPropagation();
-      };
-      const onPaste = (e: ClipboardEvent) => {
-        if (el.contentEditable === "plaintext-only") return;
-        e.preventDefault();
-        document.execCommand("insertText", false, (e.clipboardData?.getData("text/plain") ?? "").replace(/\s+/g, " "));
-      };
-      el.addEventListener("input", onInput);
-      el.addEventListener("blur", onBlur);
-      el.addEventListener("keydown", onKeydown);
-      el.addEventListener("keyup", onKeyup);
-      el.addEventListener("paste", onPaste);
-      this.listeners.push(() => {
-        el.removeEventListener("input", onInput);
-        el.removeEventListener("blur", onBlur);
-        el.removeEventListener("keydown", onKeydown);
-        el.removeEventListener("keyup", onKeyup);
-        el.removeEventListener("paste", onPaste);
-      });
+      if (binding.kind === "date") this.attachDate(key, binding);
+      else this.attachText(key, binding.el);
     }
+  }
+
+  /** A date on the page: click (or Enter / Space) opens the calendar; no caret. */
+  private attachDate(key: string, binding: Extract<Binding, { kind: "date" }>) {
+    const { el } = binding;
+    el.setAttribute("data-float-editing-field", "");
+    el.setAttribute("data-float-date", "");
+    el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
+    el.setAttribute("role", "button");
+    el.setAttribute("aria-haspopup", "dialog");
+    el.setAttribute("title", "Change the date");
+    el.tabIndex = 0;
+    const open = () => {
+      DatePicker.toggle({
+        anchor: el,
+        value: binding.last || null,
+        locale: el.closest<HTMLElement>("[lang]")?.lang || undefined,
+        onPick: (iso) => {
+          binding.last = iso;
+          this.paintDate(binding, iso);
+          this.hooks.onChange(key, iso + binding.suffix);
+        },
+      });
+    };
+    const onClick = (e: MouseEvent) => {
+      e.preventDefault();
+      open();
+    };
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        el.blur();
+      }
+    };
+    const onKeyup = (e: KeyboardEvent) => {
+      if (e.key === "Escape") e.stopPropagation();
+    };
+    el.addEventListener("click", onClick);
+    el.addEventListener("keydown", onKeydown);
+    el.addEventListener("keyup", onKeyup);
+    this.listeners.push(() => {
+      if (DatePicker.isOpenFor(el)) DatePicker.close();
+      el.removeEventListener("click", onClick);
+      el.removeEventListener("keydown", onKeydown);
+      el.removeEventListener("keyup", onKeyup);
+      el.removeAttribute("role");
+      el.removeAttribute("aria-haspopup");
+      el.removeAttribute("title");
+      el.removeAttribute("tabindex");
+      el.removeAttribute("data-float-date");
+    });
+  }
+
+  private attachText(key: string, el: HTMLElement) {
+    el.contentEditable = "plaintext-only";
+    if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
+    el.setAttribute("data-float-editing-field", "");
+    el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
+    el.spellcheck = true;
+
+    const onInput = () => {
+      const text = normalize(el.textContent ?? "");
+      // Chrome leaves a <br> behind when the last character goes; clear it so :empty (placeholder) applies.
+      if (text === "" && el.innerHTML !== "") el.textContent = "";
+      this.hooks.onChange(key, text);
+    };
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        el.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        el.blur();
+      }
+    };
+    const onKeyup = (e: KeyboardEvent) => {
+      if (e.key === "Escape") e.stopPropagation();
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      if (el.contentEditable === "plaintext-only") return;
+      e.preventDefault();
+      document.execCommand("insertText", false, (e.clipboardData?.getData("text/plain") ?? "").replace(/\s+/g, " "));
+    };
+    el.addEventListener("input", onInput);
+    el.addEventListener("keydown", onKeydown);
+    el.addEventListener("keyup", onKeyup);
+    el.addEventListener("paste", onPaste);
+    this.listeners.push(() => {
+      el.removeEventListener("input", onInput);
+      el.removeEventListener("keydown", onKeydown);
+      el.removeEventListener("keyup", onKeyup);
+      el.removeEventListener("paste", onPaste);
+    });
   }
 
   detach() {
@@ -121,7 +169,6 @@ export class FieldBindings {
       el.removeAttribute("contenteditable");
       el.removeAttribute("data-float-editing-field");
       el.removeAttribute("data-float-placeholder");
-      el.removeAttribute("data-float-invalid");
     }
   }
 
@@ -144,13 +191,15 @@ export class FieldBindings {
     return Array.from(this.els.keys());
   }
 
-  /** Push a value from the sidebar into the page (skipped while that element has the caret). */
+  /** Push a value from the sidebar into the page (a text field is skipped while it has the caret; a date has no caret). */
   setValue(key: string, value: unknown) {
     const binding = this.els.get(key);
-    if (!binding || document.activeElement === binding.el) return;
+    if (!binding) return;
+    if (binding.kind === "string" && document.activeElement === binding.el) return;
     if (binding.kind === "date") {
-      const iso = typeof value === "string" && ISO_DATE.test(value) ? value : "";
+      const iso = typeof value === "string" && DATE_LIKE.test(value) ? value.slice(0, 10) : "";
       binding.last = iso;
+      if (typeof value === "string" && DATE_LIKE.test(value)) binding.suffix = value.slice(10);
       this.paintDate(binding, iso);
       return;
     }
@@ -218,17 +267,6 @@ function detectDateFormat(el: HTMLElement, iso: string, text: string): ((iso: st
     return (v) => fmt.format(utcDate(v));
   }
   return null;
-}
-
-/** "September 2, 2026", "2 Sep 2026", "2026-09-02", "09/02/2026" → "2026-09-02"; anything else → null. */
-export function parseDateText(text: string): string | null {
-  const t = text.trim();
-  if (!t) return null;
-  if (ISO_DATE.test(t)) return Number.isNaN(utcDate(t).valueOf()) ? null : t;
-  const d = new Date(t);
-  if (Number.isNaN(d.valueOf()) || !/\d{4}/.test(t)) return null;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function unique(values: Array<string | undefined>): string[] {

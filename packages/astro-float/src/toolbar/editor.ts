@@ -90,7 +90,58 @@ const PAGE_STYLE = /* css */ `
 
 /* Frontmatter fields edited in place (title, description, date, …). */
 [data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
-[data-float-editing-field][data-float-invalid] { text-decoration: underline wavy #ef6f6c; text-decoration-skip-ink: none; text-underline-offset: 3px; }
+[data-float-editing-field][data-float-date] { cursor: pointer; }
+[data-float-editing-field][data-float-date][data-float-open]::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+
+/* Calendar popover, shared by the date on the page and the sidebar's date control. */
+.astro-float-datepicker {
+  position: fixed;
+  z-index: 2000000002;
+  width: 244px;
+  padding: 8px;
+  background: #15181c;
+  border: 1px solid #2a3038;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+  color: #e6e8eb;
+  font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  box-sizing: border-box;
+  animation: astro-float-dp-in 120ms ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+@keyframes astro-float-dp-in { from { opacity: 0; transform: translateY(-2px); } }
+.astro-float-datepicker[data-above] { animation-name: astro-float-dp-in-up; }
+@keyframes astro-float-dp-in-up { from { opacity: 0; transform: translateY(2px); } }
+.astro-float-datepicker button {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  border-radius: 4px;
+  color: #b4bac4;
+  cursor: pointer;
+  font: inherit;
+  transition: background 100ms ease, color 100ms ease;
+}
+.astro-float-datepicker button:hover { background: #22262c; color: #e6e8eb; }
+.astro-float-datepicker button:focus-visible { outline: 1px solid #4a5260; outline-offset: -1px; }
+.astro-float-dp-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; height: 28px; margin-bottom: 6px; }
+.astro-float-dp-head button { width: 26px; height: 26px; }
+.astro-float-dp-head button svg { width: 14px; height: 14px; display: block; }
+.astro-float-dp-label { flex: 1; text-align: center; font-weight: 500; color: #e6e8eb; }
+.astro-float-dp-weekdays, .astro-float-dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.astro-float-dp-weekdays span { height: 22px; display: grid; place-items: center; font-size: 10.5px; color: #5c6470; }
+.astro-float-dp-grid button { height: 30px; font-size: 12px; font-variant-numeric: tabular-nums; position: relative; }
+.astro-float-dp-grid button[data-outside] { color: #5c6470; }
+.astro-float-dp-grid button[data-today]::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 3px; height: 3px; border-radius: 999px; background: currentColor; transform: translateX(-50%); }
+.astro-float-dp-grid button[data-selected] { background: #e6e8eb; color: #0f1114; font-weight: 500; }
+.astro-float-dp-grid button[data-selected]:hover { background: #fff; color: #0f1114; }
+.astro-float-dp-foot { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px solid #2a3038; }
+.astro-float-dp-foot button { height: 24px; padding: 0 8px; font-size: 11.5px; color: #8b93a1; }
 
 /* Overlays live in the page, never inside the editable body. */
 .astro-float-frame, .astro-float-dropline { position: fixed; z-index: 2000000001; pointer-events: none; box-sizing: border-box; }
@@ -175,6 +226,10 @@ const PAGE_STYLE = /* css */ `
 @media (pointer: coarse) {
   .astro-float-region button, .astro-float-bubble button, .astro-float-bar button { height: 36px; min-width: 36px; }
   .astro-float-region, .astro-float-bubble, .astro-float-bar { padding: 3px; }
+  .astro-float-datepicker { width: 300px; }
+  .astro-float-dp-grid button { height: 38px; font-size: 14px; }
+  .astro-float-dp-head button { width: 34px; height: 34px; }
+  .astro-float-dp-foot button { height: 34px; font-size: 13px; }
   .astro-float-bubble input { height: 36px; font-size: 16px; }
   .astro-float-bar .astro-float-confirm button { height: 34px; }
 }

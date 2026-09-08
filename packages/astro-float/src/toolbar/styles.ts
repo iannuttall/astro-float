@@ -202,8 +202,11 @@ export const STYLES = /* css */ `
 .input:hover, .textarea:hover, .select:hover { border-color: var(--line-focus); }
 .input:focus, .textarea:focus, .select:focus { border-color: var(--line-focus); outline: none; box-shadow: 0 0 0 1px var(--line-focus); }
 .input[data-invalid], .textarea[data-invalid] { border-color: var(--err); box-shadow: none; }
-.input[type="date"] { color-scheme: dark; }
-.input[type="date"]::-webkit-calendar-picker-indicator { opacity: 0.5; cursor: pointer; }
+.date-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; cursor: pointer; }
+.date-field svg { color: var(--fg-faint); }
+.date-field:hover svg { color: var(--fg-muted); }
+.date-field[data-float-open] { border-color: var(--line-focus); box-shadow: 0 0 0 1px var(--line-focus); }
+.date-field[data-iso=""] .date-field-label { color: var(--fg-faint); }
 .textarea { resize: vertical; line-height: 1.5; }
 .textarea.mono { font-family: var(--mono); font-size: 12px; }
 .select {

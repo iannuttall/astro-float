@@ -14,6 +14,8 @@ const PATHS = {
   close: `<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`,
   check: `<path d="M20 6 9 17l-5-5"/>`,
   chevron: `<path d="m9 18 6-6-6-6"/>`,
+  chevronLeft: `<path d="m15 18-6-6 6-6"/>`,
+  calendar: `<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>`,
   folderPlus: `<path d="M12 10v6"/><path d="M9 13h6"/><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>`,
   panelClose: `<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m8 9 3 3-3 3"/>`,
   panelOpen: `<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/><path d="m10 15-3-3 3-3"/>`,

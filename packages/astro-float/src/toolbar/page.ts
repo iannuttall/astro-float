@@ -89,7 +89,7 @@ export function routeFor(collection: Collection, id: string): { href: string; gu
 
 /** Elements that belong to dev tooling, not the page: never swapped out. */
 const KEEP_SELECTOR =
-  "astro-dev-toolbar, [data-astro-float-host], .astro-float-region, .astro-float-bubble, .astro-float-bar, .astro-float-frame, .astro-float-dropline";
+  "astro-dev-toolbar, [data-astro-float-host], .astro-float-region, .astro-float-bubble, .astro-float-bar, .astro-float-frame, .astro-float-dropline, .astro-float-datepicker";
 
 /**
  * Render a page in place: fetch its HTML from the dev server and swap
