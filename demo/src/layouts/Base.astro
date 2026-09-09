@@ -1,0 +1,78 @@
+---
+interface Props {
+  title: string;
+  description?: string;
+}
+const { title, description = "A small blog used to demo astro-float." } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta name="description" content={description} />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/">Field Notes</a>
+      <nav>
+        <a href="/">Posts</a>
+        <a href="https://github.com/iannuttall/astro-float" rel="noopener">astro-float</a>
+      </nav>
+    </header>
+    <main>
+      <slot />
+    </main>
+    <footer class="site-footer">
+      <span>Run <code>pnpm dev</code>, click the pencil in the Astro toolbar, and type on the page.</span>
+    </footer>
+  </body>
+</html>
+
+<style is:global>
+  :root {
+    --bg: #fbfbfc;
+    --fg: #14161b;
+    --muted: #6b7280;
+    --faint: #9ca3af;
+    --line: rgba(20, 22, 27, 0.08);
+    --card: #ffffff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+  code { font-family: var(--mono); font-size: 0.9em; }
+
+  .site-header, main, .site-footer {
+    width: min(680px, calc(100% - 48px));
+    margin: 0 auto;
+  }
+  .site-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 28px 0;
+  }
+  .brand { font-weight: 600; letter-spacing: -0.01em; }
+  .site-header nav { display: flex; gap: 20px; font-size: 14px; color: var(--muted); }
+  .site-header nav a:hover { color: var(--fg); }
+  main { padding: 24px 0 64px; }
+  .site-footer {
+    padding: 24px 0 48px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .site-footer code { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+</style>

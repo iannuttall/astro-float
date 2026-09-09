@@ -1,0 +1,33 @@
+---
+/** A tiny component used from MDX to demonstrate Float's island handling. */
+interface Props {
+  title?: string;
+  tone?: "note" | "tip" | "warn";
+}
+const { title = "Note", tone = "note" } = Astro.props;
+---
+
+<aside class={`callout callout-${tone}`}>
+  <strong class="callout-title">{title}</strong>
+  <div class="callout-body"><slot /></div>
+</aside>
+
+<style>
+  .callout {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0 0 18px;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-left-width: 3px;
+    border-radius: 8px;
+    background: #fff;
+  }
+  .callout-note { border-left-color: #64748b; }
+  .callout-tip { border-left-color: #15803d; }
+  .callout-warn { border-left-color: #b45309; }
+  .callout-title { font-size: 14px; }
+  .callout-body { font-size: 15px; color: var(--muted); }
+  .callout-body :global(p:last-child) { margin-bottom: 0; }
+</style>

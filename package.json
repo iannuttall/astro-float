@@ -1,0 +1,15 @@
+{
+  "name": "astro-float-monorepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter demo dev",
+    "build": "pnpm --filter demo build",
+    "preview": "pnpm --filter demo preview",
+    "check": "pnpm --filter demo check"
+  },
+  "packageManager": "pnpm@10.33.3",
+  "engines": {
+    "node": ">=20"
+  }
+}

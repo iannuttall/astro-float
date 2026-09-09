@@ -1,0 +1,62 @@
+---
+/** Generic listing for any collection (e.g. /til/). The blog keeps its own home page. */
+import { getCollection } from "astro:content";
+import { collections } from "../../content.config";
+import Base from "../../layouts/Base.astro";
+
+export async function getStaticPaths() {
+  return Object.keys(collections)
+    .filter((name) => name !== "blog")
+    .map((name) => ({ params: { collection: name } }));
+}
+
+const { collection } = Astro.params;
+const entries = (await getCollection(collection as keyof typeof collections)) as Array<{
+  id: string;
+  data: Record<string, unknown>;
+}>;
+entries.sort((a, b) => {
+  const da = a.data.pubDate instanceof Date ? a.data.pubDate.valueOf() : 0;
+  const db = b.data.pubDate instanceof Date ? b.data.pubDate.valueOf() : 0;
+  return db - da;
+});
+const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "short", day: "numeric" });
+---
+
+<Base title={`${collection} · Field Notes`}>
+  <section class="intro">
+    <h1>{collection}</h1>
+    <p>{entries.length} {entries.length === 1 ? "entry" : "entries"} in <code>src/content/{collection}/</code>.</p>
+  </section>
+  <ul class="posts">
+    {entries.map((entry) => (
+      <li>
+        <a href={`/${collection}/${entry.id}/`}>
+          <div class="row">
+            <h2>{typeof entry.data.title === "string" ? entry.data.title : entry.id}</h2>
+            {entry.data.draft === true && <span class="badge">Draft</span>}
+          </div>
+          {typeof entry.data.description === "string" && entry.data.description && <p>{entry.data.description}</p>}
+          {entry.data.pubDate instanceof Date && (
+            <div class="meta"><time datetime={entry.data.pubDate.toISOString()}>{fmt.format(entry.data.pubDate)}</time></div>
+          )}
+        </a>
+      </li>
+    ))}
+  </ul>
+</Base>
+
+<style>
+  .intro h1 { font-size: 28px; letter-spacing: -0.02em; margin: 0 0 8px; }
+  .intro p { color: var(--muted); margin: 0 0 32px; }
+  .posts { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; }
+  .posts li { border-top: 1px solid var(--line); }
+  .posts li:last-child { border-bottom: 1px solid var(--line); }
+  .posts a { display: block; padding: 22px 0; }
+  .posts .row { display: flex; align-items: center; gap: 10px; }
+  .posts h2 { font-size: 18px; margin: 0; letter-spacing: -0.01em; }
+  .posts p { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+  .meta { margin-top: 10px; font-size: 13px; color: var(--faint); }
+  .badge { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+  .posts a:hover h2 { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+</style>

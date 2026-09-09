@@ -1,0 +1,38 @@
+{
+  "name": "astro-float",
+  "version": "0.0.1",
+  "description": "Minimal floating content editor for Astro content collections. Dev-only, lives in the Astro Dev Toolbar.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "types": "./index.d.ts",
+  "files": [
+    "src",
+    "index.d.ts",
+    "README.md"
+  ],
+  "keywords": [
+    "astro",
+    "astro-integration",
+    "withastro",
+    "dev-toolbar",
+    "cms",
+    "content-collections"
+  ],
+  "peerDependencies": {
+    "astro": "^5.0.0"
+  },
+  "dependencies": {
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "mdast-util-mdx": "^3.0.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "micromark-extension-mdxjs": "^3.0.0",
+    "yaml": "^2.6.1"
+  }
+}

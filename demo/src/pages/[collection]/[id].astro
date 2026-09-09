@@ -1,0 +1,78 @@
+---
+/**
+ * Generic entry page for any collection that doesn't have its own route.
+ * This is what lets a collection created from the Float rail render right away:
+ * `src/content/til/first-entry/index.md` → /til/first-entry/
+ */
+import { getCollection, render } from "astro:content";
+import { collections } from "../../content.config";
+import Base from "../../layouts/Base.astro";
+
+export async function getStaticPaths() {
+  // Collections with a dedicated route under src/pages skip the generic one.
+  // (Declared inside: getStaticPaths runs in isolation from the frontmatter.)
+  const dedicated = new Set(["blog"]);
+  const paths = [];
+  for (const name of Object.keys(collections)) {
+    if (dedicated.has(name)) continue;
+    const entries = await getCollection(name as keyof typeof collections);
+    for (const entry of entries) {
+      paths.push({ params: { collection: name, id: entry.id }, props: { entry, collection: name } });
+    }
+  }
+  return paths;
+}
+
+const { entry, collection } = Astro.props;
+const { Content } = await render(entry);
+const data = entry.data as Record<string, unknown>;
+const title = typeof data.title === "string" ? data.title : entry.id;
+const description = typeof data.description === "string" ? data.description : "";
+const date = data.pubDate instanceof Date ? data.pubDate : null;
+const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day: "numeric" });
+---
+
+<Base title={`${title} · ${collection}`} description={description}>
+  <article data-float-entry={`${collection}:${entry.id}`}>
+    <header>
+      <div class="meta">
+        <a href={`/${collection}/`}>{collection}</a>
+        {date && <span>·</span>}
+        {date && <time datetime={date.toISOString()} data-float-field="pubDate">{fmt.format(date)}</time>}
+        {data.draft === true && <span class="badge">Draft</span>}
+      </div>
+      <h1 data-float-field="title">{title}</h1>
+      <p class="lede" data-float-field="description">{description}</p>
+    </header>
+    <div class="prose" data-float-body>
+      <Content />
+    </div>
+  </article>
+  <p class="back"><a href={`/${collection}/`}>← All {collection}</a></p>
+</Base>
+
+<style>
+  article header { margin-bottom: 32px; }
+  .meta { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); margin-bottom: 10px; }
+  .meta a { color: var(--muted); }
+  .badge { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+  h1 { font-size: 32px; line-height: 1.2; letter-spacing: -0.02em; margin: 0; }
+  .lede { color: var(--muted); font-size: 17px; margin: 12px 0 0; }
+  .lede:empty:not([data-float-editing-field]) { display: none; }
+  .back { margin-top: 40px; font-size: 14px; color: var(--muted); }
+  .back a:hover { color: var(--fg); }
+</style>
+
+<style is:global>
+  .prose > :first-child { margin-top: 0; }
+  .prose h2 { font-size: 22px; letter-spacing: -0.01em; margin: 36px 0 12px; }
+  .prose h3 { font-size: 18px; margin: 28px 0 8px; }
+  .prose p, .prose ul, .prose ol { margin: 0 0 18px; }
+  .prose li { margin: 4px 0; }
+  .prose a { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+  .prose blockquote { margin: 0 0 18px; padding: 2px 0 2px 18px; border-left: 2px solid var(--line); color: var(--muted); }
+  .prose pre { background: #14161b; color: #e7e9ee; padding: 16px 18px; border-radius: 8px; overflow: auto; font-size: 13.5px; line-height: 1.6; }
+  .prose :not(pre) > code { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  .prose img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); display: block; margin: 24px 0; }
+  .prose hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0; }
+</style>

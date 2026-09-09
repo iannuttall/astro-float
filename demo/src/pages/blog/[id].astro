@@ -1,0 +1,68 @@
+---
+import { getCollection, render } from "astro:content";
+import Base from "../../layouts/Base.astro";
+
+export async function getStaticPaths() {
+  const posts = await getCollection("blog");
+  return posts.map((post) => ({ params: { id: post.id }, props: { post } }));
+}
+
+const { post } = Astro.props;
+const { Content } = await render(post);
+const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day: "numeric" });
+---
+
+<Base title={`${post.data.title} · Field Notes`} description={post.data.description}>
+  {/* Three attributes are all Float needs:
+      - data-float-entry binds the page to its collection entry (optional; Float
+        can also infer it from the URL)
+      - data-float-body marks the element that wraps the rendered Markdown body;
+        it becomes editable in place in dev
+      - data-float-field="<frontmatter key>" on an element that prints a string
+        field verbatim — or a formatted date — makes that field editable in place too */}
+  <article data-float-entry={`blog:${post.id}`}>
+    <header>
+      <div class="meta">
+        <time datetime={post.data.pubDate.toISOString()} data-float-field="pubDate">{fmt.format(post.data.pubDate)}</time>
+        {post.data.draft && <span class="badge">Draft</span>}
+      </div>
+      <h1 data-float-field="title">{post.data.title}</h1>
+      <p class="lede" data-float-field="description">{post.data.description}</p>
+    </header>
+    <div class="prose" data-float-body>
+      <Content />
+    </div>
+    {post.data.tags.length > 0 && (
+      <footer class="tags">
+        {post.data.tags.map((tag) => <span>#{tag}</span>)}
+      </footer>
+    )}
+  </article>
+  <p class="back"><a href="/">← All posts</a></p>
+</Base>
+
+<style>
+  article header { margin-bottom: 32px; }
+  .meta { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--faint); margin-bottom: 10px; }
+  .badge { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+  h1 { font-size: 32px; line-height: 1.2; letter-spacing: -0.02em; margin: 0; }
+  .lede { color: var(--muted); font-size: 17px; margin: 12px 0 0; }
+  .lede:empty:not([data-float-editing-field]) { display: none; }
+  .tags { display: flex; gap: 12px; margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
+  .back { margin-top: 40px; font-size: 14px; color: var(--muted); }
+  .back a:hover { color: var(--fg); }
+</style>
+
+<style is:global>
+  .prose > :first-child { margin-top: 0; }
+  .prose h2 { font-size: 22px; letter-spacing: -0.01em; margin: 36px 0 12px; }
+  .prose h3 { font-size: 18px; margin: 28px 0 8px; }
+  .prose p, .prose ul, .prose ol { margin: 0 0 18px; }
+  .prose li { margin: 4px 0; }
+  .prose a { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+  .prose blockquote { margin: 0 0 18px; padding: 2px 0 2px 18px; border-left: 2px solid var(--line); color: var(--muted); }
+  .prose pre { background: #14161b; color: #e7e9ee; padding: 16px 18px; border-radius: 8px; overflow: auto; font-size: 13.5px; line-height: 1.6; }
+  .prose :not(pre) > code { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+  .prose img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); display: block; margin: 24px 0; }
+  .prose hr { border: 0; border-top: 1px solid var(--line); margin: 32px 0; }
+</style>
