@@ -168,24 +168,37 @@ export class Pill {
     });
     this.yamlHost = h("section", { class: "pop-section pop-yaml", hidden: true }, this.yaml.el);
 
+    // Autosave is a row like any boolean field: same label, help line, padding and switch.
     const autosave = h(
       "button",
       {
-        class: "toggle autosave",
+        class: "toggle",
         type: "button",
         role: "switch",
         "aria-checked": String(host.prefs.autosave),
-        "data-tip": "Write to disk shortly after you stop typing",
+        "aria-label": "Autosave",
         onClick: () => {
           const next = !host.prefs.autosave;
           host.setAutosave(next);
           autosave.setAttribute("aria-checked", String(next));
         },
       },
-      h("span", { class: "autosave-label" }, "Autosave"),
-      h("span", { class: "switch switch-sm" }),
+      h("span", { class: "switch" }),
     );
-    const settings = h("section", { class: "pop-section pop-settings" }, autosave);
+    const settings = h(
+      "section",
+      { class: "pop-section pop-settings" },
+      h(
+        "div",
+        { class: "row", "data-type": "boolean", "data-inline": "" },
+        h(
+          "div",
+          { class: "row-head" },
+          h("div", { class: "row-text" }, h("span", { class: "row-label" }, h("span", { class: "row-name" }, "Autosave")), h("span", { class: "row-help" }, "Writes shortly after you stop typing")),
+          h("div", { class: "row-side" }, autosave),
+        ),
+      ),
+    );
 
     this.footHost = h("section", { class: "pop-section pop-entries" });
     const body = h("div", { class: "pop-body" }, this.fieldsHost, this.yamlHost, settings, this.footHost);

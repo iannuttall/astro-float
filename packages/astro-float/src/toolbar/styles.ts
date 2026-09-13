@@ -154,7 +154,7 @@ export const STYLES = /* css */ `
   animation: pop-in 120ms ease;
 }
 @keyframes pop-in { from { opacity: 0; transform: translateY(4px); } }
-.pop-head { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 6px 8px 6px 14px; border-bottom: 0.5px solid var(--hairline); flex: none; }
+.pop-head { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 6px 6px 6px 14px; border-bottom: 0.5px solid var(--hairline); flex: none; }
 .pop-entry { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pop-collection { font-weight: 400; color: var(--fg-muted); }
 .pop-actions { display: flex; align-items: center; gap: 4px; }
@@ -176,16 +176,10 @@ export const STYLES = /* css */ `
 .pop-section { border-bottom: 0.5px solid var(--hairline); }
 .pop-section:last-child { border-bottom: 0; }
 .pop-yaml { display: flex; flex-direction: column; min-height: 200px; }
-.pop-settings { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 6px 14px; }
-.empty { padding: 12px 14px; color: var(--fg-muted); font-size: 12.5px; line-height: 1.55; margin: 0; }
+.pop-settings .row { border-bottom: 0; }
+.empty { padding: 10px 14px; color: var(--fg-muted); font-size: 12px; line-height: 1.55; margin: 0; }
 .empty code { font-family: var(--mono); font-size: 11px; background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
 
-.autosave { flex: none; gap: 8px; height: 28px; padding: 0 6px; border-radius: var(--radius-sm); width: 100%; justify-content: space-between; }
-.autosave:hover { background: var(--bg-hover); }
-.autosave-label { font-size: 12.5px; color: var(--fg); }
-.switch-sm { width: 26px; height: 16px; }
-.switch-sm::after { width: 12px; height: 12px; }
-[aria-checked="true"] > .switch-sm::after { transform: translateX(10px); }
 
 /* ---- controls ------------------------------------------------------------- */
 .btn {
@@ -349,14 +343,14 @@ export const STYLES = /* css */ `
 .row-remove:hover { background: var(--bg-hover); color: var(--fg); }
 .row-note { font-size: 11.5px; line-height: 1.45; color: var(--warn); }
 .row-note:empty { display: none; }
-.row-error { font-size: 11.5px; line-height: 1.45; color: var(--err); }
+.row-error { font-size: 12px; line-height: 1.45; color: var(--err); }
 .form-errors { padding: 8px 14px; border-bottom: 0.5px solid var(--hairline); }
-.form-error-line { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--err); }
+.form-error-line { margin: 0; font-size: 12px; line-height: 1.5; color: var(--err); }
 .row-removed .row-label { text-decoration: line-through; color: var(--fg-faint); }
 .row[data-unset] .row-help::after { content: " · not set"; color: var(--fg-faint); }
 .row[data-unset][data-type="boolean"] .switch { opacity: 0.6; }
-.field-add { display: flex; gap: 6px; padding: 12px 14px; }
-.form-note { margin: 0; padding: 8px 14px; font-size: 11.5px; line-height: 1.5; color: var(--fg-muted); border-bottom: 1px solid var(--line); word-break: break-all; }
+.field-add { display: flex; gap: 6px; padding: 10px 14px; }
+.form-note { margin: 0; padding: 8px 14px; font-size: 12px; line-height: 1.5; color: var(--fg-muted); border-bottom: 0.5px solid var(--hairline); word-break: break-all; }
 
 /* ---- code views (YAML / Markdown) ---------------------------------------------- */
 .code-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -431,8 +425,8 @@ export const STYLES = /* css */ `
 
 /* ---- footer: collection / entries ----------------------------------------------- */
 .foot { background: var(--bg); }
-.foot-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 6px; min-height: 40px; }
-.foot-name { font-weight: 500; font-size: 12.5px; padding: 0 8px; }
+.foot-bar { display: flex; align-items: center; gap: 4px; padding: 6px 14px 6px 6px; min-height: 40px; }
+.foot-name { font-weight: 500; font-size: 13px; padding: 0 8px; }
 .foot-toggle { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px 0 4px; border-radius: var(--radius-sm); color: var(--fg-muted); font-size: 12px; flex: 1; min-width: 0; }
 .foot-toggle:hover { background: var(--bg-hover); color: var(--fg); }
 .foot-toggle svg { transition: transform 150ms ease; }
@@ -441,7 +435,7 @@ export const STYLES = /* css */ `
 .foot-body { max-height: min(40vh, 320px); overflow-y: auto; border-top: 0.5px solid var(--hairline); padding: 6px 0; scrollbar-width: none; }
 .foot-body::-webkit-scrollbar { display: none; }
 .list { display: flex; flex-direction: column; padding: 0 6px; }
-.list-item { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: var(--radius-sm); min-width: 0; width: 100%; color: var(--fg); font-size: 12.5px; }
+.list-item { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: var(--radius-sm); min-width: 0; width: 100%; color: var(--fg); font-size: 13px; }
 .list-item:hover { background: var(--bg-hover); }
 .list-item[aria-current="page"] { background: var(--bg-elev); font-weight: 500; }
 .list-item .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -451,12 +445,12 @@ export const STYLES = /* css */ `
 .list-item + .list-action { margin-top: 6px; position: relative; }
 .list-item + .list-action::before { content: ""; position: absolute; left: 8px; right: 8px; top: -4px; border-top: 1px solid var(--line); }
 
-.card { display: flex; flex-direction: column; gap: 10px; margin: 4px 10px 10px; padding: 12px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--bg-elev); }
-.card-title { font-size: 12.5px; font-weight: 600; }
+.card { display: flex; flex-direction: column; gap: 10px; margin: 8px 14px 12px; padding: 12px 14px; border: 0.5px solid var(--hairline); border-radius: var(--radius); background: var(--bg-elev); }
+.card-title { font-size: 13px; font-weight: 500; }
 .card label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--fg-muted); }
 .card .input { background: var(--bg-input); }
-.card-note { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--fg-faint); }
-.form-error { font-size: 11.5px; color: var(--err); }
+.card-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--fg-muted); }
+.form-error { font-size: 12px; color: var(--err); }
 .form-error:empty { display: none; }
 .card-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
