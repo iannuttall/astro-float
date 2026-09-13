@@ -1,0 +1,3 @@
+- [ ] write the tests
+- [x] read the source
+- [ ] a task with `code`

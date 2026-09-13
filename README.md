@@ -17,6 +17,12 @@ pnpm dev            # or: pnpm --filter demo exec astro dev
 
 Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal the Astro toolbar, and click the pencil (**Edit**). Hover the date, the title or the article — grey means editable — and type. Click the pencil again to leave (unsaved work is saved first).
 
+```sh
+pnpm test              # unit tests (vitest): serializer round trips, block splitting, schema mapping, frontmatter
+pnpm test:e2e:setup    # once: download Chromium for Playwright
+pnpm test:e2e          # browser tests against the demo (starts its own astro dev on a free port)
+```
+
 > Local `astro dev` is the only real preview path — the editor writes to your filesystem. A Vercel/Netlify preview would only show the plain blog, since the integration is stripped from builds. Set `allowRemote: true` to preview through a tunnel.
 
 ![Edit on: the page editable in place, a small status pill at the bottom right](docs/pill.png)

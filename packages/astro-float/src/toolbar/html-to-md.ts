@@ -155,9 +155,11 @@ function listToMarkdown(list: HTMLElement, ctx: SerializeContext, depth: number)
 
 function preToMarkdown(pre: HTMLElement): string {
   const code = pre.querySelector("code") ?? pre;
-  const lang =
+  const rawLang =
     pre.getAttribute("data-language") ??
     (code.className.match(/language-([\w+-]+)/)?.[1] ?? pre.className.match(/language-([\w+-]+)/)?.[1] ?? "");
+  // Shiki labels a fence without a language "plaintext"; the source had none.
+  const lang = rawLang === "plaintext" ? "" : rawLang;
   const text = preText(code).replace(/\n$/, "");
   const longest = Math.max(2, ...Array.from(text.matchAll(/`+/g)).map((m) => m[0].length));
   const fence = "`".repeat(longest + 1);
@@ -298,6 +300,8 @@ function escapeText(text: string): string {
 function finishInline(md: string): string {
   return md
     .replace(/[ \t]+\n/g, (m) => (m.startsWith("  ") ? "  \n" : "\n"))
+    // The text after a <br> starts with the newline the renderer put there, which collapsed to a space.
+    .replace(/\n[ \t]+/g, "\n")
     .split("\n")
     .map((line) =>
       line

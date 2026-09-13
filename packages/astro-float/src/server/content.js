@@ -344,7 +344,7 @@ export async function saveMedia(ctx, collectionName, id, filename, buffer) {
   const kind = mediaKindOf(filename);
   if (!kind) throw httpError(415, `unsupported media type "${ext || filename}"`);
 
-  const base = slugify(path.basename(filename, ext)) || kind;
+  const base = slugify(path.basename(filename, path.extname(filename))) || kind;
   let dir;
   let describe;
   if (kind === "video") {
