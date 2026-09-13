@@ -977,7 +977,8 @@ class Float {
       case "error":
         view.text = this.statusMessage || "Something went wrong";
         view.tone = "err";
-        if (dirty) view.actions.push({ label: this.bodyReadOnly ? "Save fields" : "Retry", onClick: () => void this.save() });
+        // A validation error needs a change, not a retry: the messages under the rows say what.
+        if (dirty && !this.issues.length) view.actions.push({ label: this.bodyReadOnly ? "Save fields" : "Retry", onClick: () => void this.save() });
         break;
       case "saved":
         view.text = "Saved";
@@ -991,6 +992,7 @@ class Float {
           view.text = "Changed on disk";
           view.tip = "Changed on disk · click to reload or keep";
           view.tone = "warn";
+          view.showDiscard = false; // Reload covers it, and the header has only so much room
           view.actions.push(
             { label: "Reload", onClick: () => void this.reloadFromDisk() },
             {
