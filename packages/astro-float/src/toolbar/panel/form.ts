@@ -17,6 +17,8 @@ export interface FormHost {
   draft(): Frontmatter;
   original(): Frontmatter;
   onPage(key: string): boolean;
+  /** Leave this key out entirely (it's edited on the page). */
+  omit?(key: string): boolean;
   collections(): Collection[];
   setField(key: string, value: unknown): void;
   removeField(key: string): void;
@@ -49,6 +51,7 @@ export function renderForm(host: FormHost, syncs: Map<string, () => void>): HTML
 
   const rows: HTMLElement[] = [];
   for (const key of keys) {
+    if (host.omit?.(key)) continue;
     const value = draft[key];
     if (READ_ONLY_KEYS.has(key)) {
       rows.push(
@@ -66,7 +69,7 @@ export function renderForm(host: FormHost, syncs: Map<string, () => void>): HTML
 
   // Keys on disk that the draft dropped stay listed so the removal can be undone before it's written.
   for (const key of Object.keys(original)) {
-    if (key in draft || (!inferred && byKey.has(key))) continue;
+    if (key in draft || (!inferred && byKey.has(key)) || host.omit?.(key)) continue;
     rows.push(
       h(
         "div",
