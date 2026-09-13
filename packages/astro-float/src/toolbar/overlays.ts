@@ -1,9 +1,13 @@
 import { icon, type IconName } from "./icons";
 
 /**
- * The selection bubble: bold / italic / link (and H1–H3) for a text selection
- * inside the body. It lives in `document.body`, never inside the editable
- * prose, and sits above the selection so nothing stacks on the words.
+ * Small page-side helpers for the body:
+ *
+ * - `RegionControl` is the quiet copy / source control tucked inside the
+ *   top-right corner of the body's wash.
+ * - `SelectionBubble` is the bold / italic / link bubble for a text selection.
+ *
+ * Both live in `document.body`, never inside the editable prose.
  */
 
 function makeButton(iconName: IconName | null, label: string, onClick: (e: MouseEvent) => void, text?: string): HTMLButtonElement {
@@ -21,6 +25,137 @@ function makeButton(iconName: IconName | null, label: string, onClick: (e: Mouse
     onClick(e);
   });
   return b;
+}
+
+// ---- body control (copy / source) ------------------------------------------------------
+
+export interface RegionActions {
+  /** The body's Markdown, for the clipboard. */
+  copy(): string;
+  /** Flip between the rendered prose and the in-page Markdown textarea. */
+  toggleSource(): void;
+  isSource(): boolean;
+  /** A save is running as part of leaving source view. */
+  busy(): boolean;
+  /** The last attempt to leave source view failed; shown next to a Discard escape hatch. */
+  error(): string | null;
+  discard(): void;
+}
+
+/**
+ * Copy / Source for the body: two quiet icons inside the top-right corner of
+ * the wash, part of it rather than floating over it. Shown while the body has
+ * the caret or the pointer (the wash's own conditions), fading with it; pinned
+ * inside the visible part of the region when its corner scrolls off.
+ */
+export class RegionControl {
+  private el: HTMLElement | null = null;
+  private target: HTMLElement | null = null;
+  private actions: RegionActions | null = null;
+  private hideTimer: number | undefined;
+  private visible = false;
+
+  show(target: HTMLElement, actions: RegionActions) {
+    window.clearTimeout(this.hideTimer);
+    this.target = target;
+    this.actions = actions;
+    this.render();
+  }
+
+  /** Re-draw with the same target (source / busy / error state changed). */
+  refresh() {
+    if (this.target && this.actions && this.visible) this.render();
+  }
+
+  get shown() {
+    return this.visible;
+  }
+
+  /** Hide after a beat — unless the pointer or the focus is still on the region or the control itself. */
+  scheduleHide() {
+    window.clearTimeout(this.hideTimer);
+    this.hideTimer = window.setTimeout(() => {
+      const t = this.target;
+      if (this.el?.contains(document.activeElement) || this.el?.matches(":hover")) return;
+      if (t && (t.matches(":hover") || t === document.activeElement || t.contains(document.activeElement))) return;
+      this.hide();
+    }, 120);
+  }
+
+  hide() {
+    window.clearTimeout(this.hideTimer);
+    this.target = null;
+    this.actions = null;
+    this.visible = false;
+    this.el?.removeAttribute("data-show");
+  }
+
+  reposition = () => {
+    if (!this.el || !this.visible || !this.target) return;
+    if (!this.target.isConnected) {
+      this.hide();
+      return;
+    }
+    const r = this.target.getBoundingClientRect();
+    const hgt = this.el.offsetHeight || 28;
+    // Region scrolled out of view entirely: nothing to sit in.
+    if (r.bottom < 40 || r.top > window.innerHeight - 40) {
+      this.el.style.opacity = "0";
+      return;
+    }
+    this.el.style.opacity = "";
+    // Inside the wash's top-right corner (the wash reaches ~14px above and ~18px right of the box),
+    // held at the top of the viewport once that corner scrolls off, always flush with the right edge.
+    const inset = 8;
+    const right = Math.max(inset, window.innerWidth - (r.right + 18) + inset);
+    const top = Math.max(r.top - 14 + inset, inset);
+    const maxTop = r.bottom + 14 - inset - hgt;
+    Object.assign(this.el.style, { right: `${right}px`, top: `${Math.min(top, maxTop)}px` });
+  };
+
+  private render() {
+    if (!this.el) {
+      this.el = document.createElement("div");
+      this.el.className = "astro-float-region";
+      window.addEventListener("scroll", this.reposition, true);
+      window.addEventListener("resize", this.reposition);
+    }
+    // A page swap may have dropped it from the document; put it back.
+    if (!this.el.isConnected) document.body.appendChild(this.el);
+    const el = this.el;
+    const actions = this.actions!;
+    el.textContent = "";
+
+    const copy = makeButton("copy", "Copy Markdown", () => {
+      void navigator.clipboard?.writeText(actions.copy()).then(() => {
+        copy.replaceChildren(icon("check", 14));
+        window.setTimeout(() => copy.replaceChildren(icon("copy", 14)), 1200);
+      });
+    });
+    el.appendChild(copy);
+
+    const isSource = actions.isSource();
+    const busy = actions.busy();
+    const error = actions.error();
+    const toggle = makeButton(isSource ? "eye" : "code", isSource ? "Save and go back to the rendered page" : "Edit as Markdown, right here", () => actions.toggleSource());
+    // The word appears on hover only, growing leftwards from the icon so nothing shifts.
+    toggle.insertBefore(Object.assign(document.createElement("span"), { className: "astro-float-region-label", textContent: busy ? "Saving…" : isSource ? "Rendered" : "Source" }), toggle.firstChild);
+    toggle.disabled = busy;
+    toggle.toggleAttribute("data-on", isSource);
+    el.appendChild(toggle);
+    if (error && isSource) {
+      const note = document.createElement("span");
+      note.className = "astro-float-region-error";
+      note.append(icon("alert", 13), Object.assign(document.createElement("span"), { textContent: error }));
+      const discard = makeButton(null, "Discard the source edits and show the page as it was", () => actions.discard(), "Discard");
+      discard.setAttribute("data-danger", "");
+      el.append(note, discard);
+    }
+
+    this.visible = true;
+    el.setAttribute("data-show", "");
+    this.reposition();
+  }
 }
 
 // ---- selection bubble ----------------------------------------------------------------

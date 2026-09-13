@@ -7,7 +7,7 @@ tags:
 draft: false
 ---
 
-Most interface chrome can be replaced by a single 1px line at eight percent opacity. Not because the line is beautiful, but because it is quiet.
+Most interface chrome can be replaced by a single 1px line at eight percent opacity. Not because the line is beautiful, but because it is quiet as a mouse
 
 > Good tools disappear. The best ones leave a faint edge so you know where they were.
 

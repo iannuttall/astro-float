@@ -138,6 +138,11 @@ export class Panel {
     return this.tab;
   }
 
+  /** Leave the Markdown tab (saving first) — the on-page control's "Rendered" while the tab is up. */
+  showFields() {
+    return this.showTab("fields");
+  }
+
   /** Build (or rebuild) the whole panel. Called when Edit turns on and after every page load. */
   render() {
     const host = this.host;

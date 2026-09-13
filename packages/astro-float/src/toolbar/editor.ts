@@ -63,6 +63,74 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
 
+/* In-page source view for the body: a textarea in the prose's place, same wash. */
+.astro-float-source {
+  display: block;
+  width: 100%;
+  min-height: 240px;
+  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 6px;
+  padding: 14px 18px;
+  margin: 0 0 18px;
+  color: inherit;
+  font: 13.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 2;
+  resize: vertical;
+  white-space: pre-wrap;
+  outline: none;
+  caret-color: currentColor;
+  background-color: transparent;
+  transition: background-color 120ms ease;
+}
+.astro-float-source:hover { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+.astro-float-source:focus { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
+
+/* Body control: copy / source inside the top-right corner of the body's wash. Part of the wash —
+ * no pill, no shadow, no border. Fades with the wash; the label shows on hover only. */
+.astro-float-region {
+  position: fixed;
+  z-index: 1999999999;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  box-sizing: border-box;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, visibility 0s linear 120ms;
+}
+.astro-float-region[data-show] { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 120ms ease; }
+.astro-float-region button {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 7px;
+  border-radius: 6px;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  box-sizing: border-box;
+  transition: background 100ms ease, opacity 100ms ease;
+}
+.astro-float-region button svg { width: 14px; height: 14px; display: block; }
+.astro-float-region button:hover, .astro-float-region button:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 8%, transparent); }
+.astro-float-region button[data-on] { opacity: 1; }
+.astro-float-region button:disabled { opacity: 0.4; cursor: default; background: none; }
+.astro-float-region-label { display: none; }
+.astro-float-region button:hover .astro-float-region-label, .astro-float-region button[data-on] .astro-float-region-label, .astro-float-region button:disabled .astro-float-region-label { display: inline; }
+.astro-float-region button[data-danger] { opacity: 1; color: #ef6f6c; }
+.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px 0 8px; color: #ef6f6c; white-space: nowrap; }
+
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
 [data-float-editing] [data-float-island] * { cursor: default; }
@@ -229,7 +297,7 @@ const PAGE_STYLE = /* css */ `
 .astro-float-bar .astro-float-confirm button[data-danger] { background: #ef6f6c; color: #0f1114; }
 .astro-float-bar .astro-float-confirm button[data-danger]:hover { background: #f58c89; color: #0f1114; }
 @media (pointer: coarse) {
-  .astro-float-bubble button, .astro-float-bar button { height: 36px; min-width: 36px; }
+  .astro-float-bubble button, .astro-float-bar button, .astro-float-region button { height: 36px; min-width: 36px; }
   .astro-float-bubble, .astro-float-bar { padding: 3px; }
   .astro-float-datepicker { width: 300px; }
   .astro-float-dp-grid button { height: 38px; font-size: 14px; }
