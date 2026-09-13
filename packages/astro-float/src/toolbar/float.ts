@@ -511,7 +511,10 @@ class Float {
   private applyTheme() {
     const theme = detectTheme(this.themeMedia.matches);
     if (this.root.dataset.theme !== theme) this.root.dataset.theme = theme;
-    if (document.documentElement.getAttribute("data-float-theme") !== theme) document.documentElement.setAttribute("data-float-theme", theme);
+    if (document.documentElement.getAttribute("data-float-theme") !== theme) {
+      document.documentElement.setAttribute("data-float-theme", theme);
+      this.region.refresh(); // its surface is computed from the page colours
+    }
   }
 
   private onThemeChange = () => this.applyTheme();
