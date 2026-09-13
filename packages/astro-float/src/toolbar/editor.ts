@@ -114,13 +114,15 @@ const PAGE_STYLE = /* css */ `
 .astro-float-src-area::selection { background: color-mix(in srgb, currentColor 16%, transparent); }
 .astro-float-src-mirror .ln { display: block; }
 .astro-float-src-mirror .md-mark, .astro-float-src-mirror .md-hash, .astro-float-src-mirror .md-hr, .astro-float-src-mirror .md-url { color: color-mix(in srgb, currentColor 38%, transparent); }
-/* Bold without moving a glyph: a stroke, not a heavier face, so the caret in the textarea still lands right. */
+/* Nothing in the mirror may change a glyph's advance width: the caret in the textarea must land on the
+ * glyph it belongs to. So bold is a stroke, not a heavier face; italic is a synthesized slant; the # markers
+ * stay in flow; code keeps the text font and gets only a faint ground. */
 .astro-float-src-mirror .md-h, .astro-float-src-mirror .md-strong { -webkit-text-stroke: 0.5px currentColor; }
-.astro-float-src-mirror .md-hash { display: inline-block; width: 0; direction: rtl; white-space: pre; transform: translateX(-6px); -webkit-text-stroke: 0; }
-.astro-float-src-mirror .md-em { font-style: italic; }
+.astro-float-src-mirror .md-hash { -webkit-text-stroke: 0; }
+.astro-float-src-mirror .md-em { color: color-mix(in srgb, currentColor 72%, transparent); } /* a slant, even synthesized, moves glyphs: italic is a shade, not a shape */
 .astro-float-src-mirror .md-link { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 30%, transparent); text-underline-offset: 3px; }
-.astro-float-src-mirror .md-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; background: color-mix(in srgb, currentColor 6%, transparent); border-radius: 3px; }
-.astro-float-src-mirror .md-codeline { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; background: color-mix(in srgb, currentColor 5%, transparent); }
+.astro-float-src-mirror .md-code { background: color-mix(in srgb, currentColor 6%, transparent); border-radius: 3px; }
+.astro-float-src-mirror .md-codeline { background: color-mix(in srgb, currentColor 5%, transparent); }
 .astro-float-src-mirror .md-quote { position: relative; color: color-mix(in srgb, currentColor 70%, transparent); }
 .astro-float-src-mirror .md-quote::before { content: ""; position: absolute; left: -12px; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: color-mix(in srgb, currentColor 22%, transparent); }
 

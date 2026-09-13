@@ -92,11 +92,8 @@ export interface FileChange {
 }
 
 /** `{ collection, id, hash }` of an entry file that changed on disk — an outside edit, or a Float save from another tab (see `api.onFileChanged`). Compare `hash` with the doc you hold: equal means it was your own save. */
-export interface FileChanged {
-  collection: string;
-  id: string;
-  hash: string;
-}
+/** What the server sends: the same shape, every field present. */
+export type FileChanged = Required<Pick<FileChange, "collection" | "id" | "hash">>;
 
 /** What the CLI's `doctor` and the popover read: the schema behind a collection and what it thinks of an entry. */
 export interface Diagnosis {
