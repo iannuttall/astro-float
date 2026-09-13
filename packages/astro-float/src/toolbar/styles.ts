@@ -327,7 +327,9 @@ export const STYLES = /* css */ `
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-radius: 4px; }
 .toggle:hover .switch:not([aria-checked="true"]) { background: var(--line-focus); }
 
-.segmented { display: inline-flex; padding: 2px; gap: 2px; border-radius: var(--radius-sm); background: var(--bg-elev); border: 1px solid var(--line); max-width: 100%; }
+.enum { display: block; min-width: 0; }
+.enum .select { width: auto; max-width: 100%; }
+.segmented { display: flex; width: 100%; padding: 2px; gap: 2px; border-radius: var(--radius-sm); background: var(--bg-elev); border: 1px solid var(--line); }
 .seg-btn { flex: 1; min-width: 0; height: 24px; padding: 0 10px; border-radius: 4px; font-size: 12px; font-weight: 500; color: var(--fg-muted); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
 .seg-btn:hover { color: var(--fg); }
 .seg-btn[aria-checked="true"] { background: var(--bg); color: var(--fg); box-shadow: 0 1px 2px rgba(16, 20, 28, 0.12), 0 0 0 1px var(--line-strong); }
