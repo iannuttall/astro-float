@@ -2,6 +2,7 @@
 title: Follow up on hairlines
 kind: todo
 about: on-hairlines
+cover: ./cover.png
 priority: 2
 updated: 2026-09-10
 ---

@@ -1,3 +1,5 @@
+import type { CollectionSchema } from "./schema";
+
 export const API_BASE = "/__float/api";
 
 export interface EntrySummary {
@@ -15,38 +17,6 @@ export interface Collection {
 }
 
 export type Frontmatter = Record<string, unknown>;
-
-/** How the sidebar draws a field. Mirrors `SchemaKind` on the server, plus what value inference can produce. */
-export type FieldKind = "string" | "text" | "boolean" | "number" | "date" | "tags" | "enum" | "reference" | "json";
-
-/** One property of the collection's Zod schema, as read from Astro's generated JSON Schema. */
-export interface SchemaField {
-  key: string;
-  kind: FieldKind;
-  required: boolean;
-  nullable?: boolean;
-  default?: unknown;
-  /** `z.enum([...])` / literal unions: the allowed values. */
-  values?: Array<string | number>;
-  /** `.describe("...")` */
-  description?: string;
-  /** For `tags`: what the array holds. */
-  items?: "string" | "number";
-  /** For `reference`: the collection it points at (read from content.config.ts; absent when that couldn't be found). */
-  collection?: string;
-  /** For `number`: `z.number().int()`, `.min()`, `.max()`. */
-  integer?: boolean;
-  min?: number;
-  max?: number;
-}
-
-export interface CollectionSchema {
-  /** `.astro/collections/<name>.schema.json`, relative to the project root. */
-  file: string;
-  fields: SchemaField[];
-  /** `additionalProperties: false` — Zod's default `z.object()` rejects keys it doesn't know. */
-  strict: boolean;
-}
 
 export interface SourceBlock {
   type: string;
@@ -69,7 +39,7 @@ export interface EntryDoc {
   lead: string;
   blocks: SourceBlock[];
   hash: string;
-  /** The collection's schema, or null when Astro hasn't generated one (no `schema:` in content.config.ts, or no sync yet). */
+  /** The collection's schema (`source: "zod"` from content.config.ts, `"inferred"` from values); null only if it couldn't be read. */
   schema: CollectionSchema | null;
 }
 
@@ -129,6 +99,9 @@ export const api = {
 
   entry: (collection: string, id: string) =>
     request<EntryDoc>(`/entry?collection=${encodeURIComponent(collection)}&id=${encodeURIComponent(id)}`),
+
+  /** The collection's field definitions — see `toolbar/schema.ts`. */
+  schema: (collection: string) => request<CollectionSchema>(`/schema?collection=${encodeURIComponent(collection)}`),
 
   save: (payload: {
     collection: string;

@@ -177,8 +177,8 @@ export async function readEntry(ctx, collectionName, id) {
     body,
     ...splitBlocks(body, { mdx: isMdx(abs) }),
     hash: hashOf(raw),
-    // The collection's Zod schema (via Astro's generated JSON Schema), or null when Astro hasn't written one.
-    schema: await readCollectionSchema(ctx, collection.name),
+    // Field definitions for the panel: from the Zod schema (via Astro's generated JSON Schema) or inferred from values.
+    schema: await readCollectionSchema(ctx, collection),
   };
 }
 
@@ -208,7 +208,7 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
  */
 export async function inferFrontmatterTemplate(ctx, collection) {
   /** @type {Record<string, unknown>} */
-  const template = templateFromSchema(await readCollectionSchema(ctx, collection.name));
+  const template = templateFromSchema(await readCollectionSchema(ctx, collection));
   const today = new Date().toISOString().slice(0, 10);
   for (const e of collection.entries.slice(0, 8)) {
     try {

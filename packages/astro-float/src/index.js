@@ -55,6 +55,8 @@ export default function astroFloat(options = {}) {
 
         attachFloatApi(server, {
           root,
+          // The schema reader loads content.config.ts through Vite to find image() / reference() fields.
+          server,
           contentDir,
           collections: options.collections ?? {},
           allowRemote: options.allowRemote ?? false,
