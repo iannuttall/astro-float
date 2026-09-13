@@ -96,7 +96,7 @@ export function renderForm(host: FormHost, syncs: Map<string, () => void>): HTML
     newKey.addEventListener("keydown", (e) => {
       if (e.key === "Enter") add();
     });
-    children.push(h("div", { class: "field-add" }, newKey, h("button", { class: "btn btn-icon", type: "button", "aria-label": "Add field", title: "Add field", onClick: add }, icon("plus", 14))));
+    children.push(h("div", { class: "field-add" }, newKey, h("button", { class: "btn btn-icon", type: "button", "aria-label": "Add field", "data-tip": "Add field", onClick: add }, icon("plus", 14))));
   }
 
   return h("div", { class: "form" }, children);
@@ -108,7 +108,7 @@ function renderRow(host: FormHost, doc: EntryDoc, def: FieldDef, value: unknown,
   const note = h("div", { class: "row-note" });
   const revert = h(
     "button",
-    { class: "row-revert", type: "button", "aria-label": `Revert ${def.label}`, title: "Back to the saved value", hidden: !host.changed(key), onClick: () => host.revertField(key) },
+    { class: "row-revert", type: "button", "aria-label": `Revert ${def.label}`, "data-tip": "Back to the saved value", hidden: !host.changed(key), onClick: () => host.revertField(key) },
     icon("undo", 12),
   ) as HTMLButtonElement;
 
@@ -135,7 +135,7 @@ function renderRow(host: FormHost, doc: EntryDoc, def: FieldDef, value: unknown,
   const remove = removable
     ? h(
         "button",
-        { class: "row-remove", type: "button", "aria-label": `Remove ${def.label}`, title: "Remove field (Restore puts it back before you save)", onClick: () => host.removeField(key) },
+        { class: "row-remove", type: "button", "aria-label": `Remove ${def.label}`, "data-tip": "Remove field", onClick: () => host.removeField(key) },
         icon("close", 12),
       )
     : null;
@@ -151,10 +151,10 @@ function renderRow(host: FormHost, doc: EntryDoc, def: FieldDef, value: unknown,
         { class: "row-text" },
         h(
           "span",
-          { class: "row-label", title: def.label === key ? undefined : key },
+          { class: "row-label" },
           h("span", { class: "row-name" }, def.label),
-          def.required ? h("span", { class: "req", title: "Required", "aria-hidden": "true" }, "*") : null,
-          onPage ? h("span", { class: "on-page", title: "Also editable on the page" }, "on page") : null,
+          def.required ? h("span", { class: "req", "aria-hidden": "true" }, "*") : null,
+          onPage ? h("span", { class: "on-page" }, "on page") : null,
         ),
         h("span", { class: "row-help" }, helpFor(def)),
       ),

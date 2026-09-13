@@ -1,4 +1,5 @@
 import { icon, type IconName } from "./icons";
+import { refreshTooltip } from "./tooltip";
 
 /**
  * Small page-side helpers for the body:
@@ -15,7 +16,7 @@ function makeButton(iconName: IconName | null, label: string, onClick: (e: Mouse
   b.type = "button";
   if (iconName) b.appendChild(icon(iconName, 14));
   if (text) b.appendChild(Object.assign(document.createElement("span"), { textContent: text }));
-  b.title = label;
+  b.setAttribute("data-tip", label);
   b.setAttribute("aria-label", label);
   // Keep the page selection / focus where it is.
   b.addEventListener("mousedown", (e) => e.preventDefault());
@@ -172,7 +173,13 @@ export class RegionControl {
     const copy = makeButton("copy", "Copy Markdown", () => {
       void navigator.clipboard?.writeText(actions.copy()).then(() => {
         copy.replaceChildren(icon("check", 14));
-        window.setTimeout(() => copy.replaceChildren(icon("copy", 14)), 1200);
+        copy.setAttribute("data-tip", "Copied");
+        refreshTooltip(copy);
+        window.setTimeout(() => {
+          copy.replaceChildren(icon("copy", 14));
+          copy.setAttribute("data-tip", "Copy Markdown");
+          refreshTooltip(copy);
+        }, 1000);
       });
     });
     el.appendChild(copy);
@@ -180,9 +187,8 @@ export class RegionControl {
     const isSource = actions.isSource();
     const busy = actions.busy();
     const error = actions.error();
-    const toggle = makeButton(isSource ? "eye" : "code", isSource ? "Save and go back to the rendered page" : "Edit as Markdown, right here", () => actions.toggleSource());
-    // The word appears on hover only, growing leftwards from the icon so nothing shifts.
-    toggle.insertBefore(Object.assign(document.createElement("span"), { className: "astro-float-region-label", textContent: busy ? "Saving…" : isSource ? "Rendered" : "Source" }), toggle.firstChild);
+    // Icon only, always the same size and place; the tooltip says what it does.
+    const toggle = makeButton(isSource ? "eye" : "code", busy ? "Saving…" : isSource ? "Back to rendered" : "Edit as Markdown", () => actions.toggleSource());
     toggle.disabled = busy;
     toggle.toggleAttribute("data-on", isSource);
     el.appendChild(toggle);

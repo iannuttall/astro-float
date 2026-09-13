@@ -64,7 +64,7 @@ export function renderCollectionFooter(host: CollectionHost, state: FootState, r
       list.appendChild(
         h(
           "a",
-          { class: "list-item", href: route.href, "aria-current": isCurrent ? "page" : null, title: `${entry.id}${route.guessed ? " (guessed route)" : ""}` },
+          { class: "list-item", href: route.href, "aria-current": isCurrent ? "page" : null, "data-tip": route.guessed ? `${entry.id} · guessed route` : entry.id },
           h("span", { class: "title" }, entry.title),
           isCurrent ? icon("check", 13) : null,
         ),
@@ -74,7 +74,7 @@ export function renderCollectionFooter(host: CollectionHost, state: FootState, r
   list.appendChild(
     h(
       "button",
-      { class: "list-item list-action", type: "button", title: "New collection under src/content/", onClick: () => setForm(openForm === "collection" ? null : "collection") },
+      { class: "list-item list-action", type: "button", "data-tip": "New collection under src/content/", onClick: () => setForm(openForm === "collection" ? null : "collection") },
       icon("folderPlus", 14),
       h("span", { class: "title" }, "New collection"),
     ),
@@ -87,7 +87,7 @@ export function renderCollectionFooter(host: CollectionHost, state: FootState, r
       class: "foot-toggle",
       type: "button",
       "aria-expanded": String(state.open),
-      title: state.open ? "Hide entries" : "Show entries",
+      "data-tip": state.open ? "Hide entries" : "Show entries",
       onClick: () => {
         state.open = !state.open;
         toggle.setAttribute("aria-expanded", String(state.open));
@@ -114,7 +114,7 @@ export function renderCollectionFooter(host: CollectionHost, state: FootState, r
             {
               class: "btn btn-sm",
               type: "button",
-              title: `New entry in ${selected.name}`,
+              "data-tip": `New entry in ${selected.name}`,
               onClick: () => {
                 if (!state.open) {
                   state.open = true;

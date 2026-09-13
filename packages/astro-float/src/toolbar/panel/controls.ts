@@ -214,7 +214,7 @@ function booleanControl(value: unknown, ctx: ControlCtx): Control {
 function dateControl(value: unknown, ctx: ControlCtx): Control {
   let suffix = typeof value === "string" && DATE_LIKE.test(value) ? value.slice(10) : "";
   const label = h("span", { class: "date-label" });
-  const button = h("button", { class: "input date-btn", type: "button", "aria-haspopup": "dialog", title: "Change the date" }, label, icon("calendar", 14)) as HTMLButtonElement;
+  const button = h("button", { class: "input date-btn", type: "button", "aria-haspopup": "dialog", "data-tip": "Change the date" }, label, icon("calendar", 14)) as HTMLButtonElement;
   const paint = (v: unknown) => {
     const iso = typeof v === "string" && DATE_LIKE.test(v) ? v.slice(0, 10) : "";
     label.textContent = iso ? formatDateLabel(iso) : "Pick a date";
@@ -255,7 +255,7 @@ function datetimeControl(value: unknown, ctx: ControlCtx): Control {
   const compose = () => (parts.date ? `${parts.date}${parts.sep}${parts.time || "00:00"}:${parts.seconds}${parts.zone}` : "");
 
   const label = h("span", { class: "date-label" });
-  const button = h("button", { class: "input date-btn", type: "button", "aria-haspopup": "dialog", title: "Change the date" }, label, icon("calendar", 14)) as HTMLButtonElement;
+  const button = h("button", { class: "input date-btn", type: "button", "aria-haspopup": "dialog", "data-tip": "Change the date" }, label, icon("calendar", 14)) as HTMLButtonElement;
   const time = h("input", { class: "input input-time", type: "time", value: parts.time, "aria-label": "Time" }) as HTMLInputElement;
   const paint = () => {
     label.textContent = parts.date ? formatDateLabel(parts.date) : "Pick a date";
@@ -318,7 +318,7 @@ function enumControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
         role: "radio",
         "aria-checked": String((c.value ?? "") === current),
         "aria-label": c.value === undefined ? "None" : undefined,
-        title: c.value === undefined ? "None" : undefined,
+        "data-tip": c.value === undefined ? "None" : undefined,
         "data-value": c.value ?? "",
         "data-none": c.value === undefined ? "" : null,
         onClick: () => {
@@ -371,8 +371,9 @@ function selectControl(options: Array<{ value: string; label: string; title?: st
     { class: "input select", onChange: () => onChange(select.value) },
     options.map((o) => h("option", { value: o.value, selected: o.value === current, title: o.title }, o.label)),
   ) as HTMLSelectElement;
-  select.title = options.find((o) => o.value === current)?.title ?? "";
-  select.addEventListener("change", () => (select.title = options.find((o) => o.value === select.value)?.title ?? ""));
+  const tipFor = (v: string) => options.find((o) => o.value === v)?.title ?? "";
+  if (tipFor(current)) select.setAttribute("data-tip", tipFor(current));
+  select.addEventListener("change", () => (tipFor(select.value) ? select.setAttribute("data-tip", tipFor(select.value)) : select.removeAttribute("data-tip")));
   return {
     el: select,
     inline: true,
@@ -471,7 +472,6 @@ function imageControl(value: unknown, ctx: ControlCtx): Control {
   const paint = () => {
     replaceChildren(thumb, current ? h("img", { src: imageUrl(current, ctx.doc.absDir), alt: "" }) : icon("image", 16));
     path.textContent = current || "No image";
-    path.title = current;
     clear.hidden = !current;
   };
   const choose = (src: string | undefined) => {
@@ -521,7 +521,7 @@ function imageControl(value: unknown, ctx: ControlCtx): Control {
       media.map((m) =>
         h(
           "button",
-          { class: "image-option", type: "button", title: m.name, "aria-pressed": String(m.src === current), onClick: () => choose(m.src) },
+          { class: "image-option", type: "button", "data-tip": m.name, "aria-pressed": String(m.src === current), onClick: () => choose(m.src) },
           h("img", { src: m.url, alt: "" }),
           h("span", null, m.name),
         ),
@@ -531,7 +531,7 @@ function imageControl(value: unknown, ctx: ControlCtx): Control {
 
   const upload = h("button", { class: "btn btn-sm", type: "button", onClick: () => file.click() }, icon("upload", 13), "Upload") as HTMLButtonElement;
   const pick = h("button", { class: "btn btn-sm", type: "button", onClick: () => void openPicker() }, icon("image", 13), "Choose");
-  const clear = h("button", { class: "btn btn-sm btn-ghost", type: "button", title: "Clear", "aria-label": "Clear image", onClick: () => choose(undefined) }, icon("close", 12)) as HTMLButtonElement;
+  const clear = h("button", { class: "btn btn-sm btn-ghost", type: "button", "data-tip": "Clear", "aria-label": "Clear image", onClick: () => choose(undefined) }, icon("close", 12)) as HTMLButtonElement;
   paint();
 
   return {
@@ -651,7 +651,7 @@ export function nestedRow(def: FieldDef, value: unknown, ctx: ControlCtx): { el:
     h(
       "div",
       { class: "row-head" },
-      h("div", { class: "row-text" }, h("span", { class: "row-label", title: def.key }, h("span", { class: "row-name" }, def.label), def.required ? h("span", { class: "req", title: "Required", "aria-hidden": "true" }, "*") : null), h("span", { class: "row-help" }, helpFor(def))),
+      h("div", { class: "row-text" }, h("span", { class: "row-label" }, h("span", { class: "row-name" }, def.label), def.required ? h("span", { class: "req", "aria-hidden": "true" }, "*") : null), h("span", { class: "row-help" }, helpFor(def))),
       control.inline ? h("div", { class: "row-side" }, control.el) : null,
     ),
     control.inline ? null : control.el,

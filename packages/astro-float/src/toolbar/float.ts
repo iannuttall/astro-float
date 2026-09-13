@@ -11,6 +11,7 @@ import { Pill, type PillPrefs, type StatusView } from "./panel/pill";
 import { clone, describe, resetViewportZoom } from "./panel/util";
 import { schemaFor, type CollectionSchema } from "./schema";
 import { STYLES } from "./styles";
+import { attachTooltips, detachTooltips } from "./tooltip";
 
 type Status = "idle" | "saving" | "refreshing" | "saved" | "warning" | "error" | "conflict";
 
@@ -206,6 +207,8 @@ class Float {
     this.editing = on;
     if (on) {
       ensurePageStyle();
+      attachTooltips(document);
+      attachTooltips(this.canvas);
       this.watchTheme();
       if (this.loadedFor !== location.href) {
         await this.loadPage(); // renders the pill once it knows the entry
@@ -224,6 +227,8 @@ class Float {
       this.loadedFor = null;
       this.region.hide();
       this.releaseFocus();
+      detachTooltips(this.canvas);
+      detachTooltips(document);
       removePageStyle();
       this.unwatchTheme();
       this.panel.destroy();

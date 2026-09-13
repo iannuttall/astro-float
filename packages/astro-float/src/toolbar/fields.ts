@@ -178,7 +178,7 @@ export class FieldBindings {
     el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
     el.setAttribute("role", "button");
     el.setAttribute("aria-haspopup", "dialog");
-    el.setAttribute("title", "Change the date");
+    el.setAttribute("data-tip", "Change the date");
     el.tabIndex = 0;
     const open = () => {
       DatePicker.toggle({
@@ -219,7 +219,7 @@ export class FieldBindings {
       el.removeEventListener("keyup", onKeyup);
       el.removeAttribute("role");
       el.removeAttribute("aria-haspopup");
-      el.removeAttribute("title");
+      el.removeAttribute("data-tip");
       el.removeAttribute("tabindex");
       el.removeAttribute("data-float-date");
     });
@@ -300,7 +300,7 @@ export class FieldBindings {
     el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
     el.setAttribute("role", "button");
     el.setAttribute("aria-haspopup", "menu");
-    el.setAttribute("title", `Change ${key}`);
+    el.setAttribute("data-tip", `Change ${key}`);
     el.tabIndex = 0;
     const open = () => {
       if (this.menu?.dataset.for === key) return this.closeMenu();
@@ -361,7 +361,7 @@ export class FieldBindings {
       el.removeEventListener("keyup", onKeyup);
       el.removeAttribute("role");
       el.removeAttribute("aria-haspopup");
-      el.removeAttribute("title");
+      el.removeAttribute("data-tip");
       el.removeAttribute("tabindex");
       el.removeAttribute("data-float-enum");
     });
@@ -395,7 +395,7 @@ export class FieldBindings {
     adder.textContent = "+";
     adder.setAttribute("data-float-add", "");
     adder.setAttribute("role", "button");
-    adder.setAttribute("title", `Add ${key === "tags" ? "a tag" : `to ${key}`}`);
+    adder.setAttribute("data-tip", key === "tags" ? "Add tag" : `Add to ${key}`);
     adder.tabIndex = 0;
     binding.adder = adder;
     this.placeChip(binding, adder);

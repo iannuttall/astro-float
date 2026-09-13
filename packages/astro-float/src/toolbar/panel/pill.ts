@@ -3,6 +3,7 @@ import { DatePicker } from "../datepicker";
 import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
 import type { CollectionSchema } from "../schema";
+import { refreshTooltip } from "../tooltip";
 import { renderCollectionFooter, type FootState } from "./collection";
 import { renderForm } from "./form";
 import { resetViewportZoom } from "./util";
@@ -10,10 +11,12 @@ import { createYamlView, type YamlView } from "./yaml";
 
 /**
  * Edit on opens nothing: the page is editable and that's all. The one piece
- * of chrome is a small pill at the bottom right — a status dot, a word or two,
- * and Save when there's something to save. Clicking the pill opens a popover
- * above it for what can't be edited on the page: the fields that aren't
- * bound there (or the raw YAML), Autosave, new entries and collections.
+ * of chrome is a small round pill at the bottom right holding a dot — grey
+ * when up to date, orange with unsaved changes, green for a beat after a
+ * save, red on an error — with a tooltip that says the same. Clicking it
+ * opens a popover above it for what can't be edited on the page: the fields
+ * that aren't bound there (or the raw YAML), Discard / Save while dirty,
+ * Autosave, new entries and collections.
  *
  * It owns no content state: everything it shows comes from `PillHost`, every
  * change goes back through it. Float keeps the draft, the doc and the saving.
@@ -62,9 +65,8 @@ export interface PillHost {
 }
 
 export class Pill {
-  private pillEl: HTMLElement | null = null;
+  private pillEl: HTMLButtonElement | null = null;
   private pop: HTMLElement | null = null;
-  private popBody: HTMLElement | null = null;
   private fieldsHost: HTMLElement | null = null;
   private yamlHost: HTMLElement | null = null;
   private footHost: HTMLElement | null = null;
@@ -79,10 +81,8 @@ export class Pill {
   private savedRange: Range | null = null;
 
   // status
-  private mainButton: HTMLButtonElement | null = null;
-  private statusText: HTMLElement;
-  private statusDot: HTMLElement;
-  private statusActions: HTMLElement;
+  private dot: HTMLElement;
+  private headActions: HTMLElement;
   private saveButton: HTMLButtonElement;
   private discardButton: HTMLButtonElement;
   private lastStatus: StatusView | null = null;
@@ -92,20 +92,19 @@ export class Pill {
     private root: HTMLElement,
     private host: PillHost,
   ) {
-    this.statusDot = h("span", { class: "status-dot", "data-state": "idle" });
-    this.statusText = h("span", { class: "status-text" });
+    this.dot = h("span", { class: "pill-dot", "data-state": "idle" });
     this.saveButton = h(
       "button",
-      { class: "btn btn-sm btn-primary", type: "button", hidden: true, title: "Save (⌘S)", onMousedown: keepPageSelection, onClick: () => void this.host.save() },
+      { class: "btn btn-sm btn-primary", type: "button", hidden: true, "data-tip": "Save · ⌘S", onClick: () => void this.host.save() },
       icon("check", 13),
       h("span", {}, "Save"),
     ) as HTMLButtonElement;
     this.discardButton = h(
       "button",
-      { class: "btn btn-sm btn-ghost btn-discard", type: "button", hidden: true, title: "Throw away unsaved changes and show what's on disk", onClick: () => this.host.discard() },
+      { class: "btn btn-sm btn-ghost btn-discard", type: "button", hidden: true, "data-tip": "Back to what's on disk", onClick: () => this.host.discard() },
       "Discard",
     ) as HTMLButtonElement;
-    this.statusActions = h("div", { class: "pill-actions" }, this.saveButton);
+    this.headActions = h("div", { class: "pop-actions" }, this.discardButton, this.saveButton);
   }
 
   get isOpen() {
@@ -122,34 +121,33 @@ export class Pill {
     this.lastKey = "";
     this.fieldsStale = true;
 
-    // ---- the pill
-    this.mainButton = h(
+    // ---- the pill: a dot in a round button
+    this.pillEl = h(
       "button",
       {
-        class: "pill-main",
+        class: "pill",
         type: "button",
         "aria-haspopup": "dialog",
         "aria-expanded": "false",
-        title: doc ? "Fields, entries and settings" : "Entries and settings",
+        "aria-label": "Float",
+        "data-tip": "Up to date",
         onMousedown: keepPageSelection,
         onClick: () => (this.isOpen ? this.close() : this.open()),
       },
-      this.statusDot,
-      this.statusText,
+      this.dot,
     ) as HTMLButtonElement;
-    this.pillEl = h("div", { class: "pill" }, this.mainButton, this.statusActions);
 
     // ---- the popover
     this.yamlToggle = h(
       "button",
-      { class: "pop-toggle", type: "button", "aria-pressed": String(this.yamlMode), title: "Edit the frontmatter as YAML", hidden: !doc, onClick: () => this.setYamlMode(!this.yamlMode) },
+      { class: "pop-toggle", type: "button", "aria-pressed": String(this.yamlMode), "data-tip": "Edit the frontmatter as YAML", hidden: !doc, onClick: () => this.setYamlMode(!this.yamlMode) },
       "YAML",
     ) as HTMLButtonElement;
     const head = h(
       "div",
       { class: "pop-head" },
       h("span", { class: "pop-entry" }, doc ? h("span", { class: "pop-collection" }, `${doc.collection}/`) : null, doc ? doc.id : "No entry on this page"),
-      this.discardButton,
+      this.headActions,
       this.yamlToggle,
     );
 
@@ -169,7 +167,7 @@ export class Pill {
         type: "button",
         role: "switch",
         "aria-checked": String(host.prefs.autosave),
-        title: "Write to disk shortly after you stop typing",
+        "data-tip": "Write to disk shortly after you stop typing",
         onClick: () => {
           const next = !host.prefs.autosave;
           host.setAutosave(next);
@@ -182,8 +180,8 @@ export class Pill {
     const settings = h("section", { class: "pop-section pop-settings" }, autosave);
 
     this.footHost = h("section", { class: "pop-section pop-entries" });
-    this.popBody = h("div", { class: "pop-body" }, this.fieldsHost, this.yamlHost, settings, this.footHost);
-    this.pop = h("div", { class: "popover", role: "dialog", "aria-label": "Entry", hidden: true }, head, this.popBody);
+    const body = h("div", { class: "pop-body" }, this.fieldsHost, this.yamlHost, settings, this.footHost);
+    this.pop = h("div", { class: "popover", role: "dialog", "aria-label": "Entry", hidden: true }, head, body);
     this.pop.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         e.stopPropagation();
@@ -202,13 +200,11 @@ export class Pill {
     this.close();
     this.pillEl = null;
     this.pop = null;
-    this.popBody = null;
     this.fieldsHost = null;
     this.yamlHost = null;
     this.footHost = null;
     this.yaml = null;
     this.yamlToggle = null;
-    this.mainButton = null;
     this.syncs.clear();
     this.root.textContent = "";
   }
@@ -219,9 +215,8 @@ export class Pill {
     if (!this.pop || !this.pillEl || this.isOpen) return;
     const sel = document.getSelection();
     this.savedRange = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
-    this.root.style.setProperty("--pill-h", `${this.pillEl.offsetHeight}px`);
     this.pop.hidden = false;
-    this.mainButton?.setAttribute("aria-expanded", "true");
+    this.pillEl.setAttribute("aria-expanded", "true");
     if (this.fieldsStale) this.renderFields();
     if (this.footStale) this.renderCollection();
     if (this.yamlMode) this.yaml?.refresh();
@@ -234,7 +229,7 @@ export class Pill {
     DatePicker.close();
     this.yaml?.commit();
     this.pop!.hidden = true;
-    this.mainButton?.setAttribute("aria-expanded", "false");
+    this.pillEl?.setAttribute("aria-expanded", "false");
     document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
     document.removeEventListener("keydown", this.onDocumentKeydown, true);
     // Focus goes back to the page, to the caret it had.
@@ -274,6 +269,8 @@ export class Pill {
     if (!on) this.yaml?.commit();
     this.yamlMode = on;
     this.yamlToggle?.setAttribute("aria-pressed", String(on));
+    this.yamlToggle?.setAttribute("data-tip", on ? "Back to the form" : "Edit the frontmatter as YAML");
+    refreshTooltip(this.yamlToggle ?? undefined);
     if (this.yamlHost) this.yamlHost.hidden = !on;
     if (this.fieldsHost) this.fieldsHost.hidden = on;
     if (on) this.yaml?.refresh();
@@ -377,21 +374,25 @@ export class Pill {
 
   // ---- status -----------------------------------------------------------------------------------
 
-  /** Cheap and idempotent: only touches the DOM when the visible state actually changes. */
+  /** The dot's colour and the pill's tooltip; Discard / Save and any Reload / Overwrite / Retry in the popover header. */
   renderStatus(view: StatusView) {
     this.lastStatus = view;
-    const key = `${view.showSave}|${view.showDiscard}|${view.dot}|${view.text}|${view.tone}|${view.actions.map((a) => a.label).join(",")}`;
+    const key = `${view.showSave}|${view.showDiscard}|${view.dot}|${view.text}|${view.actions.map((a) => a.label).join(",")}`;
     if (key === this.lastKey) return;
     this.lastKey = key;
+    this.dot.dataset.state = view.dot;
+    const tip = view.dot === "dirty" ? "Unsaved changes · ⌘S to save" : view.text || (this.host.doc() ? "Up to date" : "Float");
+    if (this.pillEl) {
+      this.pillEl.setAttribute("data-tip", tip);
+      this.pillEl.setAttribute("aria-label", tip);
+      refreshTooltip(this.pillEl);
+    }
     this.saveButton.hidden = !view.showSave;
     this.discardButton.hidden = !view.showDiscard;
-    this.statusDot.dataset.state = view.dot;
-    this.statusText.textContent = view.text || (this.host.doc() ? "Up to date" : "Float");
-    if (view.tone) this.statusText.dataset.tone = view.tone;
-    else delete this.statusText.dataset.tone;
     replaceChildren(
-      this.statusActions,
-      ...view.actions.map((a) => h("button", { class: `btn btn-sm${a.primary ? " btn-primary" : ""}`, type: "button", onMousedown: keepPageSelection, onClick: () => a.onClick() }, a.label)),
+      this.headActions,
+      ...view.actions.map((a) => h("button", { class: `btn btn-sm${a.primary ? " btn-primary" : ""}`, type: "button", onClick: () => a.onClick() }, a.label)),
+      this.discardButton,
       this.saveButton,
     );
   }

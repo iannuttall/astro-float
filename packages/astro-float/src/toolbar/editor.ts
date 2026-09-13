@@ -86,7 +86,8 @@ const PAGE_STYLE = /* css */ `
 .astro-float-source:focus { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
 
 /* Body control: copy / source inside the top-right corner of the body's wash. Part of the wash —
- * no pill, no shadow, no border. Fades with the wash; the label shows on hover only. */
+ * no pill, no shadow, no border. Two icon-only buttons that never change size or place; the
+ * tooltip says what they do. Hover: the icon darkens and a faint rounded background appears. */
 .astro-float-region {
   position: fixed;
   z-index: 1999999999;
@@ -94,11 +95,8 @@ const PAGE_STYLE = /* css */ `
   align-items: center;
   gap: 2px;
   padding: 2px;
-  border-radius: 6px;
+  border-radius: 8px;
   color: color-mix(in srgb, currentColor 70%, transparent);
-  font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
-  letter-spacing: -0.005em;
-  -webkit-font-smoothing: antialiased;
   box-sizing: border-box;
   opacity: 0;
   visibility: hidden;
@@ -111,30 +109,45 @@ const PAGE_STYLE = /* css */ `
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  width: 28px;
   height: 28px;
-  min-width: 28px;
-  padding: 0 7px;
   border-radius: 6px;
   color: inherit;
   opacity: 0.65;
   cursor: pointer;
-  font: inherit;
-  font-weight: 500;
   box-sizing: border-box;
   transition: background 100ms ease, opacity 100ms ease;
 }
 .astro-float-region button svg { width: 14px; height: 14px; display: block; }
-.astro-float-region button:hover, .astro-float-region button:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 8%, transparent); }
+.astro-float-region button:hover, .astro-float-region button:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 6%, transparent); }
 .astro-float-region button[data-on] { opacity: 1; }
 .astro-float-region button:disabled { opacity: 0.4; cursor: default; background: none; }
-.astro-float-region-label { display: none; }
-.astro-float-region button:hover .astro-float-region-label, .astro-float-region button[data-on] .astro-float-region-label, .astro-float-region button:disabled .astro-float-region-label { display: inline; }
-.astro-float-region button[data-danger] { opacity: 1; color: #ef6f6c; }
-.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px 0 8px; color: #ef6f6c; white-space: nowrap; }
+.astro-float-region button[data-danger] { width: auto; padding: 0 8px; opacity: 1; color: #ef6f6c; font: 500 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; }
+.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px 0 8px; color: #ef6f6c; white-space: nowrap; font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; }
 
-/* While the panel is open the document moves over by the panel's width so no
- * text sits under it. The phone-width bottom sheet overlaps instead. */
+/* The tooltip: one instance for everything Float draws (see toolbar/tooltip.ts). Dark on a light
+ * site, light on a dark one; above the trigger, below when there's no room; never in the way. */
+.astro-float-tip {
+  position: fixed;
+  z-index: 2000000003;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #1c1f24;
+  color: #fff;
+  font: 500 12px/1.35 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  text-align: center;
+  box-sizing: border-box;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.astro-float-tip[data-below] { transform: translateY(-2px); }
+.astro-float-tip[data-show] { opacity: 1; transform: none; }
+:root[data-float-theme="dark"] .astro-float-tip { background: #f2f3f5; color: #1b1f26; }
 
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
@@ -1373,7 +1386,7 @@ function button(name: IconName | null, label: string, onClick: () => void, text?
   b.type = "button";
   if (name) b.appendChild(icon(name, 14));
   if (text) b.appendChild(Object.assign(document.createElement("span"), { textContent: text }));
-  b.title = label;
+  b.setAttribute("data-tip", label);
   b.setAttribute("aria-label", label);
   b.addEventListener("click", (e) => {
     e.preventDefault();
