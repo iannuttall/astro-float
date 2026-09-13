@@ -5,22 +5,21 @@ import { icon } from "../icons";
 import type { CollectionSchema } from "../schema";
 import { renderCollectionFooter, type FootState } from "./collection";
 import { renderForm } from "./form";
-import { createMarkdownView, type MarkdownView } from "./markdown";
 import { resetViewportZoom } from "./util";
 import { createYamlView, type YamlView } from "./yaml";
 
 /**
  * The panel: a flush column on the right edge (a bottom sheet on phones).
  *
- *   header   entry · hide · status · Autosave · Discard / Save
- *   tabs     Fields · YAML · Markdown
+ *   header   entry · hide · status · Discard / Save · Autosave
+ *   tabs     Fields · YAML
  *   view     one of the three, scrolling on its own
  *   footer   collection · entries · New entry
  *
  * It owns no content state: everything it shows comes from `PanelHost`, every
  * change goes back through it. Float keeps the draft, the doc and the saving.
  */
-export type PanelTab = "fields" | "yaml" | "markdown";
+export type PanelTab = "fields" | "yaml";
 
 export interface PanelPrefs {
   autosave: boolean;
@@ -31,7 +30,7 @@ export interface PanelPrefs {
 export interface StatusView {
   text: string;
   tone: "" | "warn" | "err";
-  dot: "idle" | "dirty" | "saving" | "saved" | "error" | "conflict";
+  dot: "idle" | "dirty" | "saving" | "saved" | "warning" | "error" | "conflict";
   showSave: boolean;
   showDiscard: boolean;
   actions: Array<{ label: string; primary?: boolean; onClick(): void }>;
@@ -58,17 +57,13 @@ export interface PanelHost {
   revertField(key: string): void;
   replaceDraft(next: Frontmatter): void;
   changed(key: string): boolean;
+  /** Something is dirty now (YAML text typed): status and autosave should know. */
+  markDirty(): void;
 
   save(force?: boolean): Promise<void>;
   discard(): void;
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
-
-  /** Source mode: the Markdown tab's textarea edits the body. */
-  openSource(area: HTMLTextAreaElement): void;
-  closeSource(): Promise<boolean>;
-  sourceState(): { active: boolean; busy: boolean; error: string | null };
-  discardSource(): void;
 }
 
 const WIDTH_MIN = 240;
@@ -80,7 +75,6 @@ function widthMax() {
 const TABS: Array<{ id: PanelTab; label: string }> = [
   { id: "fields", label: "Fields" },
   { id: "yaml", label: "YAML" },
-  { id: "markdown", label: "Markdown" },
 ];
 
 export class Panel {
@@ -94,8 +88,6 @@ export class Panel {
   private formHost: HTMLElement | null = null;
   private footHost: HTMLElement | null = null;
   private yaml: YamlView | null = null;
-  private markdown: MarkdownView | null = null;
-  private copyButton: HTMLButtonElement | null = null;
   private foot: FootState = { open: false };
   private syncs = new Map<string, () => void>();
   private switching = false;
@@ -138,10 +130,6 @@ export class Panel {
     return this.tab;
   }
 
-  /** Leave the Markdown tab (saving first) — the on-page control's "Rendered" while the tab is up. */
-  showFields() {
-    return this.showTab("fields");
-  }
 
   /** Build (or rebuild) the whole panel. Called when Edit turns on and after every page load. */
   render() {
@@ -186,29 +174,12 @@ export class Panel {
         h("span", { class: "head-entry" }, doc ? h("span", { class: "head-collection" }, `${doc.collection}/`) : null, doc ? doc.id : "No entry on this page"),
         hide,
       ),
-      h("div", { class: "head-status" }, this.statusText, autosave, this.statusActions),
+      h("div", { class: "head-status" }, this.statusText, this.statusActions),
+      h("div", { class: "head-tools" }, autosave),
     );
 
-    // tabs (+ Copy Markdown at the end of the row, only while the Markdown tab is up)
+    // tabs
     this.tabButtons.clear();
-    const copy = h(
-      "button",
-      {
-        class: "icon-btn tab-copy",
-        type: "button",
-        "aria-label": "Copy Markdown",
-        title: "Copy Markdown",
-        hidden: this.tab !== "markdown",
-        onClick: () => {
-          void navigator.clipboard?.writeText(host.body().text).then(() => {
-            replaceChildren(copy, icon("check", 14));
-            window.setTimeout(() => replaceChildren(copy, icon("copy", 14)), 1200);
-          });
-        },
-      },
-      icon("copy", 14),
-    ) as HTMLButtonElement;
-    this.copyButton = copy;
     const tabs = h(
       "div",
       { class: "tabs", role: "tablist" },
@@ -222,7 +193,6 @@ export class Panel {
         this.tabButtons.set(t.id, b);
         return b;
       }),
-      copy,
     );
 
     // views
@@ -232,23 +202,16 @@ export class Panel {
       draft: () => host.draft(),
       replaceDraft: (next) => host.replaceDraft(next),
       onErrorChange: (has) => this.setTabDot("yaml", has),
-    });
-    this.markdown = createMarkdownView({
-      body: () => host.body(),
-      openSource: (area) => host.openSource(area),
-      sourceState: () => host.sourceState(),
-      discardSource: () => host.discardSource(),
+      onInput: () => host.markDirty(),
     });
     const yamlView = h("div", { class: "view view-yaml", role: "tabpanel", hidden: true }, this.yaml.el);
-    const mdView = h("div", { class: "view view-md", role: "tabpanel", hidden: true }, this.markdown.el);
     this.views.set("fields", this.formHost);
     this.views.set("yaml", yamlView);
-    this.views.set("markdown", mdView);
 
     // footer
     this.footHost = h("div", { class: "foot-host" });
 
-    this.aside = h("aside", { class: "panel", "aria-label": "Content editor" }, head, tabs, h("div", { class: "views" }, this.formHost, yamlView, mdView), this.footHost);
+    this.aside = h("aside", { class: "panel", "aria-label": "Content editor" }, head, tabs, h("div", { class: "views" }, this.formHost, yamlView), this.footHost);
 
     // A quiet tab at the edge brings the panel back; it carries the status dot / Save so nothing is lost while hidden.
     this.edgeTab = h(
@@ -276,9 +239,7 @@ export class Panel {
     this.edgeTab = null;
     this.formHost = null;
     this.footHost = null;
-    this.copyButton = null;
     this.yaml = null;
-    this.markdown = null;
     this.statusText = null;
     this.statusActions = null;
     this.syncs.clear();
@@ -298,22 +259,13 @@ export class Panel {
     try {
       if (!initial) {
         if (prev === "yaml") this.yaml?.commit();
-        if (prev === "markdown") {
-          const left = await this.host.closeSource();
-          if (!left) {
-            this.markdown?.refresh();
-            return;
-          }
-        }
       }
       this.tab = next;
       for (const [id, b] of this.tabButtons) b.setAttribute("aria-selected", String(id === next));
       for (const [id, v] of this.views) v.hidden = id !== next;
-      if (this.copyButton) this.copyButton.hidden = next !== "markdown";
       DatePicker.close();
       if (next === "fields" && !initial) this.renderFields();
       if (next === "yaml") this.yaml?.refresh();
-      if (next === "markdown" && this.host.doc()) this.markdown?.open();
     } finally {
       this.switching = false;
     }
@@ -347,7 +299,7 @@ export class Panel {
     }
     const body = this.host.body();
     const note = !body.bound && !body.readOnly
-      ? h("p", { class: "form-note" }, `No editable body found on this page (${doc.file}). Fields save; use the Markdown tab for the body.`)
+      ? h("p", { class: "form-note" }, `No editable body found on this page (${doc.file}). The fields still save.`)
       : null;
     const form = renderForm(
       {
@@ -368,17 +320,32 @@ export class Panel {
     replaceChildren(this.formHost, note, form);
   }
 
-  /** One field changed outside the form (typed on the page, YAML): mirror it. */
+  /** One field changed outside the form (typed on the page, set in place): mirror it, and let the YAML text follow. */
   syncField(key: string) {
     this.syncs.get(key)?.();
-    if (this.tab === "yaml" && this.yaml && !this.yaml.hasFocus()) this.yaml.refresh();
+    this.yaml?.sync();
   }
 
-  /** The whole draft changed (discard, revert, YAML replace): repaint everything that shows it. */
+  /** The whole draft changed (discard, revert): repaint everything that shows it; broken YAML text is dropped. */
   syncAll() {
     if (this.tab === "fields") this.renderFields();
     else for (const sync of this.syncs.values()) sync();
-    if (this.tab === "yaml" && this.yaml && !this.yaml.hasFocus()) this.yaml.refresh();
+    this.yaml?.sync();
+  }
+
+  /** The draft changed through the form: the YAML text follows (broken text is dropped). */
+  syncYaml() {
+    this.yaml?.sync();
+  }
+
+  /** YAML typed but not yet parsed into the draft: the entry is dirty. */
+  yamlPending() {
+    return this.yaml?.isPending() ?? false;
+  }
+
+  /** Parse pending YAML into the draft now (before a save reads it). */
+  commitYaml() {
+    this.yaml?.commit();
   }
 
   renderCollection() {
@@ -399,19 +366,6 @@ export class Panel {
         () => this.renderCollection(),
       ),
     );
-  }
-
-  /** Source mode state changed (busy / error) or the body on disk was normalized by a save. */
-  refreshSource() {
-    this.markdown?.refresh();
-  }
-
-  syncSource(text: string) {
-    this.markdown?.sync(text);
-  }
-
-  get markdownArea(): HTMLTextAreaElement | null {
-    return this.markdown?.area ?? null;
   }
 
   // ---- hide / width -------------------------------------------------------------------------

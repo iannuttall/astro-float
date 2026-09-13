@@ -13,6 +13,7 @@
 import { humanize, inferField, inferType } from "../shared/infer.js";
 
 export { humanize, inferField, inferType };
+import { clone } from "./panel/util";
 
 export type FieldType =
   | "string"
@@ -50,6 +51,9 @@ export interface CollectionSchema {
   source: "zod" | "inferred"; // inferred = no schema found, types guessed from values (current behaviour)
   fields: FieldDef[];
 }
+
+/** `2026-09-01`, `2026-09-01T10:00:00Z`, `2026-09-01 10:00` … — a date we can put a picker on. */
+export const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
 
 /** No server schema: guess a definition for every key from its value (the POC's `fieldKind`). */
 export function schemaFor(collection: string, frontmatter: Record<string, unknown>): CollectionSchema {
@@ -154,6 +158,3 @@ export function emptyValue(def: FieldDef): unknown {
   }
 }
 
-function clone<T>(value: T): T {
-  return value === undefined ? value : JSON.parse(JSON.stringify(value));
-}

@@ -202,6 +202,17 @@ html[data-float-panel="resizing"] { transition: none; }
   user-select: none;
   -webkit-user-select: none;
 }
+:root[data-float-theme="dark"] .astro-float-datepicker {
+    --dp-bg: #15181c;
+    --dp-line: #2a3038;
+    --dp-fg: #e6e8eb;
+    --dp-muted: #8b93a1;
+    --dp-faint: #5c6470;
+    --dp-hover: #22262c;
+    --dp-accent: #e6e8eb;
+    --dp-accent-fg: #0f1114;
+    --dp-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+}
 @keyframes astro-float-dp-in { from { opacity: 0; transform: translateY(-2px); } }
 .astro-float-datepicker[data-above] { animation-name: astro-float-dp-in-up; }
 @keyframes astro-float-dp-in-up { from { opacity: 0; transform: translateY(2px); } }

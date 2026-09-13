@@ -12,7 +12,7 @@ import { clone, describe, resetViewportZoom } from "./panel/util";
 import { schemaFor, type CollectionSchema } from "./schema";
 import { STYLES } from "./styles";
 
-type Status = "idle" | "saving" | "refreshing" | "saved" | "error" | "conflict";
+type Status = "idle" | "saving" | "refreshing" | "saved" | "warning" | "error" | "conflict";
 
 export interface FloatHandle {
   setEditing(on: boolean): Promise<void>;
@@ -64,18 +64,19 @@ class Float {
   private region = new RegionControl();
 
   /**
-   * Source mode: a Markdown textarea is the body's editor. Either in the page
-   * (the corner control's Source view, standing in for the prose) or in the
-   * panel (the Markdown tab, prose visible but read-only). Same draft, same
-   * save either way; they never fight because there is one state.
+   * Source mode: the corner control's Source view — a Markdown textarea
+   * standing in for the prose, right there in the page. Leaving it saves and
+   * swaps in Astro's fresh render.
    */
   private sourceArea: HTMLTextAreaElement | null = null;
-  private sourceInPage = false;
   private sourceDraft = "";
   private sourceBusy = false;
   private sourceError: string | null = null;
   private wiredAreas = new WeakSet<HTMLTextAreaElement>();
   private savePromise: Promise<void> | null = null;
+  /** The panel follows the site's colour scheme: watch the page for changes while editing. */
+  private themeObserver: MutationObserver | null = null;
+  private themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
 
   private status: Status = "idle";
   private statusMessage = "";
@@ -134,14 +135,11 @@ class Float {
       revertField: (key) => this.revertField(key),
       replaceDraft: (next) => this.replaceDraft(next),
       changed: (key) => this.fieldChanged(key),
+      markDirty: () => this.touched(),
       save: (force) => this.save(force),
       discard: () => this.discardChanges(),
       navigate: (href, opts) => this.navigate(href, opts),
       notify: (message) => this.setStatus("error", message),
-      openSource: (area) => this.enterSource(area),
-      closeSource: () => this.leaveSource(),
-      sourceState: () => ({ active: !!this.sourceArea, busy: this.sourceBusy, error: this.sourceError }),
-      discardSource: () => this.discardSource(),
     });
 
     this.bindViewport();
@@ -191,8 +189,6 @@ class Float {
         editing: this.editing,
         status: this.status,
         sourceMode: !!this.sourceArea,
-        sourceInPage: this.sourceInPage,
-        tab: this.panel.activeTab,
         frontmatterDirty: this.frontmatterDirty(),
         bodyDirty: this.bodyDirty(),
         bodyBound: this.page.bound,
@@ -214,6 +210,7 @@ class Float {
     if (on) {
       ensurePageStyle();
       this.watchPanel();
+      this.watchTheme();
       if (this.loadedFor !== location.href) {
         await this.loadPage(); // renders the panel once it knows the entry
       } else {
@@ -232,6 +229,7 @@ class Float {
       this.region.hide();
       this.releaseFocus();
       removePageStyle();
+      this.unwatchTheme();
       this.panel.destroy();
       this.unwatchPanel();
     }
@@ -306,7 +304,7 @@ class Float {
 
   /** The body region: the prose container, or the in-page source textarea standing in for it. */
   private bodyRegion(): HTMLElement | null {
-    if (this.sourceArea && this.sourceInPage) return this.sourceArea;
+    if (this.sourceArea) return this.sourceArea;
     return this.page.bound && !this.bodyReadOnly ? this.page.container : null;
   }
 
@@ -320,8 +318,8 @@ class Float {
   };
 
   private onFocusOut = () => {
-    // In the in-page source view the control is the way back to the rendered page: keep it up.
-    if (this.editing && !(this.sourceArea && this.sourceInPage)) this.region.scheduleHide();
+    // In source view the control is the way back to the rendered page: keep it up.
+    if (this.editing && !this.sourceArea) this.region.scheduleHide();
   };
 
   private onPointerOver = (e: PointerEvent) => {
@@ -329,7 +327,7 @@ class Float {
   };
 
   private onPointerOut = (e: PointerEvent) => {
-    if (this.editing && this.inBody(e.target) && !this.inBody(e.relatedTarget) && !(this.sourceArea && this.sourceInPage)) this.region.scheduleHide();
+    if (this.editing && this.inBody(e.target) && !this.inBody(e.relatedTarget) && !this.sourceArea) this.region.scheduleHide();
   };
 
   private bodyRegionActions() {
@@ -343,34 +341,23 @@ class Float {
     };
   }
 
-  /** Escape hatch when leaving source view can't save: drop the source edits, show the body as it was. */
+  /** Escape hatch when leaving source view can't save: drop the source edits, show the page as it was. */
   private discardSource() {
     if (!this.sourceArea) return;
     this.sourceError = null;
     this.sourceDraft = this.doc?.body ?? "";
-    if (this.sourceInPage) this.exitSourceMode(true);
-    else this.panel.syncSource(this.sourceDraft);
+    this.exitSourceMode(true);
     if (this.status === "error" || this.status === "conflict") this.setStatus("idle");
     else this.renderStatus();
-    this.refreshSourceUi();
-  }
-
-  private refreshSourceUi() {
     this.region.refresh();
-    this.panel.refreshSource();
   }
 
-  // ---- source mode ---------------------------------------------------------------------
+  // ---- source mode (raw Markdown, in the page) -------------------------------------------
 
   /** The corner control's Source / Rendered: swap the prose for a Markdown textarea in the same spot (and back). */
   private async toggleSourceMode() {
     if (this.sourceBusy) return;
     if (this.sourceArea) {
-      // The panel's Markdown tab owns the source right now: leave through it, so the tab follows.
-      if (!this.sourceInPage) {
-        await this.panel.showFields();
-        return;
-      }
       await this.leaveSource();
       return;
     }
@@ -393,7 +380,7 @@ class Float {
     area.setAttribute("aria-label", "Markdown source");
     // Same height as the prose it replaces, so nothing below moves and the page keeps its scroll position.
     area.style.height = `${Math.max(240, rect.height)}px`;
-    this.enterSource(area, true);
+    this.enterSource(area);
     window.scrollTo(0, scrollY);
     area.focus({ preventScroll: true });
     // Open on the block he was looking at, at the height it had on the page.
@@ -415,51 +402,22 @@ class Float {
     this.region.show(area, this.bodyRegionActions());
   }
 
-  /**
-   * Make `area` the body's editor. In the page it stands in for the prose; in
-   * the panel (the Markdown tab) the prose stays visible, read-only, and the
-   * textarea opens on the block the page caret is in. Moving between the two
-   * keeps the draft.
-   */
-  private enterSource(area: HTMLTextAreaElement, inPage = false) {
-    if (!this.doc || this.bodyReadOnly) return;
-    if (this.sourceArea === area) return;
-    if (this.sourceArea) {
-      const draft = this.sourceDraft;
-      this.exitSourceMode(false);
-      this.sourceDraft = draft;
-    } else {
-      this.sourceDraft = this.currentBody();
-    }
+  /** Make `area` the body's editor, standing in for the prose. */
+  private enterSource(area: HTMLTextAreaElement) {
+    if (!this.doc || this.bodyReadOnly || this.sourceArea) return;
+    this.sourceDraft = this.currentBody();
     this.sourceError = null;
     this.wireSourceArea(area);
-    if (area.value !== this.sourceDraft) area.value = this.sourceDraft;
-    const where = inPage ? null : this.caretPlace();
+    area.value = this.sourceDraft;
     this.page.detach();
     const container = this.page.container;
-    if (inPage && container) {
+    if (container) {
       container.style.display = "none";
       container.after(area);
     }
     this.sourceArea = area;
-    this.sourceInPage = inPage;
-    if (where) {
-      area.setSelectionRange(where.offset, where.offset);
-      const lineHeight = parseFloat(getComputedStyle(area).lineHeight) || 20;
-      const line = area.value.slice(0, where.offset).split("\n").length - 1;
-      area.scrollTop = Math.max(0, line * lineHeight - 48);
-    }
     this.region.hide();
     this.renderStatus();
-  }
-
-  /** Where the page caret is (else the first block in view), as an offset into the body's Markdown. */
-  private caretPlace(): { index: number; offset: number } | null {
-    const container = this.page.container;
-    if (!container || !this.page.bound) return null;
-    const sel = document.getSelection();
-    const caretNode = sel && sel.rangeCount > 0 && sel.anchorNode && container.contains(sel.anchorNode) ? sel.anchorNode : null;
-    return this.page.markdownOffsetOf(caretNode ?? firstVisibleBlock(container));
   }
 
   private wireSourceArea(area: HTMLTextAreaElement) {
@@ -491,19 +449,19 @@ class Float {
   }
 
   /**
-   * Leave source mode: a save re-renders the page from what was typed, then
-   * the caret goes back to the block it was in (in the page, at the height it
-   * had on screen). False when the save didn't take.
+   * Leave source view: a save re-renders the page from what was typed, then
+   * the caret goes back to the block it was in, at the height it had on
+   * screen. False when the save didn't take.
    */
   private async leaveSource(): Promise<boolean> {
     if (!this.sourceArea) return true;
     if (this.sourceBusy) return false;
     this.sourceBusy = true;
     this.sourceError = null;
-    this.refreshSourceUi();
+    this.region.refresh();
     try {
       // Remember where he is in the text so the rendered page opens on the same block.
-      const place = this.sourceInPage ? this.sourcePlace(this.sourceArea) : { offset: this.sourceArea.selectionStart, viewportY: undefined };
+      const place = this.sourcePlace(this.sourceArea);
       if (this.savePromise) await this.savePromise; // an autosave already in flight
       if (this.isDirty()) {
         await this.save();
@@ -520,11 +478,11 @@ class Float {
       return true;
     } finally {
       this.sourceBusy = false;
-      this.refreshSourceUi();
+      this.region.refresh();
     }
   }
 
-  /** Caret offset in the in-page source textarea plus the viewport height of its line. */
+  /** Caret offset in the source textarea plus the viewport height of its line. */
   private sourcePlace(area: HTMLTextAreaElement): { offset: number; viewportY: number } | null {
     if (!area.isConnected) return null;
     const offset = area.selectionStart;
@@ -539,15 +497,40 @@ class Float {
   private exitSourceMode(restoreView: boolean) {
     if (!this.sourceArea) return;
     const area = this.sourceArea;
-    const inPage = this.sourceInPage;
     this.sourceArea = null;
-    this.sourceInPage = false;
-    if (inPage) area.remove();
+    area.remove();
     if (this.page.container) {
-      if (inPage) this.page.container.style.display = "";
+      this.page.container.style.display = "";
       if (restoreView && this.editing && !this.bodyReadOnly) this.page.attach();
     }
     this.region.hide();
+  }
+
+  // ---- theme: follow the site, not (only) the viewer -------------------------------------
+
+  private applyTheme() {
+    const theme = detectTheme(this.themeMedia.matches);
+    if (this.root.dataset.theme !== theme) this.root.dataset.theme = theme;
+    if (document.documentElement.getAttribute("data-float-theme") !== theme) document.documentElement.setAttribute("data-float-theme", theme);
+  }
+
+  private onThemeChange = () => this.applyTheme();
+
+  private watchTheme() {
+    this.applyTheme();
+    this.themeMedia.addEventListener("change", this.onThemeChange);
+    if (!this.themeObserver) {
+      this.themeObserver = new MutationObserver(() => this.applyTheme());
+    }
+    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style", "data-theme", "data-color-scheme"] });
+    this.themeObserver.observe(document.body, { attributes: true, attributeFilter: ["class", "style", "data-theme", "data-color-scheme"] });
+  }
+
+  private unwatchTheme() {
+    this.themeMedia.removeEventListener("change", this.onThemeChange);
+    this.themeObserver?.disconnect();
+    delete this.root.dataset.theme;
+    document.documentElement.removeAttribute("data-float-theme");
   }
 
   // ---- page lifecycle ---------------------------------------------------------
@@ -588,6 +571,7 @@ class Float {
     } catch (err) {
       this.setStatus("error", describe(err));
     }
+    this.applyTheme();
     this.panel.render();
   }
 
@@ -688,7 +672,7 @@ class Float {
   }
 
   private isDirty() {
-    return this.frontmatterDirty() || this.bodyDirty();
+    return this.frontmatterDirty() || this.bodyDirty() || this.panel.yamlPending();
   }
 
   private currentBody(): string {
@@ -705,6 +689,7 @@ class Float {
   }
 
   private touched() {
+    // A warning (Astro rejected the last write) stays until the next save says otherwise.
     if (this.status === "saved" || (this.status === "error" && !this.bodyReadOnly)) this.status = "idle";
     this.renderStatus();
     if (this.prefs.autosave) this.scheduleAutosave();
@@ -721,19 +706,43 @@ class Float {
 
   // ---- frontmatter draft (the panel's write path) ----------------------------------------
 
+  /** A key the collection's schema declares: its row is always on the form, set or not. */
+  private schemaKnows(key: string) {
+    return this.schema?.source === "zod" && this.schema.fields.some((f) => f.key === key);
+  }
+
   private setField(key: string, value: unknown) {
     const isNew = !(key in this.draftFrontmatter);
-    this.draftFrontmatter[key] = value;
+    if (isNew && this.schemaKnows(key)) {
+      // A schema field being set for the first time goes in at its schema position, not at the end.
+      const next: Frontmatter = {};
+      for (const f of this.schema!.fields) {
+        if (f.key === key) next[key] = value;
+        else if (f.key in this.draftFrontmatter) next[f.key] = this.draftFrontmatter[f.key];
+      }
+      for (const k of Object.keys(this.draftFrontmatter)) if (!(k in next)) next[k] = this.draftFrontmatter[k];
+      this.draftFrontmatter = next;
+    } else {
+      this.draftFrontmatter[key] = value;
+    }
     this.fields.setValue(key, value);
     this.touched();
-    if (isNew) this.panel.renderFields();
+    // The row already exists for a schema field (it was just unset): update it in place, keep the caret.
+    // Only an unknown key needs a new row. The YAML text follows either way.
+    if (isNew) {
+      if (this.schemaKnows(key)) this.panel.syncField(key);
+      else this.panel.renderFields();
+    }
+    this.panel.syncYaml();
   }
 
   private removeField(key: string) {
     if (!(key in this.draftFrontmatter)) return;
     delete this.draftFrontmatter[key];
     this.touched();
-    this.panel.renderFields();
+    if (this.schemaKnows(key)) this.panel.syncField(key);
+    else this.panel.renderFields();
+    this.panel.syncYaml();
   }
 
   /** Put a field back to what's on disk (also restores a removed field, in its original position). */
@@ -779,8 +788,7 @@ class Float {
     if (this.sourceArea) {
       this.sourceDraft = this.doc.body;
       this.sourceError = null;
-      if (this.sourceInPage) this.exitSourceMode(true);
-      else this.panel.syncSource(this.sourceDraft);
+      this.exitSourceMode(true);
     }
     this.page.restoreBaseline();
     this.draftBody = this.doc.body;
@@ -788,7 +796,7 @@ class Float {
     for (const key of this.fields.keys()) this.fields.setValue(key, this.draftFrontmatter[key]);
     this.panel.syncAll();
     this.setStatus("idle");
-    this.refreshSourceUi();
+    this.region.refresh();
   }
 
   // ---- saving -----------------------------------------------------------------
@@ -801,6 +809,7 @@ class Float {
 
   private async saveNow(force: boolean) {
     if (!this.doc || this.saving) return;
+    this.panel.commitYaml(); // YAML typed but not parsed yet counts: fold it into the draft first
     if (!this.isDirty() && !force) return;
     window.clearTimeout(this.autosaveTimer);
 
@@ -808,7 +817,6 @@ class Float {
     this.setStatus("saving");
     const frontmatter = clone(this.draftFrontmatter);
     const fromSource = !!this.sourceArea;
-    const inPage = this.sourceInPage;
     const snapshot = this.page.bound && !this.bodyReadOnly && !fromSource ? this.page.snapshotForSave() : null;
     const body = snapshot ? snapshot.markdown : this.currentBody();
     // Re-rendering from the server would move the caret; skip it while the
@@ -827,10 +835,7 @@ class Float {
       });
       this.doc = { ...this.doc, frontmatter, body: result.body, lead: result.lead, blocks: result.blocks, hash: result.hash };
       if (snapshot) this.page.commit(snapshot, { lead: result.lead, blocks: result.blocks });
-      if (fromSource && this.sourceDraft === body) {
-        this.sourceDraft = result.body;
-        if (!inPage) this.panel.syncSource(result.body);
-      }
+      if (fromSource && this.sourceDraft === body) this.sourceDraft = result.body;
       // Source-only mode: adopt the server's normalized text unless more was typed meanwhile.
       else if (!snapshot && !this.bodyReadOnly && this.draftBody === body) this.draftBody = result.body;
 
@@ -839,28 +844,33 @@ class Float {
         try {
           const scrollY = window.scrollY;
           await swapPage();
-          if (inPage) this.exitSourceMode(false);
+          this.exitSourceMode(false);
           window.scrollTo(0, scrollY);
           this.bindBody();
         } catch (err) {
           // Saved fine, page didn't re-render: fall back to the DOM we have and say so.
           console.warn("[astro-float] page refresh failed", err);
-          if (inPage) this.exitSourceMode(true);
+          if (fromSource) this.exitSourceMode(true);
           this.setStatus("error", "Saved, but the page didn't refresh — reload to see it");
           this.saving = false;
           return;
         }
         void this.refreshCollections();
-      } else if (fromSource && inPage && !result.changed) {
+      } else if (fromSource && !result.changed) {
         this.exitSourceMode(true);
       }
 
       this.savedAt = Date.now();
-      this.setStatus("saved");
-      window.clearTimeout(this.savedTimer);
-      this.savedTimer = window.setTimeout(() => {
-        if (this.status === "saved") this.setStatus("idle");
-      }, 2000);
+      if (result.changed && result.synced === false) {
+        // Written, but Astro's content layer didn't pick it up (a schema rejection, most likely).
+        this.setStatus("warning", "Saved, but Astro rejected the entry. Check the terminal.");
+      } else {
+        this.setStatus("saved");
+        window.clearTimeout(this.savedTimer);
+        this.savedTimer = window.setTimeout(() => {
+          if (this.status === "saved") this.setStatus("idle");
+        }, 2000);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) this.setStatus("conflict");
       else this.setStatus("error", describe(err));
@@ -890,7 +900,7 @@ class Float {
     const busy = this.status === "saving" || this.status === "refreshing";
     const dot: StatusView["dot"] = busy
       ? "saving"
-      : this.status === "error" || this.status === "conflict"
+      : this.status === "error" || this.status === "conflict" || this.status === "warning"
         ? this.status
         : this.status === "saved"
           ? "saved"
@@ -924,6 +934,10 @@ class Float {
         break;
       case "saved":
         view.text = "Saved";
+        break;
+      case "warning":
+        view.text = this.statusMessage;
+        view.tone = "warn";
         break;
       default:
         if (dirty) view.text = "Unsaved changes";
@@ -995,6 +1009,33 @@ function closestTopLevel(el: Element, container: HTMLElement): Element | null {
   let node: Element | null = el;
   while (node && node.parentElement !== container) node = node.parentElement;
   return node;
+}
+
+/**
+ * Light or dark, from what the page actually looks like: the painted background
+ * of <body> (then <html>), else a declared `color-scheme`, else the viewer's preference.
+ */
+function detectTheme(prefersDark: boolean): "light" | "dark" {
+  for (const el of [document.body, document.documentElement]) {
+    const l = luminance(getComputedStyle(el).backgroundColor);
+    if (l !== null) return l < 0.5 ? "dark" : "light";
+  }
+  const declared = getComputedStyle(document.documentElement).colorScheme ?? "";
+  const dark = /\bdark\b/.test(declared);
+  const light = /\blight\b/.test(declared);
+  if (dark && !light) return "dark";
+  if (light && !dark) return "light";
+  return prefersDark ? "dark" : "light";
+}
+
+/** Relative luminance of an `rgb()` / `rgba()` colour, or null when it's (mostly) transparent. */
+function luminance(color: string): number | null {
+  const m = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?/);
+  if (!m) return null;
+  const alpha = m[4] === undefined ? 1 : m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+  if (alpha < 0.5) return null;
+  const [r, g, b] = [m[1], m[2], m[3]].map((v) => parseFloat(v) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
 function loadPrefs(): PanelPrefs {
