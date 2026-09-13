@@ -195,7 +195,7 @@ class Float {
         bodyMapped: this.page.mapped,
         bodyReadOnly: this.bodyReadOnly,
         bodyDiff: this.page.debugDiff(),
-        onPageFields: this.fields.keys(),
+        onPageFields: this.fields.boundKeys(),
         schema: this.schema,
         entry: this.doc ? `${this.doc.collection}/${this.doc.id}` : null,
       }),
@@ -589,7 +589,7 @@ class Float {
       container = findBody(this.doc.blocks);
       if (container) markBody(container);
     }
-    this.fields.bind(this.doc.frontmatter, { body: container });
+    this.fields.bind(this.doc.frontmatter, { body: container, schema: this.schema });
     if (container) {
       this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
       // MDX we can't line up with the source would be written back as HTML — never do that.
@@ -767,7 +767,7 @@ class Float {
   /** The YAML view parsed cleanly: it becomes the draft, and the page's fields follow. */
   private replaceDraft(next: Frontmatter) {
     this.draftFrontmatter = clone(next);
-    for (const key of this.fields.keys()) this.fields.setValue(key, this.draftFrontmatter[key]);
+    for (const key of this.fields.boundKeys()) this.fields.setValue(key, this.draftFrontmatter[key]);
     this.touched();
   }
 
@@ -793,7 +793,7 @@ class Float {
     this.page.restoreBaseline();
     this.draftBody = this.doc.body;
     this.draftFrontmatter = clone(this.doc.frontmatter);
-    for (const key of this.fields.keys()) this.fields.setValue(key, this.draftFrontmatter[key]);
+    for (const key of this.fields.boundKeys()) this.fields.setValue(key, this.draftFrontmatter[key]);
     this.panel.syncAll();
     this.setStatus("idle");
     this.region.refresh();

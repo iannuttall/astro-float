@@ -1,12 +1,13 @@
-import { FieldIndex, normalizeText as normalize, unmarkAuto } from "./autobind";
+import { FieldIndex, chipPrefix, matchChips, normalizeText as normalize, unmarkAuto } from "./autobind";
 import { DatePicker } from "./datepicker";
+import type { CollectionSchema, FieldDef } from "./schema";
 
 /**
  * Frontmatter fields rendered on the page become editable in place. An
  * explicit `<h1 data-float-field="title">` is looked at first; every other
- * string or date value is then matched against the page text (see autobind.ts),
- * so a page with no attributes at all still gets its title, description and
- * date bound.
+ * value is then matched against the page text (see autobind.ts), so a page
+ * with no attributes at all still gets its title, description, date and tags
+ * bound. The panel only needs to show what the page doesn't.
  *
  * - String fields bind when the rendered text matches the frontmatter value
  *   verbatim (title, description). Plain-text caret.
@@ -15,42 +16,77 @@ import { DatePicker } from "./datepicker";
  *   the date opens a calendar; the pick is written back in the value's
  *   original shape (date part swapped, any suffix kept) and re-formatted on
  *   the page the same way the page did it.
+ * - String arrays (tags) bind to a run of sibling chips printing the items in
+ *   order, each optionally behind a one-character prefix ("#design"). Chips
+ *   rename in place (the prefix stays on the page, never in the file), an
+ *   emptied chip is removed on blur, and a quiet "+" chip after the last one
+ *   adds a tag. An empty array binds nothing.
+ * - Numbers bind when an element prints the value verbatim; typed text is
+ *   checked against the schema (min / max / integer) before it reaches the draft.
+ * - Enums (schema options) bind like strings but open a small menu of the
+ *   options instead of taking a caret.
  *
- * Everything else (joined tags, booleans, numbers) stays sidebar-only.
+ * Booleans, images, objects and references stay panel-only.
  */
 export interface FieldBindingHooks {
-  onChange(key: string, value: string): void;
+  onChange(key: string, value: unknown): void;
+}
+
+interface Chip {
+  el: HTMLElement;
+  /** What the page prints before the item ("#", "# "); kept on the page, never written back. */
+  prefix: string;
+  /** The item as it was when the chip took the caret, for Escape. */
+  was?: string;
 }
 
 type Binding =
   | { kind: "string"; el: HTMLElement }
-  | { kind: "date"; el: HTMLElement; format: (iso: string) => string; last: string; suffix: string };
+  | { kind: "number"; el: HTMLElement; def: FieldDef | null; last: string }
+  | { kind: "enum"; el: HTMLElement; options: string[] }
+  | { kind: "date"; el: HTMLElement; format: (iso: string) => string; last: string; suffix: string }
+  | { kind: "tags"; el: HTMLElement; chips: Chip[]; template: HTMLElement; prefix: string; adder: HTMLElement | null };
 
 const PLACEHOLDERS: Record<string, string> = { title: "Untitled", description: "Add a description…", pubDate: "Add a date…" };
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** `2026-09-01`, `2026-09-01T10:00:00Z`, `2026-09-01 10:00` … — a date we can put a picker on. */
 export const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
 
+const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.length > 0 && v.every((x) => typeof x === "string");
+
 export class FieldBindings {
   private els = new Map<string, Binding>();
   private attached = false;
   private listeners: Array<() => void> = [];
+  private schema: CollectionSchema | null = null;
+  private menu: HTMLElement | null = null;
 
   constructor(private hooks: FieldBindingHooks) {}
 
   /**
    * Bind to the page. Explicit `[data-float-field]` elements win; the remaining
-   * string and date values are auto-bound to the smallest matching element
+   * values are auto-bound to the smallest matching element (or chip run)
    * outside `body` (the rendered body region).
    */
-  bind(frontmatter: Record<string, unknown>, { body }: { body?: Element | null } = {}) {
+  bind(frontmatter: Record<string, unknown>, { body, schema }: { body?: Element | null; schema?: CollectionSchema | null } = {}) {
     this.unbind();
+    this.schema = schema ?? null;
     unmarkAuto("field");
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-float-field]"))) {
       const key = el.dataset.floatField;
       if (!key || this.els.has(key)) continue;
       const value = frontmatter[key];
       const text = normalize(el.textContent ?? "");
+      if (isStringArray(value)) {
+        const chips = Array.from(el.children).filter((c): c is HTMLElement => c instanceof HTMLElement);
+        const prefixes = matchChips(chips, value);
+        if (prefixes) this.els.set(key, this.tagsBinding(el, chips, prefixes));
+        continue;
+      }
+      if (typeof value === "number") {
+        if (text === String(value)) this.els.set(key, { kind: "number", el, def: this.def(key), last: text });
+        continue;
+      }
       if (typeof value === "string" && DATE_LIKE.test(value)) {
         const iso = value.slice(0, 10);
         const format = detectDateFormat(el, iso, text);
@@ -59,32 +95,67 @@ export class FieldBindings {
       }
       if (typeof value !== "string" && value !== undefined && value !== null) continue;
       if (text !== normalize(typeof value === "string" ? value : "")) continue;
-      this.els.set(key, { kind: "string", el });
+      this.els.set(key, this.stringBinding(key, el));
     }
     this.autoBind(frontmatter, body);
   }
 
-  /** Match every unbound non-empty string / date value against the page text. */
+  /** Match every unbound value with a rendering we can recognise against the page text. */
   private autoBind(frontmatter: Record<string, unknown>, body: Element | null | undefined) {
     let index: FieldIndex | null = null;
     for (const [key, value] of Object.entries(frontmatter)) {
-      if (this.els.has(key) || typeof value !== "string" || !value.trim() || key === "slug") continue;
+      if (this.els.has(key) || key === "slug") continue;
+      const isText = typeof value === "string" && !!value.trim();
+      if (!isText && typeof value !== "number" && !isStringArray(value)) continue;
       index ??= new FieldIndex([body, ...Array.from(this.els.values(), (b) => b.el)]);
-      if (DATE_LIKE.test(value)) {
-        const iso = value.slice(0, 10);
+      if (isStringArray(value)) {
+        const group = index.findGroup(value);
+        if (!group || !group.chips[0].parentElement) continue;
+        index.takeGroup(group.chips, key);
+        this.els.set(key, this.tagsBinding(group.chips[0].parentElement, group.chips, group.prefixes));
+        continue;
+      }
+      if (typeof value === "number") {
+        const el = index.find(String(value));
+        if (!el) continue;
+        index.take(el, key);
+        this.els.set(key, { kind: "number", el, def: this.def(key), last: String(value) });
+        continue;
+      }
+      if (DATE_LIKE.test(value as string)) {
+        const iso = (value as string).slice(0, 10);
         const el = index.findTime(iso) ?? index.findAny(dateRenderings(iso));
         if (!el) continue;
         const format = detectDateFormat(el, iso, normalize(el.textContent ?? ""));
         if (!format) continue;
         index.take(el, key);
-        this.els.set(key, { kind: "date", el, format, last: iso, suffix: value.slice(10) });
+        this.els.set(key, { kind: "date", el, format, last: iso, suffix: (value as string).slice(10) });
         continue;
       }
-      const el = index.find(value);
+      const el = index.find(value as string);
       if (!el) continue;
       index.take(el, key);
-      this.els.set(key, { kind: "string", el });
+      this.els.set(key, this.stringBinding(key, el));
     }
+  }
+
+  private def(key: string): FieldDef | null {
+    return this.schema?.fields.find((f) => f.key === key) ?? null;
+  }
+
+  /** A string with schema options is an enum: a menu, not a caret. */
+  private stringBinding(key: string, el: HTMLElement): Binding {
+    const def = this.def(key);
+    if (def?.type === "enum" && def.options?.length) return { kind: "enum", el, options: def.options };
+    return { kind: "string", el };
+  }
+
+  private tagsBinding(parent: HTMLElement, chips: HTMLElement[], prefixes: string[]): Binding {
+    const template = chips[0].cloneNode(false) as HTMLElement;
+    template.removeAttribute("href");
+    template.removeAttribute("id");
+    for (const attr of Array.from(template.attributes)) if (attr.name.startsWith("data-float")) template.removeAttribute(attr.name);
+    return { kind: "tags", el: parent, chips: chips.map((el, i) => ({ el, prefix: prefixes[i] })), template, prefix: prefixes[0], adder: null };
   }
 
   attach() {
@@ -92,6 +163,9 @@ export class FieldBindings {
     this.attached = true;
     for (const [key, binding] of this.els) {
       if (binding.kind === "date") this.attachDate(key, binding);
+      else if (binding.kind === "tags") this.attachTags(key, binding);
+      else if (binding.kind === "enum") this.attachEnum(key, binding);
+      else if (binding.kind === "number") this.attachText(key, binding.el, binding);
       else this.attachText(key, binding.el);
     }
   }
@@ -151,19 +225,37 @@ export class FieldBindings {
     });
   }
 
-  private attachText(key: string, el: HTMLElement) {
+  /**
+   * Plain-text caret. A number binding checks the text against its schema
+   * first: invalid text is marked and never reaches the draft; on blur the
+   * last good value comes back.
+   */
+  private attachText(key: string, el: HTMLElement, number?: Extract<Binding, { kind: "number" }>) {
     el.contentEditable = "plaintext-only";
     if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
     el.setAttribute("data-float-editing-field", "");
     el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
     const spellcheck = el.getAttribute("spellcheck");
-    el.spellcheck = true;
+    el.spellcheck = !number;
 
     const onInput = () => {
       const text = normalize(el.textContent ?? "");
       // Chrome leaves a <br> behind when the last character goes; clear it so :empty (placeholder) applies.
       if (text === "" && el.innerHTML !== "") el.textContent = "";
-      this.hooks.onChange(key, text);
+      if (!number) {
+        this.hooks.onChange(key, text);
+        return;
+      }
+      const value = parseNumber(text, number.def);
+      el.toggleAttribute("data-float-invalid", value === null);
+      if (value === null) return;
+      number.last = text;
+      this.hooks.onChange(key, value);
+    };
+    const onBlur = () => {
+      if (!number || !el.hasAttribute("data-float-invalid")) return;
+      el.removeAttribute("data-float-invalid");
+      el.textContent = number.last;
     };
     const onKeydown = (e: KeyboardEvent) => {
       if (e.key === "Enter") {
@@ -184,55 +276,328 @@ export class FieldBindings {
       document.execCommand("insertText", false, (e.clipboardData?.getData("text/plain") ?? "").replace(/\s+/g, " "));
     };
     el.addEventListener("input", onInput);
+    el.addEventListener("blur", onBlur);
     el.addEventListener("keydown", onKeydown);
     el.addEventListener("keyup", onKeyup);
     el.addEventListener("paste", onPaste);
     this.listeners.push(() => {
       el.removeEventListener("input", onInput);
+      el.removeEventListener("blur", onBlur);
       el.removeEventListener("keydown", onKeydown);
       el.removeEventListener("keyup", onKeyup);
       el.removeEventListener("paste", onPaste);
+      el.removeAttribute("data-float-invalid");
       if (spellcheck === null) el.removeAttribute("spellcheck");
       else el.setAttribute("spellcheck", spellcheck);
     });
   }
 
+  /** An enum printed on the page: click (or Enter / Space) opens a menu of the options; no caret. */
+  private attachEnum(key: string, binding: Extract<Binding, { kind: "enum" }>) {
+    const { el } = binding;
+    el.setAttribute("data-float-editing-field", "");
+    el.setAttribute("data-float-enum", "");
+    el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
+    el.setAttribute("role", "button");
+    el.setAttribute("aria-haspopup", "menu");
+    el.setAttribute("title", `Change ${key}`);
+    el.tabIndex = 0;
+    const open = () => {
+      if (this.menu?.dataset.for === key) return this.closeMenu();
+      this.closeMenu();
+      const menu = document.createElement("div");
+      menu.className = "astro-float-menu";
+      menu.dataset.for = key;
+      menu.setAttribute("role", "menu");
+      const current = normalize(el.textContent ?? "");
+      for (const option of binding.options) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.setAttribute("role", "menuitem");
+        b.textContent = option;
+        if (option === current) b.setAttribute("data-on", "");
+        b.addEventListener("click", () => {
+          this.closeMenu();
+          if (normalize(el.textContent ?? "") !== option) el.textContent = option;
+          this.hooks.onChange(key, option);
+          el.focus();
+        });
+        menu.appendChild(b);
+      }
+      const r = el.getBoundingClientRect();
+      menu.style.top = `${Math.round(r.bottom + 4)}px`;
+      menu.style.left = `${Math.round(r.left)}px`;
+      document.body.appendChild(menu);
+      this.menu = menu;
+      document.addEventListener("pointerdown", this.onDocumentDown, true);
+      document.addEventListener("keydown", this.onDocumentKey, true);
+      window.addEventListener("scroll", this.onDocumentDown, true);
+      (menu.querySelector("[data-on]") as HTMLElement | null)?.focus();
+    };
+    const onClick = (e: MouseEvent) => {
+      e.preventDefault();
+      open();
+    };
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        open();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        el.blur();
+      }
+    };
+    const onKeyup = (e: KeyboardEvent) => {
+      if (e.key === "Escape") e.stopPropagation();
+    };
+    el.addEventListener("click", onClick);
+    el.addEventListener("keydown", onKeydown);
+    el.addEventListener("keyup", onKeyup);
+    this.listeners.push(() => {
+      if (this.menu?.dataset.for === key) this.closeMenu();
+      el.removeEventListener("click", onClick);
+      el.removeEventListener("keydown", onKeydown);
+      el.removeEventListener("keyup", onKeyup);
+      el.removeAttribute("role");
+      el.removeAttribute("aria-haspopup");
+      el.removeAttribute("title");
+      el.removeAttribute("tabindex");
+      el.removeAttribute("data-float-enum");
+    });
+  }
+
+  private onDocumentDown = (e: Event) => {
+    if (this.menu && !this.menu.contains(e.target as Node)) this.closeMenu();
+  };
+  private onDocumentKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && this.menu) {
+      e.stopPropagation();
+      this.closeMenu();
+    }
+  };
+  private closeMenu() {
+    if (!this.menu) return;
+    this.menu.remove();
+    this.menu = null;
+    document.removeEventListener("pointerdown", this.onDocumentDown, true);
+    document.removeEventListener("keydown", this.onDocumentKey, true);
+    window.removeEventListener("scroll", this.onDocumentDown, true);
+  }
+
+  // ---- tags -----------------------------------------------------------------------
+
+  /** Every chip takes a caret; a "+" chip after the last one adds a tag. */
+  private attachTags(key: string, binding: Extract<Binding, { kind: "tags" }>) {
+    for (const chip of binding.chips) this.attachChip(key, binding, chip);
+
+    const adder = binding.template.cloneNode(false) as HTMLElement;
+    adder.textContent = "+";
+    adder.setAttribute("data-float-add", "");
+    adder.setAttribute("role", "button");
+    adder.setAttribute("title", `Add ${key === "tags" ? "a tag" : `to ${key}`}`);
+    adder.tabIndex = 0;
+    binding.adder = adder;
+    this.placeChip(binding, adder);
+
+    const reset = () => {
+      adder.removeAttribute("data-float-adding");
+      adder.removeAttribute("contenteditable");
+      adder.textContent = "+";
+    };
+    const start = () => {
+      if (adder.hasAttribute("data-float-adding")) return;
+      adder.setAttribute("data-float-adding", "");
+      adder.contentEditable = "plaintext-only";
+      if (adder.contentEditable !== "plaintext-only") adder.contentEditable = "true";
+      adder.textContent = binding.prefix;
+      adder.focus();
+      placeCaretAtEnd(adder);
+    };
+    const commit = () => {
+      if (!adder.hasAttribute("data-float-adding")) return;
+      const item = stripPrefix(adder.textContent ?? "", binding.prefix);
+      reset();
+      if (!item || binding.chips.some((c) => chipValue(c) === item)) return;
+      const chip: Chip = { el: binding.template.cloneNode(false) as HTMLElement, prefix: binding.prefix };
+      chip.el.textContent = binding.prefix + item;
+      binding.chips.push(chip);
+      this.placeChip(binding, chip.el, adder);
+      this.attachChip(key, binding, chip);
+      this.emitTags(key, binding);
+    };
+    const onClick = (e: MouseEvent) => {
+      e.preventDefault();
+      start();
+    };
+    const onKeydown = (e: KeyboardEvent) => {
+      if (!adder.hasAttribute("data-float-adding")) {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          start();
+        }
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commit();
+        adder.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        reset();
+        adder.blur();
+      }
+    };
+    const onKeyup = (e: KeyboardEvent) => {
+      if (e.key === "Escape") e.stopPropagation();
+    };
+    adder.addEventListener("click", onClick);
+    adder.addEventListener("keydown", onKeydown);
+    adder.addEventListener("keyup", onKeyup);
+    adder.addEventListener("blur", commit);
+    this.listeners.push(() => {
+      adder.removeEventListener("click", onClick);
+      adder.removeEventListener("keydown", onKeydown);
+      adder.removeEventListener("keyup", onKeyup);
+      adder.removeEventListener("blur", commit);
+      this.removeChip(adder);
+      binding.adder = null;
+    });
+  }
+
+  private attachChip(key: string, binding: Extract<Binding, { kind: "tags" }>, chip: Chip) {
+    if (!this.attached) return;
+    const { el } = chip;
+    el.contentEditable = "plaintext-only";
+    if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
+    el.setAttribute("data-float-chip", "");
+    const onFocus = () => {
+      chip.was = chipValue(chip);
+    };
+    const onInput = () => {
+      if (normalize(el.textContent ?? "") === "" && el.innerHTML !== "") el.textContent = "";
+      this.emitTags(key, binding);
+    };
+    const onBlur = () => {
+      const item = chipValue(chip);
+      if (!item) {
+        binding.chips = binding.chips.filter((c) => c !== chip);
+        this.removeChip(el);
+      } else if (normalize(el.textContent ?? "") !== normalize(chip.prefix + item)) {
+        el.textContent = chip.prefix + item;
+      }
+      this.emitTags(key, binding);
+    };
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        el.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (chip.was !== undefined) el.textContent = chip.prefix + chip.was;
+        el.blur();
+      }
+    };
+    const onKeyup = (e: KeyboardEvent) => {
+      if (e.key === "Escape") e.stopPropagation();
+    };
+    const onClick = (e: MouseEvent) => {
+      if (el.tagName === "A") e.preventDefault(); // a linked chip edits, it doesn't navigate
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      if (el.contentEditable === "plaintext-only") return;
+      e.preventDefault();
+      document.execCommand("insertText", false, (e.clipboardData?.getData("text/plain") ?? "").replace(/\s+/g, " "));
+    };
+    el.addEventListener("focus", onFocus);
+    el.addEventListener("input", onInput);
+    el.addEventListener("blur", onBlur);
+    el.addEventListener("keydown", onKeydown);
+    el.addEventListener("keyup", onKeyup);
+    el.addEventListener("click", onClick);
+    el.addEventListener("paste", onPaste);
+    this.listeners.push(() => {
+      el.removeEventListener("focus", onFocus);
+      el.removeEventListener("input", onInput);
+      el.removeEventListener("blur", onBlur);
+      el.removeEventListener("keydown", onKeydown);
+      el.removeEventListener("keyup", onKeyup);
+      el.removeEventListener("click", onClick);
+      el.removeEventListener("paste", onPaste);
+      el.removeAttribute("contenteditable");
+      el.removeAttribute("data-float-chip");
+      dropEmptyStyle(el);
+    });
+  }
+
+  private emitTags(key: string, binding: Extract<Binding, { kind: "tags" }>) {
+    this.hooks.onChange(key, binding.chips.map(chipValue).filter(Boolean));
+  }
+
+  /** Put a chip after the last one (or before `before`), copying the whitespace the page keeps between chips. */
+  private placeChip(binding: Extract<Binding, { kind: "tags" }>, el: HTMLElement, before: HTMLElement | null = null) {
+    const last = binding.chips[binding.chips.length - 1]?.el ?? null;
+    const anchor = before ?? last;
+    const gap = anchor?.previousSibling;
+    const space = gap instanceof Text && !gap.textContent?.trim() ? gap.cloneNode() : null;
+    if (before) {
+      before.before(...(space ? [space, el] : [el]));
+    } else if (last?.parentNode) {
+      last.after(...(space ? [space, el] : [el]));
+    } else {
+      binding.el.append(...(space ? [space, el] : [el]));
+    }
+  }
+
+  private removeChip(el: HTMLElement) {
+    const gap = el.previousSibling;
+    if (gap instanceof Text && !gap.textContent?.trim()) gap.remove();
+    el.remove();
+  }
+
+  // ---- lifecycle ----------------------------------------------------------------------
+
   detach() {
     if (!this.attached) return;
     this.attached = false;
+    this.closeMenu();
     for (const off of this.listeners) off();
     this.listeners = [];
     for (const { el } of this.els.values()) {
       el.removeAttribute("contenteditable");
       el.removeAttribute("data-float-editing-field");
       el.removeAttribute("data-float-placeholder");
+      dropEmptyStyle(el);
     }
   }
 
   unbind() {
     this.detach();
     this.els.clear();
+    this.schema = null;
   }
 
   has(key: string) {
     return this.els.has(key);
   }
 
-  /** The bound page element for a key, if any. */
+  /** The bound page element for a key, if any (for tags: the chips' parent). */
   element(key: string): HTMLElement | undefined {
     return this.els.get(key)?.el;
   }
 
-  /** Keys bound on the page. */
-  keys(): string[] {
+  /** Keys editable on the page: the panel can leave these out. */
+  boundKeys(): string[] {
     return Array.from(this.els.keys());
   }
 
-  /** Push a value from the sidebar into the page (a text field is skipped while it has the caret; a date has no caret). */
+  /** Push a value from the sidebar into the page (skipped while the field has the caret; a date or enum has none). */
   setValue(key: string, value: unknown) {
     const binding = this.els.get(key);
     if (!binding) return;
-    if (binding.kind === "string" && document.activeElement === binding.el) return;
+    const active = document.activeElement;
     if (binding.kind === "date") {
       const iso = typeof value === "string" && DATE_LIKE.test(value) ? value.slice(0, 10) : "";
       binding.last = iso;
@@ -240,12 +605,41 @@ export class FieldBindings {
       this.paintDate(binding, iso);
       return;
     }
-    const text = typeof value === "string" ? value : "";
+    if (binding.kind === "tags") {
+      if (binding.el.contains(active)) return;
+      this.paintTags(key, binding, Array.isArray(value) ? value.map(String) : []);
+      return;
+    }
+    if (active === binding.el) return;
+    const text = typeof value === "string" ? value : typeof value === "number" ? String(value) : "";
+    if (binding.kind === "number") {
+      binding.last = text;
+      binding.el.removeAttribute("data-float-invalid");
+    }
     if (normalize(binding.el.textContent ?? "") !== normalize(text)) binding.el.textContent = text;
   }
 
+  /** Make the chips on the page show `items`: rename in place, drop extras, clone the template for new ones. */
+  private paintTags(key: string, binding: Extract<Binding, { kind: "tags" }>, items: string[]) {
+    for (const chip of binding.chips.slice(items.length)) this.removeChip(chip.el);
+    binding.chips = binding.chips.slice(0, items.length);
+    items.forEach((item, i) => {
+      const chip = binding.chips[i];
+      if (chip) {
+        if (chipValue(chip) !== normalize(item)) chip.el.textContent = chip.prefix + item;
+        return;
+      }
+      const next: Chip = { el: binding.template.cloneNode(false) as HTMLElement, prefix: binding.prefix };
+      next.el.textContent = binding.prefix + item;
+      binding.chips.push(next);
+      this.placeChip(binding, next.el, binding.adder);
+      this.attachChip(key, binding, next);
+    });
+  }
+
   hasFocus() {
-    return Array.from(this.els.values()).some(({ el }) => el === document.activeElement);
+    const active = document.activeElement;
+    return Array.from(this.els.values()).some((b) => b.el === active || (b.kind === "tags" && b.el.contains(active)));
   }
 
   private paintDate(binding: Extract<Binding, { kind: "date" }>, iso: string) {
@@ -256,6 +650,44 @@ export class FieldBindings {
       else binding.el.removeAttribute("datetime");
     }
   }
+}
+
+// ---- chips / numbers ------------------------------------------------------------------
+
+/** The item a chip holds: its text minus the prefix the page prints. */
+function chipValue(chip: Chip) {
+  return stripPrefix(chip.el.textContent ?? "", chip.prefix);
+}
+
+function stripPrefix(text: string, prefix: string) {
+  const t = normalize(text);
+  const p = prefix.trim();
+  return p && t.startsWith(p) ? normalize(t.slice(p.length)) : t;
+}
+
+/** Chrome leaves `style=""` on an element that took a caret; the page had none. */
+function dropEmptyStyle(el: HTMLElement) {
+  if (el.getAttribute("style") === "") el.removeAttribute("style");
+}
+
+function placeCaretAtEnd(el: HTMLElement) {
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
+/** The number `text` spells, if it satisfies the field definition; null otherwise. */
+function parseNumber(text: string, def: FieldDef | null): number | null {
+  if (!/^-?\d+(?:\.\d+)?$/.test(text)) return null;
+  const n = Number(text);
+  if (!Number.isFinite(n)) return null;
+  if (def?.integer && !Number.isInteger(n)) return null;
+  if (def?.min !== undefined && n < def.min) return null;
+  if (def?.max !== undefined && n > def.max) return null;
+  return n;
 }
 
 // ---- dates ------------------------------------------------------------------------

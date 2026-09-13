@@ -147,10 +147,52 @@ html[data-float-panel="resizing"] { transition: none; }
 [data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
 [data-float-editing-field][data-float-date] { cursor: pointer; }
 [data-float-editing-field][data-float-date][data-float-open]::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+[data-float-editing-field][data-float-enum] { cursor: pointer; }
+[data-float-editing-field][data-float-invalid] { text-decoration: underline wavy color-mix(in srgb, #d4423e 70%, transparent); text-underline-offset: 3px; }
+
+/* Tags on the page: each chip takes a caret (a smaller wash than a field); a quiet "+" chip after
+ * the last one adds a tag. Both keep the page's own chip styling. */
+[data-float-chip], [data-float-add] { position: relative; z-index: 0; outline: none; caret-color: currentColor; }
+[data-float-chip]::after, [data-float-add]::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -3px -5px;
+  border-radius: 4px;
+  background-color: transparent;
+  pointer-events: none;
+  transition: background-color 120ms ease;
+}
+[data-float-chip]:hover::after, [data-float-add]:hover::after { background-color: color-mix(in srgb, currentColor 6%, transparent); }
+[data-float-chip]:focus::after, [data-float-add]:focus::after { background-color: color-mix(in srgb, currentColor 3.5%, transparent); }
+[data-float-add] { opacity: 0.55; cursor: pointer; user-select: none; -webkit-user-select: none; }
+[data-float-add]:hover, [data-float-add][data-float-adding] { opacity: 1; }
+[data-float-add][data-float-adding] { cursor: text; user-select: auto; -webkit-user-select: auto; min-width: 2ch; }
+
+/* Inline menu for an enum printed on the page: the options, current one marked. */
+.astro-float-menu {
+  position: fixed;
+  z-index: 2000000002;
+  min-width: 120px;
+  padding: 4px;
+  background: var(--dp-bg);
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  box-shadow: var(--dp-shadow);
+  color: var(--dp-fg);
+  font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  box-sizing: border-box;
+  animation: astro-float-dp-in 120ms ease;
+}
+.astro-float-menu button { all: unset; display: block; width: 100%; padding: 7px 8px; border-radius: 4px; cursor: pointer; box-sizing: border-box; color: var(--dp-fg); font: inherit; }
+.astro-float-menu button:hover, .astro-float-menu button:focus-visible { background: var(--dp-hover); }
+.astro-float-menu button[data-on] { font-weight: 500; }
 
 /* Page-side chrome (calendar, selection bubble, island bar) shares one palette
  * and follows the panel: light by default, dark when the viewer prefers it. */
-.astro-float-datepicker, .astro-float-bubble, .astro-float-bar {
+.astro-float-datepicker, .astro-float-bubble, .astro-float-bar, .astro-float-menu {
   --dp-bg: #ffffff;
   --dp-input: #ffffff;
   --dp-line: #d8dce3;
@@ -166,7 +208,7 @@ html[data-float-panel="resizing"] { transition: none; }
   --dp-shadow: 0 1px 2px rgba(16, 20, 28, 0.06), 0 12px 32px -12px rgba(16, 20, 28, 0.3);
 }
 @media (prefers-color-scheme: dark) {
-  .astro-float-datepicker, .astro-float-bubble, .astro-float-bar {
+  .astro-float-datepicker, .astro-float-bubble, .astro-float-bar, .astro-float-menu {
     --dp-bg: #15181c;
     --dp-input: #0b0d10;
     --dp-line: #2a3038;

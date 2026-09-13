@@ -13,6 +13,8 @@ type SourceBlock = ApiBlock & { text?: string };
  *   text starts with the first block and ends with the last.
  * - A field is the smallest element whose text is the frontmatter value (or a
  *   rendering of a date value), outside the body, site chrome and dev tooling.
+ * - A string array (tags) is a run of sibling elements whose texts are the
+ *   items in order, each optionally behind a one-character prefix ("#design").
  *
  * Attributes remain overrides: callers look at `[data-float-body]` and
  * `[data-float-field]` first. Anything found here gets the same attribute plus
@@ -37,6 +39,32 @@ const AUTO_ATTR = "data-float-auto";
 /** Collapse whitespace; the strict comparison used for string fields. */
 export function normalizeText(text: string) {
   return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The prefix a chip prints before `item` ("#" in "#design", "# " in "# design"),
+ * "" when the chip is the item verbatim, null when the chip isn't this item.
+ */
+export function chipPrefix(text: string, item: string): string | null {
+  text = normalizeText(text);
+  item = normalizeText(item);
+  if (!item) return null;
+  if (text === item) return "";
+  if (!text.endsWith(item)) return null;
+  const prefix = text.slice(0, -item.length);
+  return /^[^\p{L}\p{N}\s] ?$/u.test(prefix) ? prefix : null;
+}
+
+/** The prefixes of `els` when their texts are `items` in order (see `chipPrefix`); null otherwise. */
+export function matchChips(els: Element[], items: string[]): string[] | null {
+  if (!items.length || els.length !== items.length) return null;
+  const prefixes: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const prefix = chipPrefix(els[i].textContent ?? "", items[i]);
+    if (prefix === null) return null;
+    prefixes.push(prefix);
+  }
+  return prefixes;
 }
 
 /** Loose comparison for body text: smartypants punctuation and all whitespace folded away. */
@@ -177,6 +205,8 @@ export function unmarkAuto(kind?: "body" | "field") {
 export class FieldIndex {
   private byText = new Map<string, HTMLElement[]>();
   private times: HTMLElement[] = [];
+  /** Leaf elements that may be one chip of a tag list; a chip may itself be a link. */
+  private chips = new Set<HTMLElement>();
   private used = new Set<Element>();
 
   constructor(exclude: Array<Element | null | undefined>) {
@@ -184,8 +214,10 @@ export class FieldIndex {
     for (const el of walk(document.body)) {
       if (el.hasAttribute("data-float-field") || el.hasAttribute("data-float-body")) continue;
       if (skip.some((s) => s === el || s.contains(el))) continue;
-      if (el.closest(NO_FIELD_SELECTOR)) continue;
       if (el.querySelector(`:scope > :not(${INLINE_SELECTOR})`)) continue;
+      const blocked = el.closest(NO_FIELD_SELECTOR);
+      if (!blocked || (blocked === el && el.tagName === "A")) this.chips.add(el);
+      if (blocked) continue;
       if (el instanceof HTMLTimeElement && el.dateTime) this.times.push(el);
       const text = normalizeText(el.textContent ?? "");
       if (!text || text.length > 2000) continue;
@@ -211,6 +243,29 @@ export class FieldIndex {
     return null;
   }
 
+  /**
+   * The first run of unused sibling elements whose texts are `items` in order
+   * (each may print a one-character prefix, "#design"). Returns the chips and
+   * their prefixes.
+   */
+  findGroup(items: string[]): { chips: HTMLElement[]; prefixes: string[] } | null {
+    if (!items.length) return null;
+    let best: { chips: HTMLElement[]; prefixes: string[] } | null = null;
+    for (const first of this.chips) {
+      if (this.used.has(first)) continue;
+      // Candidates come in document order, so a wrapper of the real chips shows up first; the deepest run wins.
+      if (best && !best.chips[0].contains(first)) continue;
+      const run: HTMLElement[] = [];
+      for (let el: Element | null = first; el && run.length < items.length; el = el.nextElementSibling) {
+        if (!(el instanceof HTMLElement) || !this.chips.has(el) || this.used.has(el)) break;
+        run.push(el);
+      }
+      const prefixes = matchChips(run, items);
+      if (prefixes) best = { chips: run, prefixes };
+    }
+    return best;
+  }
+
   /** An unused `<time datetime="…">` for a `YYYY-MM-DD` date. */
   findTime(iso: string): HTMLElement | null {
     return this.times.find((el) => !this.used.has(el) && el.getAttribute("datetime")?.slice(0, 10) === iso) ?? null;
@@ -220,5 +275,12 @@ export class FieldIndex {
     this.used.add(el);
     el.setAttribute("data-float-field", key);
     el.setAttribute(AUTO_ATTR, "field");
+  }
+
+  /** Bind a chip run as one field: the attribute goes on their common parent, like an explicit override would. */
+  takeGroup(chips: HTMLElement[], key: string) {
+    for (const el of chips) this.used.add(el);
+    const parent = chips[0].parentElement;
+    if (parent) this.take(parent, key);
   }
 }
