@@ -57,10 +57,49 @@ export class RegionControl {
 
   show(target: HTMLElement, actions: RegionActions) {
     window.clearTimeout(this.hideTimer);
+    if (this.target !== target) this.unbindTarget();
     this.target = target;
     this.actions = actions;
+    target.addEventListener("pointerenter", this.paint);
+    target.addEventListener("pointerleave", this.paint);
     this.render();
   }
+
+  /** The pointer is on the control, which sits outside the body element: keep the body's wash on. */
+  private onEnter = () => {
+    this.target?.setAttribute("data-float-hover", "");
+    this.paint();
+  };
+
+  private onLeave = () => {
+    this.target?.removeAttribute("data-float-hover");
+    this.paint();
+    this.scheduleHide(); // unless the body still has the pointer or the caret
+  };
+
+  private unbindTarget() {
+    const t = this.target;
+    if (!t) return;
+    t.removeAttribute("data-float-hover");
+    t.removeEventListener("pointerenter", this.paint);
+    t.removeEventListener("pointerleave", this.paint);
+  }
+
+  /**
+   * An opaque surface the colour of the wash: the page's effective background
+   * (first ancestor with a painted one) with the wash's tint of the text colour
+   * over it, so the label never lets the prose bleed through.
+   */
+  private paint = () => {
+    if (!this.el || !this.target) return;
+    const t = this.target;
+    const fg = parseColor(getComputedStyle(t).color) ?? { r: 0, g: 0, b: 0, a: 1 };
+    const over = t.matches(":hover") || t.hasAttribute("data-float-hover");
+    const tint = over ? 0.045 : 0.025;
+    const bg = pageBackground(t);
+    const mix = (k: "r" | "g" | "b") => Math.round(bg[k] * (1 - tint) + fg[k] * tint);
+    this.el.style.background = `rgb(${mix("r")}, ${mix("g")}, ${mix("b")})`;
+  };
 
   /** Re-draw with the same target (source / busy / error state changed). */
   refresh() {
@@ -76,6 +115,7 @@ export class RegionControl {
     window.clearTimeout(this.hideTimer);
     this.hideTimer = window.setTimeout(() => {
       const t = this.target;
+      if (this.actions?.isSource()) return; // in source view the control is the way back
       if (this.el?.contains(document.activeElement) || this.el?.matches(":hover")) return;
       if (t && (t.matches(":hover") || t === document.activeElement || t.contains(document.activeElement))) return;
       this.hide();
@@ -84,6 +124,7 @@ export class RegionControl {
 
   hide() {
     window.clearTimeout(this.hideTimer);
+    this.unbindTarget();
     this.target = null;
     this.actions = null;
     this.visible = false;
@@ -117,6 +158,8 @@ export class RegionControl {
     if (!this.el) {
       this.el = document.createElement("div");
       this.el.className = "astro-float-region";
+      this.el.addEventListener("pointerenter", this.onEnter);
+      this.el.addEventListener("pointerleave", this.onLeave);
       window.addEventListener("scroll", this.reposition, true);
       window.addEventListener("resize", this.reposition);
     }
@@ -154,8 +197,32 @@ export class RegionControl {
 
     this.visible = true;
     el.setAttribute("data-show", "");
+    this.paint();
     this.reposition();
   }
+}
+
+interface Rgba {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+function parseColor(color: string): Rgba | null {
+  const m = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?/);
+  if (!m) return null;
+  const a = m[4] === undefined ? 1 : m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+  return { r: parseFloat(m[1]), g: parseFloat(m[2]), b: parseFloat(m[3]), a };
+}
+
+/** The page's painted background behind an element; white or near-black by Float's theme when nothing paints one. */
+function pageBackground(el: Element): Rgba {
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    const c = parseColor(getComputedStyle(node).backgroundColor);
+    if (c && c.a >= 0.99) return c;
+  }
+  return document.documentElement.getAttribute("data-float-theme") === "dark" ? { r: 15, g: 17, b: 20, a: 1 } : { r: 255, g: 255, b: 255, a: 1 };
 }
 
 // ---- selection bubble ----------------------------------------------------------------

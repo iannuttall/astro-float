@@ -56,7 +56,7 @@ const PAGE_STYLE = /* css */ `
   transition: background-color 120ms ease;
 }
 [data-float-editing]::after { inset: -14px -18px; }
-[data-float-editing]:hover::after, [data-float-editing-field]:hover::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+[data-float-editing]:hover::after, [data-float-editing][data-float-hover]::after, [data-float-editing-field]:hover::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
 [data-float-editing]:focus::after, [data-float-editing-field]:focus::after { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
 [data-float-editing][data-float-dragging]::after { background-color: color-mix(in srgb, currentColor 7%, transparent); }
 [data-float-editing] a { cursor: text; }
@@ -92,6 +92,8 @@ const PAGE_STYLE = /* css */ `
   display: flex;
   align-items: center;
   gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
   color: color-mix(in srgb, currentColor 70%, transparent);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   letter-spacing: -0.005em;
