@@ -192,6 +192,7 @@ export const STYLES = /* css */ `
 .tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--fg); }
 .tab:disabled { opacity: 0.4; cursor: default; background: none; }
 .tab-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--err); }
+.tab-copy { margin-left: auto; align-self: center; margin-bottom: 2px; }
 
 /* ---- views ----------------------------------------------------------------- */
 .views { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }

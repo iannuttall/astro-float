@@ -64,7 +64,7 @@ export interface PanelHost {
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
 
-  /** Source mode, shared with the region control's in-page Source view. */
+  /** Source mode: the Markdown tab's textarea edits the body. */
   openSource(area: HTMLTextAreaElement): void;
   closeSource(): Promise<boolean>;
   sourceState(): { active: boolean; busy: boolean; error: string | null };
@@ -95,6 +95,7 @@ export class Panel {
   private footHost: HTMLElement | null = null;
   private yaml: YamlView | null = null;
   private markdown: MarkdownView | null = null;
+  private copyButton: HTMLButtonElement | null = null;
   private foot: FootState = { open: false };
   private syncs = new Map<string, () => void>();
   private switching = false;
@@ -183,8 +184,26 @@ export class Panel {
       h("div", { class: "head-status" }, this.statusText, autosave, this.statusActions),
     );
 
-    // tabs
+    // tabs (+ Copy Markdown at the end of the row, only while the Markdown tab is up)
     this.tabButtons.clear();
+    const copy = h(
+      "button",
+      {
+        class: "icon-btn tab-copy",
+        type: "button",
+        "aria-label": "Copy Markdown",
+        title: "Copy Markdown",
+        hidden: this.tab !== "markdown",
+        onClick: () => {
+          void navigator.clipboard?.writeText(host.body().text).then(() => {
+            replaceChildren(copy, icon("check", 14));
+            window.setTimeout(() => replaceChildren(copy, icon("copy", 14)), 1200);
+          });
+        },
+      },
+      icon("copy", 14),
+    ) as HTMLButtonElement;
+    this.copyButton = copy;
     const tabs = h(
       "div",
       { class: "tabs", role: "tablist" },
@@ -198,6 +217,7 @@ export class Panel {
         this.tabButtons.set(t.id, b);
         return b;
       }),
+      copy,
     );
 
     // views
@@ -251,6 +271,7 @@ export class Panel {
     this.edgeTab = null;
     this.formHost = null;
     this.footHost = null;
+    this.copyButton = null;
     this.yaml = null;
     this.markdown = null;
     this.statusText = null;
@@ -283,6 +304,7 @@ export class Panel {
       this.tab = next;
       for (const [id, b] of this.tabButtons) b.setAttribute("aria-selected", String(id === next));
       for (const [id, v] of this.views) v.hidden = id !== next;
+      if (this.copyButton) this.copyButton.hidden = next !== "markdown";
       DatePicker.close();
       if (next === "fields" && !initial) this.renderFields();
       if (next === "yaml") this.yaml?.refresh();
