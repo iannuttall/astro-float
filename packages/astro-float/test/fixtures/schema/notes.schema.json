@@ -1,0 +1,106 @@
+{
+  "$ref": "#/definitions/notes",
+  "definitions": {
+    "notes": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Shown as the note's heading",
+          "markdownDescription": "Shown as the note's heading"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "idea",
+            "todo",
+            "reference"
+          ],
+          "default": "idea",
+          "description": "What sort of note this is",
+          "markdownDescription": "What sort of note this is"
+        },
+        "about": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "collection": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "collection"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "slug": {
+                  "type": "string"
+                },
+                "collection": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "slug",
+                "collection"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "The post this note is about",
+          "markdownDescription": "The post this note is about"
+        },
+        "cover": {
+          "type": "string",
+          "description": "A picture for the note, next to the entry",
+          "markdownDescription": "A picture for the note, next to the entry"
+        },
+        "pinned": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5,
+          "description": "1 is highest",
+          "markdownDescription": "1 is highest"
+        },
+        "updated": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "string",
+              "format": "date"
+            },
+            {
+              "type": "integer",
+              "format": "unix-time"
+            }
+          ]
+        },
+        "$schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

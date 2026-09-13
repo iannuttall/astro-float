@@ -1,26 +1,20 @@
-import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
-import { h, replaceChildren } from "./dom";
+import { api, ApiError, onFileChanged, type Collection, type EntryDoc, type FileChange, type Frontmatter, type MediaItem, type ValidationIssue } from "./api";
+import { isMediaFile, mediaMarkdown } from "./embeds";
+import { h } from "./dom";
 import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
 import { DatePicker } from "./datepicker";
-import { DATE_LIKE, FieldBindings } from "./fields";
-import { icon } from "./icons";
+import { findBody, markBody, unmarkAuto } from "./autobind";
+import { FieldBindings } from "./fields";
 import { RegionControl } from "./overlays";
-import { detectEntry, routeFor, swapPage, type DetectedEntry } from "./page";
+import { detectEntry, swapPage, type DetectedEntry } from "./page";
+import { Pill, type PillPrefs, type StatusView } from "./panel/pill";
+import { clone, describe, resetViewportZoom } from "./panel/util";
+import { SourceEditor } from "./source";
+import { humanize, schemaFor, type CollectionSchema } from "./schema";
 import { STYLES } from "./styles";
+import { attachTooltips, detachTooltips } from "./tooltip";
 
-type Status = "idle" | "saving" | "refreshing" | "saved" | "error" | "conflict";
-
-interface Prefs {
-  autosave: boolean;
-  /** Sidebar width in px, dragged from its left edge; clamped to the viewport on use. */
-  sidebarWidth?: number;
-}
-
-const SIDEBAR_MIN = 240;
-const SIDEBAR_DEFAULT = 300;
-function sidebarMax() {
-  return Math.max(SIDEBAR_MIN, Math.min(520, Math.floor(window.innerWidth / 2)));
-}
+type Status = "idle" | "saving" | "refreshing" | "saved" | "warning" | "error" | "conflict";
 
 export interface FloatHandle {
   setEditing(on: boolean): Promise<void>;
@@ -33,9 +27,10 @@ export interface FloatHost {
 }
 
 const PREFS_KEY = "astro-float:prefs";
-const AUTOSAVE_DELAY = 800;
-/** Frontmatter keys that never get an input: Astro derives the id from the slug, so it's shown, not edited. */
-const READ_ONLY_KEYS = new Set(["slug"]);
+/** Autosave writes 2s after the last keystroke; every keystroke restarts the clock, so it never fires mid-typing. */
+const AUTOSAVE_DELAY = 2000;
+/** How long the pill stays green (and says "Saved") after a successful write. */
+const SAVED_FOR = 4000;
 
 export function mountFloat(canvas: ShadowRoot, host: FloatHost): FloatHandle {
   const float = new Float(canvas, host);
@@ -45,25 +40,22 @@ export function mountFloat(canvas: ShadowRoot, host: FloatHost): FloatHandle {
   };
 }
 
+/**
+ * Edit-mode lifecycle. Owns the entry, the draft, saving and soft navigation;
+ * the on-page editors live in `editor.ts` / `fields.ts`, the panel in `panel/`.
+ */
 class Float {
   private root: HTMLElement;
-  private sidebar: HTMLElement | null = null;
-  private fieldsSection: HTMLElement | null = null;
-  private collectionSection: HTMLElement | null = null;
-  private statusSlot: HTMLElement;
-  private statusDot: HTMLElement;
-  private saveButton: HTMLButtonElement;
-  private discardButton: HTMLButtonElement;
-  private statusText: HTMLElement | null = null;
-  private statusActions: HTMLElement | null = null;
+  private panel: Pill;
 
-  private prefs: Prefs = loadPrefs();
+  private prefs: PillPrefs = loadPrefs();
   private editing = false;
   private loadedFor: string | null = null;
 
   private collections: Collection[] = [];
   private detected: DetectedEntry | null = null;
   private doc: EntryDoc | null = null;
+  private schema: CollectionSchema | null = null;
   private draftFrontmatter: Frontmatter = {};
   /** Body draft used only when the page has no `[data-float-body]` to edit in place. */
   private draftBody = "";
@@ -73,28 +65,38 @@ class Float {
 
   private page: PageEditor;
   private fields: FieldBindings;
-  /** Per-field "re-read the draft into your control" hooks, so page edits show up in the sidebar live. */
-  private fieldSyncs = new Map<string, () => void>();
+  /** The quiet copy / source control in the corner of the body. */
   private region = new RegionControl();
 
-  /** In-page source view of the body: a textarea standing in for the prose. */
+  /**
+   * Source mode: the corner control's Source view — a Markdown textarea
+   * standing in for the prose, right there in the page. Leaving it saves and
+   * swaps in Astro's fresh render.
+   */
   private sourceArea: HTMLTextAreaElement | null = null;
+  private sourceEditor: SourceEditor | null = null;
   private sourceDraft = "";
   private sourceBusy = false;
   private sourceError: string | null = null;
-  /** The sidebar can be tucked away while editing continues on the page. */
-  private panelHidden = false;
   private savePromise: Promise<void> | null = null;
+  /** The panel follows the site's colour scheme: watch the page for changes while editing. */
+  private themeObserver: MutationObserver | null = null;
+  private themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
 
   private status: Status = "idle";
   private statusMessage = "";
+  /** What the last save's validation rejected (a 422), cleared field by field as values change. */
+  private issues: ValidationIssue[] = [];
+  /** The file changed on disk while the draft was dirty: the user picks Reload or Keep mine. */
+  private staleOnDisk = false;
+  /** Keep mine: the next save overwrites whatever is on disk. */
+  private keepMine = false;
+  private unsubscribeFiles: (() => void) | null = null;
   private savedAt: number | null = null;
   private saving = false;
   private navigating = false;
   private autosaveTimer: number | undefined;
   private savedTimer: number | undefined;
-  private lastSlot = "";
-  private lastFoot = "";
 
   constructor(
     private canvas: ShadowRoot,
@@ -104,38 +106,59 @@ class Float {
     style.textContent = STYLES;
     canvas.appendChild(style);
 
-    this.statusDot = h("span", { class: "status-dot", "data-state": "idle" });
-    this.saveButton = h(
-      "button",
-      { class: "btn btn-sm btn-primary", type: "button", hidden: true, title: "Save (⌘S)", onClick: () => void this.save() },
-      icon("check", 13),
-      h("span", {}, "Save"),
-    ) as HTMLButtonElement;
-    this.discardButton = h(
-      "button",
-      { class: "btn btn-sm btn-ghost btn-discard", type: "button", hidden: true, title: "Throw away unsaved changes and show what's on disk", onClick: () => this.discardChanges() },
-      "Discard",
-    ) as HTMLButtonElement;
-    this.statusSlot = h("div", { class: "status-slot" }, this.statusDot, this.discardButton, this.saveButton);
-
     this.root = h("div", { class: "float" });
     canvas.appendChild(this.root);
 
     this.page = new PageEditor({
-      onChange: () => this.touched(),
+      onChange: () => {
+        this.clearIssues("body");
+        this.touched();
+      },
       onFiles: (files, range) => void this.uploadAll(files, range),
     });
     this.fields = new FieldBindings({
       onChange: (key, value) => {
         this.draftFrontmatter[key] = value;
-        this.fieldSyncs.get(key)?.();
+        this.clearIssues(key);
+        this.panel.syncField(key);
         this.touched();
       },
     });
 
+    this.panel = new Pill(this.root, {
+      canvas,
+      prefs: this.prefs,
+      setAutosave: (on) => {
+        this.prefs.autosave = on;
+        this.savePrefs();
+        if (on && this.isDirty()) this.scheduleAutosave();
+        this.renderStatus();
+      },
+      doc: () => this.doc,
+      draft: () => this.draftFrontmatter,
+      original: () => this.doc?.frontmatter ?? {},
+      schema: () => this.schema,
+      collections: () => this.collections,
+      listCollection: () => this.listCollection,
+      setListCollection: (name) => (this.listCollection = name),
+      onPage: (key) => this.fields.has(key),
+      body: () => ({ bound: this.page.bound, mapped: this.page.mapped, readOnly: this.bodyReadOnly, text: this.currentBody() }),
+      issues: () => this.issues,
+      setField: (key, value) => this.setField(key, value),
+      removeField: (key) => this.removeField(key),
+      revertField: (key) => this.revertField(key),
+      replaceDraft: (next) => this.replaceDraft(next),
+      changed: (key) => this.fieldChanged(key),
+      markDirty: () => this.touched(),
+      save: (force) => this.save(force),
+      discard: () => this.discardChanges(),
+      navigate: (href, opts) => this.navigate(href, opts),
+      notify: (message) => this.setStatus("error", message),
+    });
+
     this.bindViewport();
 
-    // Escape inside the sidebar: leave the field.
+    // Escape inside the panel: leave the field.
     this.root.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();
@@ -168,6 +191,8 @@ class Float {
     document.addEventListener("click", this.onDocumentClick);
     document.addEventListener("focusin", this.onFocusIn);
     document.addEventListener("focusout", this.onFocusOut);
+    document.addEventListener("pointerover", this.onPointerOver);
+    document.addEventListener("pointerout", this.onPointerOut);
     window.addEventListener("popstate", (e) => {
       if (this.editing || (e.state && (e.state as { astroFloat?: boolean }).astroFloat)) void this.navigate(location.href, { push: false });
     });
@@ -184,9 +209,15 @@ class Float {
         bodyMapped: this.page.mapped,
         bodyReadOnly: this.bodyReadOnly,
         bodyDiff: this.page.debugDiff(),
-        onPageFields: this.fields.keys(),
+        onPageFields: this.fields.boundKeys(),
+        issues: this.issues,
+        staleOnDisk: this.staleOnDisk,
+        keepMine: this.keepMine,
+        schema: this.schema,
         entry: this.doc ? `${this.doc.collection}/${this.doc.id}` : null,
       }),
+      /** Tests: what the dev server would send when a file changes on disk. */
+      simulateFileChange: (change: FileChange) => this.onFileChanged(change),
     };
   }
 
@@ -197,28 +228,34 @@ class Float {
     this.editing = on;
     if (on) {
       ensurePageStyle();
+      attachTooltips(document);
+      attachTooltips(this.canvas);
+      this.unsubscribeFiles ??= onFileChanged((change) => this.onFileChanged(change));
+      this.watchTheme();
       if (this.loadedFor !== location.href) {
-        await this.loadPage(); // renders the sidebar once it knows the entry
+        await this.loadPage(); // renders the pill once it knows the entry
       } else {
         this.attachEditors();
-        this.renderSidebar();
+        this.panel.render();
       }
     } else {
       window.clearTimeout(this.autosaveTimer);
-      this.panelHidden = false;
       DatePicker.close();
       this.exitSourceMode(false);
-      this.page.detach();
-      this.fields.detach();
-      this.region.hide();
+      // Leave the page exactly as it was: no editors, nothing auto-binding put on it.
+      this.page.unbind();
+      this.fields.unbind();
+      unmarkAuto();
+      this.loadedFor = null;
+      this.region.dispose();
       this.releaseFocus();
+      this.unsubscribeFiles?.();
+      this.unsubscribeFiles = null;
+      detachTooltips(this.canvas);
+      detachTooltips(document);
       removePageStyle();
-      this.root.textContent = "";
-      this.sidebar = null;
-      this.fieldsSection = null;
-      this.collectionSection = null;
-      this.statusText = null;
-      this.statusActions = null;
+      this.unwatchTheme();
+      this.panel.destroy();
     }
   }
 
@@ -237,9 +274,6 @@ class Float {
   private bindViewport() {
     const vv = window.visualViewport;
     if (!vv) return;
-    window.addEventListener("resize", () => {
-      if (this.sidebar) this.applySidebarWidth();
-    });
     const apply = () => {
       this.root.style.setProperty("--vv-top", `${Math.max(0, vv.offsetTop)}px`);
       this.root.style.setProperty("--vv-left", `${Math.max(0, vv.offsetLeft)}px`);
@@ -251,36 +285,40 @@ class Float {
     apply();
   }
 
-  /** Blur whatever has the caret in the sidebar and undo an iOS focus-zoom if one slipped through. */
+  /** Blur whatever has the caret in the panel and undo an iOS focus-zoom if one slipped through. */
   private releaseFocus() {
-    const active = this.canvas.activeElement as HTMLElement | null;
-    active?.blur();
+    (this.canvas.activeElement as HTMLElement | null)?.blur();
     resetViewportZoom();
   }
 
-  // ---- region control (copy / source) ------------------------------------------------
+  // ---- body control (copy / source) ------------------------------------------------
+
+  /** The body region: the prose container, or the in-page source textarea standing in for it. */
+  private bodyRegion(): HTMLElement | null {
+    if (this.sourceEditor) return this.sourceEditor.el;
+    return this.page.bound && !this.bodyReadOnly ? this.page.container : null;
+  }
+
+  private inBody(target: EventTarget | null): boolean {
+    const region = this.bodyRegion();
+    return !!region && target instanceof Node && (target === region || region.contains(target));
+  }
 
   private onFocusIn = (e: FocusEvent) => {
-    if (!this.editing) return;
-    const target = e.target as HTMLElement | null;
-    if (!target) return;
-    if (this.sourceArea && target === this.sourceArea) {
-      this.region.show(this.sourceArea, this.bodyRegionActions());
-      return;
-    }
-    if (this.page.container && (target === this.page.container || this.page.container.contains(target))) {
-      this.region.show(this.page.container, this.bodyRegionActions());
-      return;
-    }
-    const key = target.dataset?.floatField;
-    if (key && this.fields.element(key) === target) {
-      this.region.show(target, { copy: () => String(this.draftFrontmatter[key] ?? "") });
-    }
+    if (this.editing && this.inBody(e.target)) this.region.show(this.bodyRegion()!, this.bodyRegionActions());
   };
 
   private onFocusOut = () => {
     // In source view the control is the way back to the rendered page: keep it up.
     if (this.editing && !this.sourceArea) this.region.scheduleHide();
+  };
+
+  private onPointerOver = (e: PointerEvent) => {
+    if (this.editing && this.inBody(e.target) && !this.region.shown) this.region.show(this.bodyRegion()!, this.bodyRegionActions());
+  };
+
+  private onPointerOut = (e: PointerEvent) => {
+    if (this.editing && this.inBody(e.target) && !this.inBody(e.relatedTarget) && !this.sourceArea) this.region.scheduleHide();
   };
 
   private bodyRegionActions() {
@@ -302,36 +340,16 @@ class Float {
     this.exitSourceMode(true);
     if (this.status === "error" || this.status === "conflict") this.setStatus("idle");
     else this.renderStatus();
+    this.region.refresh();
   }
 
-  /** Swap the rendered prose for a Markdown textarea in the same spot (and back). */
+  // ---- source mode (raw Markdown, in the page) -------------------------------------------
+
+  /** The corner control's Source / Rendered: swap the prose for its Markdown in the same spot (and back). */
   private async toggleSourceMode() {
     if (this.sourceBusy) return;
     if (this.sourceArea) {
-      // Leaving source view: a save re-renders the page from what was typed.
-      // Remember where he is in the text so the rendered page opens on the same block, at the same height.
-      const place = this.sourcePlace(this.sourceArea);
-      this.sourceBusy = true;
-      this.sourceError = null;
-      this.region.refresh();
-      try {
-        if (this.savePromise) await this.savePromise; // an autosave already in flight
-        if (this.isDirty()) {
-          await this.save();
-          if (this.isDirty()) {
-            // The save didn't take (conflict, server error): stay put and say why, with a way out.
-            this.sourceError = this.status === "conflict" ? "Changed on disk — Reload or Overwrite in the sidebar" : this.statusMessage || "Couldn't save";
-            return;
-          }
-        }
-        if (this.sourceArea) this.exitSourceMode(true); // nothing changed, or the save didn't re-render
-        if (place && this.doc && this.page.bound && !this.bodyReadOnly) {
-          this.page.focusBlock(blockIndexAt(place.offset, this.doc.lead, this.doc.blocks), place.viewportY);
-        }
-      } finally {
-        this.sourceBusy = false;
-        this.region.refresh();
-      }
+      await this.leaveSource();
       return;
     }
     const container = this.page.container;
@@ -345,78 +363,95 @@ class Float {
     const anchorBlock = anchorNode ? (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement) : null;
     const anchorTop = anchorBlock ? closestTopLevel(anchorBlock, container)?.getBoundingClientRect().top ?? null : null;
     const scrollY = window.scrollY;
-    const rect = container.getBoundingClientRect();
 
+    const editor = this.enterSource(container);
+    if (!editor) return;
+    window.scrollTo(0, scrollY);
+    editor.focus();
+    // Open on the block he was looking at, at the height it had on the page: the source line that starts
+    // that block goes where the block's top was, so the swap reads as the prose turning into its Markdown.
+    // The page stays put (the wash and the corner control don't move); only a caret line that would be
+    // off-screen brings the page along, and then only to where the block was.
+    if (where) {
+      editor.setSelection(where.offset);
+      const lineY = editor.lineTop(where.offset);
+      if (lineY < 72 || lineY > window.innerHeight - 72) window.scrollBy(0, lineY - Math.min(anchorTop ?? 120, window.innerHeight - 120));
+    }
+    this.region.show(editor.el, this.bodyRegionActions());
+  }
+
+  /** Put the source editor in the prose's place. */
+  private enterSource(container: HTMLElement): SourceEditor | null {
+    if (!this.doc || this.bodyReadOnly || this.sourceArea) return null;
     this.sourceDraft = this.currentBody();
-    const area = document.createElement("textarea");
-    area.className = "astro-float-source";
-    area.value = this.sourceDraft;
-    area.spellcheck = false;
-    area.setAttribute("aria-label", "Markdown source");
-    // Same height as the prose it replaces, so nothing below moves and the page keeps its scroll position.
-    area.style.height = `${Math.max(240, rect.height)}px`;
-    area.addEventListener("input", () => {
-      this.sourceDraft = area.value;
-      this.touched();
-    });
-    area.addEventListener("keyup", (e) => {
-      if (e.key === "Escape") e.stopPropagation();
-    });
-    area.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        area.blur();
-      }
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const s = area.selectionStart;
-        area.setRangeText("  ", s, area.selectionEnd, "end");
-        this.sourceDraft = area.value;
+    this.sourceError = null;
+    const editor = new SourceEditor(container, this.sourceDraft, {
+      onInput: (text) => {
+        if (this.sourceEditor !== editor) return;
+        this.sourceDraft = text;
+        this.clearIssues("body");
         this.touched();
-      }
+      },
     });
     this.page.detach();
     container.style.display = "none";
-    container.after(area);
-    this.sourceArea = area;
-    window.scrollTo(0, scrollY);
-    area.focus({ preventScroll: true });
-    // Open on the block he was looking at, at the height it had on the page.
-    if (where) {
-      area.setSelectionRange(where.offset, where.offset);
-      const cs = getComputedStyle(area);
-      const lineHeight = parseFloat(cs.lineHeight) || 21.6;
-      const padTop = parseFloat(cs.paddingTop) || 0;
-      const line = area.value.slice(0, where.offset).split("\n").length - 1;
-      const areaTop = area.getBoundingClientRect().top;
-      const wantedY = anchorTop ?? areaTop + padTop;
-      area.scrollTop = Math.max(0, padTop + line * lineHeight - (wantedY - areaTop));
-      // The textarea couldn't scroll far enough to line up? Only then nudge the page, and only enough to keep the line in view.
-      const lineY = areaTop + padTop + line * lineHeight - area.scrollTop;
-      if (lineY < 72 || lineY > window.innerHeight - 72) window.scrollBy(0, lineY - Math.min(wantedY, window.innerHeight - 120));
-    } else {
-      window.scrollTo(0, scrollY);
-    }
-    this.region.show(area, this.bodyRegionActions());
+    container.after(editor.el);
+    this.sourceEditor = editor;
+    this.sourceArea = editor.area;
+    this.region.hide();
+    this.renderStatus();
+    return editor;
   }
 
-  /** Caret offset in the source textarea plus the viewport height of its line. */
-  private sourcePlace(area: HTMLTextAreaElement): { offset: number; viewportY: number } | null {
-    if (!area.isConnected) return null;
-    const offset = area.selectionStart;
-    const cs = getComputedStyle(area);
-    const lineHeight = parseFloat(cs.lineHeight) || 21.6;
-    const padTop = parseFloat(cs.paddingTop) || 0;
-    const line = area.value.slice(0, offset).split("\n").length - 1;
-    const y = area.getBoundingClientRect().top + padTop + line * lineHeight - area.scrollTop;
+  /**
+   * Leave source view: a save re-renders the page from what was typed, then
+   * the caret goes back to the block it was in, at the height it had on
+   * screen. False when the save didn't take.
+   */
+  private async leaveSource(): Promise<boolean> {
+    if (!this.sourceArea) return true;
+    if (this.sourceBusy) return false;
+    this.sourceBusy = true;
+    this.sourceError = null;
+    this.region.refresh();
+    try {
+      // Remember where he is in the text so the rendered page opens on the same block.
+      const place = this.sourcePlace();
+      if (this.savePromise) await this.savePromise; // an autosave already in flight
+      if (this.isDirty()) {
+        await this.save();
+        if (this.isDirty()) {
+          // The save didn't take (conflict, server error): stay put and say why, with a way out.
+          this.sourceError = this.status === "conflict" ? "Changed on disk — Reload or Overwrite in the header" : this.statusMessage || "Couldn't save";
+          return false;
+        }
+      }
+      if (this.sourceArea) this.exitSourceMode(true); // nothing changed, or the save didn't re-render
+      if (place && this.doc && this.page.bound && !this.bodyReadOnly) {
+        this.page.focusBlock(blockIndexAt(place.offset, this.doc.lead, this.doc.blocks), place.viewportY);
+      }
+      return true;
+    } finally {
+      this.sourceBusy = false;
+      this.region.refresh();
+    }
+  }
+
+  /** Caret offset in the source plus the viewport height of its line. */
+  private sourcePlace(): { offset: number; viewportY: number } | null {
+    const editor = this.sourceEditor;
+    if (!editor || !editor.el.isConnected) return null;
+    const offset = editor.area.selectionStart;
+    const y = editor.lineTop(offset);
     return { offset, viewportY: Math.max(72, Math.min(y, window.innerHeight - 72)) };
   }
 
   private exitSourceMode(restoreView: boolean) {
     if (!this.sourceArea) return;
-    const area = this.sourceArea;
+    const editor = this.sourceEditor;
     this.sourceArea = null;
-    area.remove();
+    this.sourceEditor = null;
+    editor?.dispose();
     if (this.page.container) {
       this.page.container.style.display = "";
       if (restoreView && this.editing && !this.bodyReadOnly) this.page.attach();
@@ -424,16 +459,51 @@ class Float {
     this.region.hide();
   }
 
+  // ---- theme: follow the site, not (only) the viewer -------------------------------------
+
+  private applyTheme() {
+    const theme = detectTheme(this.themeMedia.matches);
+    if (this.root.dataset.theme !== theme) this.root.dataset.theme = theme;
+    if (document.documentElement.getAttribute("data-float-theme") !== theme) {
+      document.documentElement.setAttribute("data-float-theme", theme);
+      this.region.refresh(); // its surface is computed from the page colours
+    }
+  }
+
+  private onThemeChange = () => this.applyTheme();
+
+  private watchTheme() {
+    this.applyTheme();
+    this.themeMedia.addEventListener("change", this.onThemeChange);
+    if (!this.themeObserver) {
+      this.themeObserver = new MutationObserver(() => this.applyTheme());
+    }
+    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "style", "data-theme", "data-color-scheme"] });
+    this.themeObserver.observe(document.body, { attributes: true, attributeFilter: ["class", "style", "data-theme", "data-color-scheme"] });
+  }
+
+  private unwatchTheme() {
+    this.themeMedia.removeEventListener("change", this.onThemeChange);
+    this.themeObserver?.disconnect();
+    delete this.root.dataset.theme;
+    document.documentElement.removeAttribute("data-float-theme");
+  }
+
   // ---- page lifecycle ---------------------------------------------------------
 
-  /** (Re)read the current URL: which entry is this, bind the editors, draw the sidebar. */
+  /** (Re)read the current URL: which entry is this, bind the editors, draw the panel. */
   private async loadPage() {
     DatePicker.close();
     this.exitSourceMode(false);
     this.page.unbind();
     this.fields.unbind();
+    unmarkAuto();
     this.region.hide();
     this.doc = null;
+    this.schema = null;
+    this.issues = [];
+    this.staleOnDisk = false;
+    this.keepMine = false;
     this.detected = null;
     this.draftFrontmatter = {};
     this.draftBody = "";
@@ -448,6 +518,7 @@ class Float {
         this.draftFrontmatter = clone(this.doc.frontmatter);
         this.draftBody = this.doc.body;
         this.listCollection = this.doc.collection;
+        this.schema = await this.loadSchema(this.doc);
         this.bindBody();
       } else {
         // No entry here (index/listing page): prefer the collection named in the URL.
@@ -459,14 +530,25 @@ class Float {
     } catch (err) {
       this.setStatus("error", describe(err));
     }
-    this.renderSidebar();
+    this.applyTheme();
+    this.panel.render();
   }
 
-  /** Bind the in-place editors to `[data-float-body]` and `[data-float-field]`; attach them if Edit is on. */
+  /** The collection's field definitions, carried on the entry response; inferred from the entry's values when the server had none to give. */
+  private async loadSchema(doc: EntryDoc): Promise<CollectionSchema> {
+    if (doc.schema && Array.isArray(doc.schema.fields)) return doc.schema;
+    return schemaFor(doc.collection, doc.frontmatter);
+  }
+
+  /** Bind the in-place editors to the body and the fields (attributes first, then auto-detected); attach them if Edit is on. */
   private bindBody() {
     if (!this.doc) return;
-    this.fields.bind(this.doc.frontmatter);
-    const container = PageEditor.find();
+    let container = PageEditor.find();
+    if (!container) {
+      container = findBody(this.doc.blocks);
+      if (container) markBody(container);
+    }
+    this.fields.bind(this.doc.frontmatter, { body: container, schema: this.schema, collection: this.doc.collection });
     if (container) {
       this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
       // MDX we can't line up with the source would be written back as HTML — never do that.
@@ -486,7 +568,7 @@ class Float {
 
   /**
    * Soft navigation: save anything pending, fetch the next page's HTML and swap
-   * it in under the sidebar. No unload, no "Leave site?".
+   * it in under the panel. No unload, no "Leave site?".
    */
   private async navigate(href: string, { push = true, focusBody = false } = {}) {
     const url = new URL(href, location.href);
@@ -525,8 +607,28 @@ class Float {
     void this.navigate(url.href);
   };
 
+  /**
+   * The dev server saw this entry's file change outside Float. A clean draft
+   * just follows it; a dirty one is kept and the pill asks: Reload, or keep mine.
+   */
+  private onFileChanged(change: FileChange) {
+    if (!this.editing || !this.doc) return;
+    const mine = (change.collection === this.doc.collection && change.id === this.doc.id) || (!!change.file && change.file === this.doc.file);
+    if (!mine) return;
+    // Our own save comes back as an event too; the hash says so. Nothing to do.
+    if (change.hash && change.hash === this.doc.hash) return;
+    if (!this.isDirty()) {
+      void this.reloadFromDisk();
+      return;
+    }
+    this.staleOnDisk = true;
+    this.renderStatus();
+  }
+
   private async reloadFromDisk() {
     if (!this.detected) return;
+    this.staleOnDisk = false;
+    this.keepMine = false;
     this.setStatus("refreshing");
     try {
       await swapPage();
@@ -549,7 +651,7 @@ class Float {
   }
 
   private isDirty() {
-    return this.frontmatterDirty() || this.bodyDirty();
+    return this.frontmatterDirty() || this.bodyDirty() || this.panel.yamlPending();
   }
 
   private currentBody(): string {
@@ -566,7 +668,9 @@ class Float {
   }
 
   private touched() {
-    if (this.status === "saved" || (this.status === "error" && !this.bodyReadOnly)) this.status = "idle";
+    // A warning (Astro rejected the last write) stays until the next save says otherwise, and so does a
+    // validation error while any of its issues are still standing.
+    if (this.status === "saved" || (this.status === "error" && !this.bodyReadOnly && !this.issues.length)) this.status = "idle";
     this.renderStatus();
     if (this.prefs.autosave) this.scheduleAutosave();
   }
@@ -578,6 +682,100 @@ class Float {
 
   private savePrefs() {
     localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs));
+  }
+
+  // ---- frontmatter draft (the panel's write path) ----------------------------------------
+
+  /** A key the collection's schema declares: its row is always on the form, set or not. */
+  private schemaKnows(key: string) {
+    return this.schema?.source === "zod" && this.schema.fields.some((f) => f.key === key);
+  }
+
+  /** A value changed: whatever validation said about it no longer applies. */
+  private clearIssues(key?: string) {
+    if (!this.issues.length) return;
+    const before = this.issues.length;
+    this.issues = key === undefined ? [] : this.issues.filter((i) => issueKeyOf(i) !== key);
+    if (this.issues.length === before) return;
+    if (!this.issues.length && this.status === "error") this.status = "idle";
+    this.statusMessage = this.issues.length ? this.issueSummary() : "";
+    this.panel.renderFields();
+  }
+
+  private issueSummary() {
+    const first = this.issues[0];
+    if (!first) return "";
+    const key = issueKeyOf(first);
+    const label = key === "body" ? "Body" : key ? (this.schema?.fields.find((f) => f.key === key)?.label ?? humanize(key)) : "";
+    return label ? `${label}: ${first.message}` : first.message;
+  }
+
+  private setField(key: string, value: unknown) {
+    this.clearIssues(key);
+    const isNew = !(key in this.draftFrontmatter);
+    if (isNew && this.schemaKnows(key)) {
+      // A schema field being set for the first time goes in at its schema position, not at the end.
+      const next: Frontmatter = {};
+      for (const f of this.schema!.fields) {
+        if (f.key === key) next[key] = value;
+        else if (f.key in this.draftFrontmatter) next[f.key] = this.draftFrontmatter[f.key];
+      }
+      for (const k of Object.keys(this.draftFrontmatter)) if (!(k in next)) next[k] = this.draftFrontmatter[k];
+      this.draftFrontmatter = next;
+    } else {
+      this.draftFrontmatter[key] = value;
+    }
+    this.fields.setValue(key, value);
+    this.touched();
+    // The row already exists for a schema field (it was just unset): update it in place, keep the caret.
+    // Only an unknown key needs a new row. The YAML text follows either way.
+    if (isNew) {
+      if (this.schemaKnows(key)) this.panel.syncField(key);
+      else this.panel.renderFields();
+    }
+    this.panel.syncYaml();
+  }
+
+  private removeField(key: string) {
+    if (!(key in this.draftFrontmatter)) return;
+    this.clearIssues(key);
+    delete this.draftFrontmatter[key];
+    this.touched();
+    if (this.schemaKnows(key)) this.panel.syncField(key);
+    else this.panel.renderFields();
+    this.panel.syncYaml();
+  }
+
+  /** Put a field back to what's on disk (also restores a removed field, in its original position). */
+  private revertField(key: string) {
+    if (!this.doc) return;
+    if (key in this.doc.frontmatter) {
+      const next: Frontmatter = {};
+      for (const k of Object.keys(this.doc.frontmatter)) {
+        if (k === key) next[k] = clone(this.doc.frontmatter[k]);
+        else if (k in this.draftFrontmatter) next[k] = this.draftFrontmatter[k];
+      }
+      for (const k of Object.keys(this.draftFrontmatter)) if (!(k in next)) next[k] = this.draftFrontmatter[k];
+      this.draftFrontmatter = next;
+    } else {
+      delete this.draftFrontmatter[key];
+    }
+    this.fields.setValue(key, this.draftFrontmatter[key]);
+    this.touched();
+    this.panel.syncAll();
+  }
+
+  /** The YAML view parsed cleanly: it becomes the draft, and the page's fields follow. */
+  private replaceDraft(next: Frontmatter) {
+    this.clearIssues();
+    this.draftFrontmatter = clone(next);
+    for (const key of this.fields.boundKeys()) this.fields.setValue(key, this.draftFrontmatter[key]);
+    this.touched();
+  }
+
+  private fieldChanged(key: string) {
+    if (!this.doc) return false;
+    return JSON.stringify(this.draftFrontmatter[key]) !== JSON.stringify(this.doc.frontmatter[key]);
   }
 
   /**
@@ -597,9 +795,10 @@ class Float {
     this.page.restoreBaseline();
     this.draftBody = this.doc.body;
     this.draftFrontmatter = clone(this.doc.frontmatter);
-    for (const key of this.fields.keys()) this.fields.setValue(key, this.draftFrontmatter[key]);
-    this.renderFieldsSection();
+    for (const key of this.fields.boundKeys()) this.fields.setValue(key, this.draftFrontmatter[key]);
+    this.panel.syncAll();
     this.setStatus("idle");
+    this.region.refresh();
   }
 
   // ---- saving -----------------------------------------------------------------
@@ -612,6 +811,8 @@ class Float {
 
   private async saveNow(force: boolean) {
     if (!this.doc || this.saving) return;
+    force = force || this.keepMine; // "Keep mine": whatever changed on disk, this draft wins
+    this.panel.commitYaml(); // YAML typed but not parsed yet counts: fold it into the draft first
     if (!this.isDirty() && !force) return;
     window.clearTimeout(this.autosaveTimer);
 
@@ -637,7 +838,7 @@ class Float {
       });
       this.doc = { ...this.doc, frontmatter, body: result.body, lead: result.lead, blocks: result.blocks, hash: result.hash };
       if (snapshot) this.page.commit(snapshot, { lead: result.lead, blocks: result.blocks });
-      if (fromSource) this.sourceDraft = result.body;
+      if (fromSource && this.sourceDraft === body) this.sourceDraft = result.body;
       // Source-only mode: adopt the server's normalized text unless more was typed meanwhile.
       else if (!snapshot && !this.bodyReadOnly && this.draftBody === body) this.draftBody = result.body;
 
@@ -663,14 +864,27 @@ class Float {
       }
 
       this.savedAt = Date.now();
-      this.setStatus("saved");
-      window.clearTimeout(this.savedTimer);
-      this.savedTimer = window.setTimeout(() => {
-        if (this.status === "saved") this.setStatus("idle");
-      }, 2000);
+      this.issues = [];
+      this.staleOnDisk = false;
+      this.keepMine = false;
+      if (result.changed && result.synced === false) {
+        // Written, but Astro's content layer didn't pick it up (a schema rejection, most likely).
+        this.setStatus("warning", "Saved, but Astro rejected the entry. Check the terminal.");
+      } else {
+        this.setStatus("saved");
+        window.clearTimeout(this.savedTimer);
+        this.savedTimer = window.setTimeout(() => {
+          if (this.status === "saved") this.setStatus("idle");
+        }, SAVED_FOR);
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) this.setStatus("conflict");
-      else this.setStatus("error", describe(err));
+      else if (err instanceof ApiError && err.status === 422 && err.issues?.length) {
+        // The schema rejected the draft: nothing was written. Say which field, and show it under the row.
+        this.issues = err.issues;
+        this.setStatus("error", this.issueSummary());
+        this.panel.renderFields();
+      } else this.setStatus("error", describe(err));
     } finally {
       this.saving = false;
       if (this.isDirty() && this.prefs.autosave && this.status !== "conflict" && this.status !== "error") {
@@ -684,454 +898,101 @@ class Float {
   private async refreshCollections() {
     try {
       this.collections = await api.collections();
-      this.renderCollectionSection();
+      this.panel.renderCollection();
     } catch {
       /* non-fatal */
     }
   }
 
-  // ---- sidebar ----------------------------------------------------------------------
+  // ---- status -----------------------------------------------------------------------
 
-  private renderSidebar() {
-    if (!this.editing) return;
-    this.fieldSyncs.clear();
-    this.lastFoot = "";
-
-    this.statusText = h("span", { class: "foot-status" });
-    this.statusActions = h("div", { class: "foot-actions" }, this.statusSlot);
-    const head = h(
-      "header",
-      { class: "sb-head" },
-      h(
-        "div",
-        { class: "sb-title" },
-        h("span", { class: "sb-entry", title: this.doc?.file ?? "" }, this.doc ? `${this.doc.collection}/${this.doc.id}` : "No entry on this page"),
-        h(
-          "button",
-          { class: "icon-btn", type: "button", "aria-label": "Hide the sidebar (keep editing)", title: "Hide the sidebar — editing stays on", onClick: () => this.setPanelHidden(true) },
-          icon("panelClose", 15),
-        ),
-      ),
-      h("div", { class: "sb-status" }, this.statusText, this.statusActions),
-    );
-
-    this.fieldsSection = h("section", { class: "sb-section" });
-    this.collectionSection = h("section", { class: "sb-section" });
-    this.renderFieldsSection();
-    this.renderCollectionSection();
-
-    this.sidebar = h("aside", { class: "sidebar", "aria-label": "Content editor" }, head, this.fieldsSection, this.collectionSection, this.renderSettingsSection());
-    // A quiet tab at the edge brings the sidebar back; it also carries the status dot / Save so nothing is lost while hidden.
-    const tab = h(
-      "div",
-      { class: "sb-tab" },
-      h("button", { class: "sb-tab-open", type: "button", "aria-label": "Show the sidebar", title: "Show the sidebar", onClick: () => this.setPanelHidden(false) }, icon("panelOpen", 15)),
-      h("div", { class: "sb-tab-status" }),
-    );
-    replaceChildren(this.root, this.sidebar, this.renderResizeHandle(), tab);
-    this.applySidebarWidth();
-    this.root.toggleAttribute("data-panel-hidden", this.panelHidden);
-    this.renderStatus();
-  }
-
-  private applySidebarWidth() {
-    const width = Math.max(SIDEBAR_MIN, Math.min(this.prefs.sidebarWidth ?? SIDEBAR_DEFAULT, sidebarMax()));
-    this.root.style.setProperty("--sb-width", `${width}px`);
-  }
-
-  /** The sidebar's left edge is the only drag target: left widens, right narrows; the width sticks for next time. */
-  private renderResizeHandle(): HTMLElement {
-    const handle = h("div", { class: "sb-resize", role: "separator", "aria-orientation": "vertical", "aria-label": "Resize sidebar", title: "Drag to resize" });
-    let startX = 0;
-    let startWidth = 0;
-    const onMove = (e: PointerEvent) => {
-      const width = Math.max(SIDEBAR_MIN, Math.min(startWidth + (startX - e.clientX), sidebarMax()));
-      this.root.style.setProperty("--sb-width", `${width}px`);
-      this.prefs.sidebarWidth = width;
-    };
-    const onUp = (e: PointerEvent) => {
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
-      handle.removeEventListener("pointercancel", onUp);
-      if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
-      this.root.removeAttribute("data-resizing");
-      document.documentElement.style.cursor = "";
-      document.documentElement.style.userSelect = "";
-      this.savePrefs();
-    };
-    handle.addEventListener("pointerdown", (e: PointerEvent) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      startX = e.clientX;
-      startWidth = parseFloat(this.root.style.getPropertyValue("--sb-width")) || SIDEBAR_DEFAULT;
-      handle.setPointerCapture(e.pointerId);
-      this.root.setAttribute("data-resizing", "");
-      // The page under the pointer shouldn't select text or flicker its cursor while dragging.
-      document.documentElement.style.cursor = "col-resize";
-      document.documentElement.style.userSelect = "none";
-      handle.addEventListener("pointermove", onMove);
-      handle.addEventListener("pointerup", onUp);
-      handle.addEventListener("pointercancel", onUp);
-    });
-    return handle;
-  }
-
-  private setPanelHidden(hidden: boolean) {
-    this.panelHidden = hidden;
-    DatePicker.close();
-    this.root.toggleAttribute("data-panel-hidden", hidden);
-    if (hidden) this.releaseFocus();
-    this.lastSlot = ""; // the status slot moves between the header and the tab
-    this.renderStatus();
-  }
-
-  /** Cheap and idempotent: only touches the DOM when the visible state actually changes. */
   private renderStatus() {
     const dirty = this.isDirty();
     const busy = this.status === "saving" || this.status === "refreshing";
-    const dotState = busy
+    const dot: StatusView["dot"] = busy
       ? "saving"
-      : this.status === "error" || this.status === "conflict"
+      : this.status === "error" || this.status === "conflict" || this.status === "warning"
         ? this.status
         : this.status === "saved"
           ? "saved"
           : dirty
             ? "dirty"
             : "idle";
-    const showSave = dirty && !busy && !this.prefs.autosave && this.status !== "conflict" && this.status !== "error";
-    const showDiscard = dirty && !busy;
-    const slot = `${showSave}|${showDiscard}|${dotState}|${this.statusMessage}|${this.panelHidden}`;
-    if (slot !== this.lastSlot) {
-      this.lastSlot = slot;
-      this.saveButton.hidden = !showSave;
-      this.discardButton.hidden = !showDiscard;
-      this.statusDot.hidden = showSave || showDiscard;
-      this.statusDot.dataset.state = dotState;
-      this.statusDot.title = dotState === "dirty" ? "Unsaved changes" : dotState === "saved" ? "Saved" : this.statusMessage || "";
-      const tabStatus = this.root.querySelector(".sb-tab-status");
-      if (this.panelHidden && tabStatus) tabStatus.appendChild(this.statusSlot);
-      else if (this.statusActions && !this.statusActions.contains(this.statusSlot)) this.statusActions.appendChild(this.statusSlot);
-    }
-
-    if (!this.statusText || !this.statusActions) return;
-    const foot = `${this.status}|${dirty}|${this.prefs.autosave}|${this.statusMessage}|${this.savedAt}`;
-    if (foot === this.lastFoot) return;
-    this.lastFoot = foot;
-
-    let text = "";
-    let tone = "";
-    const actions: HTMLElement[] = [];
+    const view: StatusView = {
+      text: "",
+      tone: "",
+      dot,
+      showSave: dirty && !busy && this.status !== "conflict" && this.status !== "error",
+      showDiscard: dirty && !busy,
+      actions: [],
+    };
     switch (this.status) {
       case "saving":
-        text = "Saving…";
+        view.text = "Saving…";
         break;
       case "refreshing":
-        text = "Updating page…";
+        view.text = "Updating page…";
         break;
       case "conflict":
-        text = "Changed on disk";
-        tone = "warn";
-        actions.push(
-          h("button", { class: "btn btn-sm", type: "button", onClick: () => void this.reloadFromDisk() }, "Reload"),
-          h("button", { class: "btn btn-sm btn-primary", type: "button", onClick: () => void this.save(true) }, "Overwrite"),
-        );
+        view.text = "Changed on disk";
+        view.tone = "warn";
+        view.actions.push({ label: "Reload", onClick: () => void this.reloadFromDisk() }, { label: "Overwrite", primary: true, onClick: () => void this.save(true) });
         break;
       case "error":
-        text = this.statusMessage || "Something went wrong";
-        tone = "err";
-        if (dirty) actions.push(h("button", { class: "btn btn-sm", type: "button", onClick: () => void this.save() }, this.bodyReadOnly ? "Save fields" : "Retry"));
+        view.text = this.statusMessage || "Something went wrong";
+        view.tone = "err";
+        // A validation error needs a change, not a retry: the messages under the rows say what.
+        if (dirty && !this.issues.length) view.actions.push({ label: this.bodyReadOnly ? "Save fields" : "Retry", onClick: () => void this.save() });
         break;
       case "saved":
-        text = "Saved";
+        view.text = "Saved";
+        break;
+      case "warning":
+        view.text = this.statusMessage;
+        view.tone = "warn";
         break;
       default:
-        if (dirty) text = this.prefs.autosave ? "Unsaved · autosave on" : "Unsaved changes";
-        else text = this.doc ? (this.savedAt ? `Saved ${formatTime(this.savedAt)}` : "Up to date") : "";
-    }
-    this.statusText.textContent = text;
-    if (tone) this.statusText.dataset.tone = tone;
-    else delete this.statusText.dataset.tone;
-    replaceChildren(this.statusActions, ...actions, ...(this.panelHidden ? [] : [this.statusSlot]));
-  }
-
-  // ---- fields ---------------------------------------------------------------------------
-
-  private renderFieldsSection() {
-    const section = this.fieldsSection;
-    if (!section) return;
-    this.fieldSyncs.clear();
-    if (!this.doc) {
-      section.hidden = true;
-      return;
-    }
-    section.hidden = false;
-
-    const rows: HTMLElement[] = [];
-    for (const [key, value] of Object.entries(this.draftFrontmatter)) {
-      if (READ_ONLY_KEYS.has(key)) {
-        rows.push(h("div", { class: "field" }, h("div", { class: "field-head" }, h("span", { class: "field-key" }, key), h("span", { class: "field-meta" }, "read-only")), h("div", { class: "field-static mono" }, String(value))));
-        continue;
-      }
-      rows.push(this.renderField(key, value));
-    }
-    // Fields removed since the last save stay listed so the removal can be undone before it's written.
-    for (const key of Object.keys(this.doc.frontmatter)) {
-      if (key in this.draftFrontmatter) continue;
-      rows.push(
-        h(
-          "div",
-          { class: "field field-removed" },
-          h(
-            "div",
-            { class: "field-head" },
-            h("span", { class: "field-key" }, key),
-            h("span", { class: "field-meta" }, "removed on save"),
-            h("button", { class: "btn btn-sm btn-ghost", type: "button", onClick: () => this.revertField(key) }, icon("undo", 13), "Restore"),
-          ),
-        ),
-      );
-    }
-
-    const newKey = h("input", { class: "input", placeholder: "New field", "aria-label": "New field name" }) as HTMLInputElement;
-    const add = () => {
-      const key = newKey.value.trim();
-      if (!key || key in this.draftFrontmatter || READ_ONLY_KEYS.has(key)) return;
-      this.draftFrontmatter[key] = "";
-      this.touched();
-      this.renderFieldsSection();
-    };
-    newKey.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") add();
-    });
-
-    replaceChildren(
-      section,
-      h("h3", { class: "sb-heading" }, "Fields"),
-      rows.length ? h("div", { class: "fields" }, rows) : h("p", { class: "empty" }, "No frontmatter yet."),
-      h("div", { class: "field-add" }, newKey, h("button", { class: "btn btn-icon", type: "button", "aria-label": "Add field", title: "Add field", onClick: add }, icon("plus", 14))),
-    );
-  }
-
-  /** Put a field back to what's on disk (also restores a removed field, in its original position). */
-  private revertField(key: string) {
-    if (!this.doc) return;
-    if (key in this.doc.frontmatter) {
-      const next: Frontmatter = {};
-      for (const k of Object.keys(this.doc.frontmatter)) {
-        if (k === key) next[k] = clone(this.doc.frontmatter[k]);
-        else if (k in this.draftFrontmatter) next[k] = this.draftFrontmatter[k];
-      }
-      for (const k of Object.keys(this.draftFrontmatter)) if (!(k in next)) next[k] = this.draftFrontmatter[k];
-      this.draftFrontmatter = next;
-    } else {
-      delete this.draftFrontmatter[key];
-    }
-    this.fields.setValue(key, this.draftFrontmatter[key]);
-    this.touched();
-    this.renderFieldsSection();
-  }
-
-  private fieldChanged(key: string) {
-    if (!this.doc) return false;
-    return JSON.stringify(this.draftFrontmatter[key]) !== JSON.stringify(this.doc.frontmatter[key]);
-  }
-
-  private renderField(key: string, value: unknown): HTMLElement {
-    const kind = fieldKind(value);
-    const original = this.doc?.frontmatter[key];
-    const onPage = this.fields.has(key);
-    const revert = h(
-      "button",
-      { class: "field-revert", type: "button", "aria-label": `Revert ${key}`, title: "Back to the saved value", hidden: !this.fieldChanged(key), onClick: () => this.revertField(key) },
-      icon("undo", 12),
-    ) as HTMLButtonElement;
-    const hint = h("div", { class: "field-note" });
-    const set = (next: unknown) => {
-      this.draftFrontmatter[key] = next;
-      this.fields.setValue(key, next);
-      revert.hidden = !this.fieldChanged(key);
-      this.touched();
-    };
-    // The page can change this field too (title typed on the page): mirror it here unless this control has the caret.
-    const mirror = (apply: (v: unknown) => void) =>
-      this.fieldSyncs.set(key, () => {
-        revert.hidden = !this.fieldChanged(key);
-        apply(this.draftFrontmatter[key]);
-      });
-
-    let control: HTMLElement;
-    switch (kind) {
-      case "boolean": {
-        const row = h(
-          "button",
-          {
-            class: "toggle-row",
-            type: "button",
-            role: "switch",
-            "aria-checked": String(Boolean(value)),
-            "aria-label": key,
-            onClick: () => {
-              const next = row.getAttribute("aria-checked") !== "true";
-              row.setAttribute("aria-checked", String(next));
-              set(next);
+        if (dirty && this.staleOnDisk) {
+          view.text = "Changed on disk";
+          view.tip = "Changed on disk · click to reload or keep";
+          view.tone = "warn";
+          view.showDiscard = false; // Reload covers it, and the header has only so much room
+          view.actions.push(
+            { label: "Reload", onClick: () => void this.reloadFromDisk() },
+            {
+              label: "Keep mine",
+              onClick: () => {
+                this.keepMine = true;
+                this.staleOnDisk = false;
+                this.renderStatus();
+              },
             },
-          },
-          h("span", { class: "switch" }),
-        );
-        control = row;
-        break;
-      }
-      case "number": {
-        const input = h("input", { class: "input", type: "number", step: "any", value: String(value) }) as HTMLInputElement;
-        input.addEventListener("input", () => {
-          if (input.value === "") {
-            input.dataset.invalid = "";
-            hint.textContent = `Empty — keeping ${String(original ?? value)} until you enter a number.`;
-            return;
-          }
-          const n = Number(input.value);
-          if (Number.isNaN(n)) return;
-          delete input.dataset.invalid;
-          hint.textContent = "";
-          set(n);
-        });
-        control = input;
-        break;
-      }
-      case "date": {
-        // A real picker, shared with the date on the page. The stored shape is kept: date part swapped, any time suffix preserved.
-        const suffix = String(value).slice(10);
-        const label = h("span", { class: "date-field-label" }) as HTMLElement;
-        const button = h(
-          "button",
-          { class: "input date-field", type: "button", "aria-haspopup": "dialog", title: "Change the date" },
-          label,
-          icon("calendar", 14),
-        ) as HTMLButtonElement;
-        const paint = (v: unknown) => {
-          const iso = typeof v === "string" && DATE_LIKE.test(v) ? v.slice(0, 10) : "";
-          label.textContent = iso ? formatDateLabel(iso) : "Pick a date";
-          button.dataset.iso = iso;
-        };
-        paint(value);
-        button.addEventListener("click", (e) => {
-          e.preventDefault();
-          DatePicker.toggle({
-            anchor: button,
-            value: button.dataset.iso || null,
-            onPick: (iso) => {
-              const next = iso + suffix;
-              paint(next);
-              set(next);
-            },
-          });
-        });
-        mirror((v) => paint(v));
-        control = button;
-        break;
-      }
-      case "tags": {
-        const input = h("input", { class: "input", value: (value as unknown[]).join(", "), placeholder: "comma, separated" }) as HTMLInputElement;
-        const allNumbers = (value as unknown[]).length > 0 && (value as unknown[]).every((v) => typeof v === "number");
-        input.addEventListener("input", () => {
-          const parts = input.value.split(",").map((s) => s.trim()).filter(Boolean);
-          set(allNumbers ? parts.map(Number).filter((n) => !Number.isNaN(n)) : parts);
-        });
-        control = input;
-        break;
-      }
-      case "text": {
-        const ta = h("textarea", { class: "textarea", rows: 3, value: String(value) }) as HTMLTextAreaElement;
-        ta.addEventListener("input", () => set(ta.value));
-        mirror((v) => {
-          if (this.canvas.activeElement === ta) return;
-          const text = typeof v === "string" ? v : "";
-          if (ta.value !== text) ta.value = text;
-        });
-        control = ta;
-        break;
-      }
-      case "json": {
-        const ta = h("textarea", { class: "textarea mono", rows: 4, value: JSON.stringify(value, null, 2) }) as HTMLTextAreaElement;
-        ta.addEventListener("input", () => {
-          try {
-            set(JSON.parse(ta.value));
-            delete ta.dataset.invalid;
-            hint.textContent = "";
-          } catch {
-            ta.dataset.invalid = "";
-            hint.textContent = "Not valid JSON yet — keeping the last valid value.";
-          }
-        });
-        control = ta;
-        break;
-      }
-      default: {
-        const input = h("input", { class: "input", type: "text", value: value == null ? "" : String(value) }) as HTMLInputElement;
-        input.addEventListener("input", () => set(input.value));
-        mirror((v) => {
-          if (this.canvas.activeElement === input) return;
-          const text = typeof v === "string" ? v : "";
-          if (input.value !== text) input.value = text;
-        });
-        control = input;
-      }
+          );
+        } else if (dirty) view.text = "Unsaved changes";
+        else view.text = this.doc ? (this.savedAt ? `${this.prefs.autosave ? "Autosaved" : "Saved"} ${formatTime(this.savedAt)}` : "Up to date") : "";
     }
-
-    return h(
-      "div",
-      { class: "field", "data-kind": kind, "data-on-page": onPage ? "" : null },
-      h(
-        "div",
-        { class: "field-head" },
-        h("span", { class: "field-key", title: onPage ? `${key} · ${kind} · also editable on the page` : `${key} · ${kind}` }, key),
-        revert,
-        onPage ? h("span", { class: "field-meta", title: "Also editable on the page" }, "on page") : null,
-        kind === "boolean" ? control : null,
-        h(
-          "button",
-          {
-            class: "field-remove",
-            type: "button",
-            "aria-label": `Remove ${key}`,
-            title: "Remove field (undo before saving with Restore)",
-            onClick: () => {
-              delete this.draftFrontmatter[key];
-              this.touched();
-              this.renderFieldsSection();
-            },
-          },
-          icon("close", 12),
-        ),
-      ),
-      kind === "boolean" ? null : control,
-      hint,
-    );
+    this.panel.renderStatus(view);
   }
 
-  // ---- images (drop / paste on the prose only) ----------------------------------------
+  // ---- images and video (drop / paste on the prose only) ------------------------------
 
   private placeImage(item: MediaItem, range: Range | null) {
-    if (this.sourceArea) {
-      const area = this.sourceArea;
-      const snippet = `\n![${altFrom(item.name)}](${item.src})\n`;
-      area.setRangeText(snippet, area.selectionStart, area.selectionEnd, "end");
-      this.sourceDraft = area.value;
-      this.touched();
+    if (this.sourceEditor) {
+      this.sourceEditor.insertText(`\n${mediaMarkdown(item)}\n`); // goes through the editor's input path
     } else if (this.page.bound && !this.bodyReadOnly) {
-      this.page.insertImage(item.url, altFrom(item.name), range);
+      this.page.insertMedia(item, range);
     } else if (!this.bodyReadOnly) {
       const sep = this.draftBody === "" || this.draftBody.endsWith("\n\n") ? "" : this.draftBody.endsWith("\n") ? "\n" : "\n\n";
-      this.draftBody = `${this.draftBody}${sep}![${altFrom(item.name)}](${item.src})\n`;
+      this.draftBody = `${this.draftBody}${sep}${mediaMarkdown(item)}\n`;
       this.touched();
     }
   }
 
   private async uploadAll(files: File[], range: Range | null) {
     if (!this.doc) return;
-    const images = files.filter((f) => f.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(f.name));
+    const images = files.filter(isMediaFile);
     if (!images.length) {
-      this.setStatus("error", "Only images can be dropped here");
+      this.setStatus("error", "Only images and videos can be dropped here");
       return;
     }
     this.setStatus("saving");
@@ -1146,271 +1007,9 @@ class Float {
       this.setStatus("error", describe(err));
     }
   }
-
-  // ---- collection -----------------------------------------------------------------
-
-  private renderCollectionSection() {
-    const section = this.collectionSection;
-    if (!section) return;
-    const formHost = h("div");
-    let openForm: "entry" | "collection" | null = null;
-
-    const selected = this.collections.find((c) => c.name === this.listCollection) ?? this.collections[0];
-    if (selected) this.listCollection = selected.name;
-
-    // Cancel/close puts the list back exactly as it was: same sidebar, keyboard down, no zoom left behind.
-    const setForm = (kind: "entry" | "collection" | null) => {
-      openForm = kind;
-      if (kind === null) this.releaseFocus();
-      replaceChildren(
-        formHost,
-        kind === "entry" && selected
-          ? this.renderNewEntryForm(selected, () => setForm(null))
-          : kind === "collection"
-            ? this.renderNewCollectionForm(() => setForm(null))
-            : null,
-      );
-    };
-
-    const picker = !selected
-      ? h("span", { class: "muted" }, "No collections yet")
-      : this.collections.length > 1
-        ? (h(
-            "select",
-            {
-              class: "select select-inline",
-              "aria-label": "Collection",
-              onChange: (e: Event) => {
-                this.listCollection = (e.target as HTMLSelectElement).value;
-                this.renderCollectionSection();
-              },
-            },
-            this.collections.map((c) => h("option", { value: c.name, selected: c.name === selected.name }, c.name)),
-          ) as HTMLSelectElement)
-        : h("span", { class: "collection-name" }, selected.name);
-
-    const list = h("div", { class: "list" });
-    if (selected) {
-      if (!selected.entries.length) list.appendChild(h("p", { class: "empty" }, "This collection is empty."));
-      for (const entry of selected.entries) {
-        const isCurrent = this.doc?.collection === selected.name && this.doc.id === entry.id;
-        const route = routeFor(selected, entry.id);
-        list.appendChild(
-          h(
-            "a",
-            {
-              class: "list-item",
-              href: route.href,
-              "aria-current": isCurrent ? "page" : null,
-              title: `${entry.id}${route.guessed ? " (guessed route)" : ""}`,
-            },
-            h("span", { class: "title" }, entry.title),
-            isCurrent ? icon("check", 13) : null,
-          ),
-        );
-      }
-      // Two distinct, quiet rows: a new entry here, or a whole new collection.
-      list.appendChild(
-        h(
-          "button",
-          { class: "list-item list-action", type: "button", title: `New entry in ${selected.name}`, onClick: () => setForm(openForm === "entry" ? null : "entry") },
-          icon("plus", 14),
-          h("span", { class: "title" }, "New entry"),
-        ),
-      );
-    }
-    list.appendChild(
-      h(
-        "button",
-        { class: "list-item list-action", type: "button", title: "New collection under src/content/", onClick: () => setForm(openForm === "collection" ? null : "collection") },
-        icon("folderPlus", 14),
-        h("span", { class: "title" }, "New collection"),
-      ),
-    );
-
-    replaceChildren(
-      section,
-      h("div", { class: "sb-heading sb-heading-row" }, h("span", null, "Collection"), h("div", { class: "sb-heading-aside" }, picker)),
-      formHost,
-      list,
-      !this.doc
-        ? h(
-            "p",
-            { class: "empty" },
-            "Open an entry to edit it in place. If Float can't detect one from the URL, bind it with ",
-            h("code", null, 'data-float-entry="blog:my-post"'),
-            " and mark the rendered body with ",
-            h("code", null, "data-float-body"),
-            ".",
-          )
-        : null,
-    );
-  }
-
-  /** Title only — the slug is derived and shown, never edited. */
-  private renderNewEntryForm(collection: Collection, close: () => void): HTMLElement {
-    const title = h("input", { class: "input", placeholder: "Title", autocomplete: "off" }) as HTMLInputElement;
-    const where = h("div", { class: "muted mono" }, `${collection.dir}/…`);
-    const error = h("div", { class: "form-error" });
-    title.addEventListener("input", () => {
-      const s = slugify(title.value);
-      where.textContent = `${collection.dir}/${s || "…"}/`;
-    });
-
-    const submit = async () => {
-      const s = slugify(title.value);
-      if (!s) {
-        error.textContent = "Give it a title";
-        return;
-      }
-      create.disabled = true;
-      error.textContent = "";
-      try {
-        const created = await api.create({ collection: collection.name, slug: s, title: title.value.trim() });
-        await this.navigate(routeFor(collection, created.id).href, { focusBody: true });
-      } catch (err) {
-        error.textContent = describe(err);
-        create.disabled = false;
-      }
-    };
-
-    const create = h("button", { class: "btn btn-primary", type: "button", onClick: () => void submit() }, "Create entry") as HTMLButtonElement;
-    const form = h(
-      "div",
-      { class: "form" },
-      h("div", { class: "form-title" }, `New entry in ${collection.name}`),
-      h("label", null, "Title", title, where),
-      error,
-      h("div", { class: "form-actions" }, h("button", { class: "btn btn-ghost", type: "button", onClick: close }, "Cancel"), create),
-    );
-    form.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") void submit();
-    });
-    keepInView(form);
-    queueMicrotask(() => title.focus({ preventScroll: true }));
-    return form;
-  }
-
-  private renderNewCollectionForm(close: () => void): HTMLElement {
-    const name = h("input", { class: "input", placeholder: "til", spellcheck: false, autocapitalize: "off", autocomplete: "off" }) as HTMLInputElement;
-    const first = h("input", { class: "input", placeholder: "First entry", value: "First entry", autocomplete: "off" }) as HTMLInputElement;
-    const error = h("div", { class: "form-error" });
-    const preview = h("div", { class: "muted mono" }, "src/content/…/");
-
-    name.addEventListener("input", () => {
-      name.value = name.value.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+/, "");
-      preview.textContent = `src/content/${name.value || "…"}/ · registered in content.config.ts`;
-    });
-
-    const submit = async () => {
-      const n = name.value.replace(/-+$/, "");
-      if (!/^[a-z][a-z0-9-]*$/.test(n)) {
-        error.textContent = "Name must start with a letter: a-z, 0-9, dashes";
-        return;
-      }
-      create.disabled = true;
-      error.textContent = "";
-      try {
-        const created = await api.createCollection({ name: n, title: first.value.trim() || "First entry" });
-        if (!created.config.updated) this.setStatus("error", created.config.note ?? "content.config.ts not updated");
-        this.listCollection = created.collection;
-        await this.navigate(routeFor({ name: created.collection, dir: created.dir, entries: [] }, created.id).href, { focusBody: true });
-      } catch (err) {
-        error.textContent = describe(err);
-        create.disabled = false;
-      }
-    };
-
-    const create = h("button", { class: "btn btn-primary", type: "button", onClick: () => void submit() }, "Create collection") as HTMLButtonElement;
-    const form = h(
-      "div",
-      { class: "form" },
-      h("div", { class: "form-title" }, "New collection"),
-      h("label", null, "Name", name, preview),
-      h("label", null, "First entry title", first),
-      h("p", { class: "form-note" }, "Creates the folder, adds a defineCollection() with a starter schema to content.config.ts, and seeds one entry."),
-      error,
-      h("div", { class: "form-actions" }, h("button", { class: "btn btn-ghost", type: "button", onClick: close }, "Cancel"), create),
-    );
-    form.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") void submit();
-    });
-    keepInView(form);
-    queueMicrotask(() => name.focus({ preventScroll: true }));
-    return form;
-  }
-
-  // ---- settings -------------------------------------------------------------------
-
-  private renderSettingsSection(): HTMLElement {
-    const autosave = h(
-      "button",
-      {
-        class: "setting toggle-row",
-        type: "button",
-        role: "switch",
-        "aria-checked": String(this.prefs.autosave),
-        onClick: () => {
-          this.prefs.autosave = !this.prefs.autosave;
-          autosave.setAttribute("aria-checked", String(this.prefs.autosave));
-          this.savePrefs();
-          if (this.prefs.autosave && this.isDirty()) this.scheduleAutosave();
-          this.renderStatus();
-        },
-      },
-      h("div", null, h("div", { class: "label" }, "Autosave"), h("div", { class: "desc" }, "Write to disk shortly after you stop typing")),
-      h("span", { class: "switch" }),
-    );
-
-    const bodyState = !this.doc
-      ? "No entry bound to this page."
-      : this.bodyReadOnly
-        ? `${this.doc.file} — MDX blocks unmapped; body read-only, fields editable.`
-        : this.page.bound
-          ? `Editing ${this.doc.file} in place${this.page.mapped ? "" : " (blocks unmapped — whole body re-serialized on save)"}.`
-          : `${this.doc.file} — no data-float-body on this page; body not editable here.`;
-
-    return h(
-      "details",
-      { class: "sb-section sb-details" },
-      h("summary", { class: "sb-heading" }, "Settings"),
-      h("div", { class: "sb-details-body" }, autosave,
-        h(
-          "div",
-          { class: "setting" },
-          h(
-            "div",
-            null,
-            h("div", { class: "label" }, "On the page"),
-            h(
-              "div",
-              { class: "desc" },
-              "Hover anything grey to edit it · select text for bold / italic / link · ⌘/Ctrl+S save · ⌘B / ⌘I / ⌘K · Tab / ⇧Tab nest lists · type “# ”, “- ”, “1. ”, “> ”, “```” at a line start · drop or paste images into the text · click a component block to move or remove it · the small control above a region copies its Markdown or opens it as source · Esc leaves the text",
-            ),
-          ),
-        ),
-        h("div", { class: "meta" }, bodyState, h("br"), "astro-float · dev only · writes stay on localhost"),
-      ),
-    );
-  }
 }
 
 // ---- helpers ------------------------------------------------------------------------
-
-type FieldKind = "string" | "text" | "boolean" | "number" | "date" | "tags" | "json";
-
-function fieldKind(value: unknown): FieldKind {
-  if (typeof value === "boolean") return "boolean";
-  if (typeof value === "number") return "number";
-  if (typeof value === "string") {
-    if (DATE_LIKE.test(value)) return "date";
-    if (value.length > 80 || value.includes("\n")) return "text";
-    return "string";
-  }
-  if (Array.isArray(value) && value.every((v) => typeof v === "string" || typeof v === "number")) return "tags";
-  if (value == null) return "string";
-  return "json";
-}
 
 /** The block a Markdown offset falls in, from the server's block list (lead + blocks joined by blank lines). */
 function blockIndexAt(offset: number, lead: string, blocks: Array<{ src: string; trailer: string }>): number {
@@ -1436,67 +1035,50 @@ function closestTopLevel(el: Element, container: HTMLElement): Element | null {
   return node;
 }
 
-/** "Oct 3, 2026" — the sidebar's compact date label. */
-function formatDateLabel(iso: string) {
-  return new Intl.DateTimeFormat(document.documentElement.lang || navigator.language || "en", { dateStyle: "medium", timeZone: "UTC" }).format(new Date(`${iso}T00:00:00Z`));
+/**
+ * Light or dark, from what the page actually looks like: the painted background
+ * of <body> (then <html>), else a declared `color-scheme`, else the viewer's preference.
+ */
+function detectTheme(prefersDark: boolean): "light" | "dark" {
+  for (const el of [document.body, document.documentElement]) {
+    const l = luminance(getComputedStyle(el).backgroundColor);
+    if (l !== null) return l < 0.5 ? "dark" : "light";
+  }
+  const declared = getComputedStyle(document.documentElement).colorScheme ?? "";
+  const dark = /\bdark\b/.test(declared);
+  const light = /\blight\b/.test(declared);
+  if (dark && !light) return "dark";
+  if (light && !dark) return "light";
+  return prefersDark ? "dark" : "light";
 }
 
-function loadPrefs(): Prefs {
+/** Relative luminance of an `rgb()` / `rgba()` colour, or null when it's (mostly) transparent. */
+function luminance(color: string): number | null {
+  const m = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?/);
+  if (!m) return null;
+  const alpha = m[4] === undefined ? 1 : m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+  if (alpha < 0.5) return null;
+  const [r, g, b] = [m[1], m[2], m[3]].map((v) => parseFloat(v) / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** The field an issue is about: the first segment of its path ("body" for the body). */
+function issueKeyOf(issue: ValidationIssue): string | null {
+  const first = Array.isArray(issue.path) ? issue.path[0] : String(issue.path ?? "").split(".")[0];
+  return first === undefined || first === "" ? null : String(first);
+}
+
+function loadPrefs(): PillPrefs {
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    const width = Number(stored.sidebarWidth);
-    return { autosave: Boolean(stored.autosave), sidebarWidth: Number.isFinite(width) && width > 0 ? width : undefined };
+    return { autosave: Boolean(stored.autosave) };
   } catch {
     return { autosave: false };
   }
 }
 
-/** Keep a focused control visible inside the (scrollable) sidebar when the keyboard comes up. */
-function keepInView(form: HTMLElement) {
-  form.addEventListener("focusin", (e) => {
-    const target = e.target as HTMLElement;
-    window.setTimeout(() => target.scrollIntoView?.({ block: "nearest", behavior: "smooth" }), 60);
-  });
-}
-
-/**
- * iOS zooms the page when a focused control has text smaller than 16px and
- * doesn't zoom back out on blur. Float's controls are 16px on touch devices so
- * this shouldn't trigger — but if the page is left zoomed anyway, briefly pin
- * `maximum-scale=1` on the viewport meta to snap it back, then restore the
- * original so user zoom keeps working. No-op on desktop (`scale` is 1).
- */
-function resetViewportZoom() {
-  const vv = window.visualViewport;
-  if (!vv || vv.scale <= 1.01) return;
-  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
-  if (!meta) return;
-  const original = meta.getAttribute("content") ?? "width=device-width, initial-scale=1";
-  const pinned = original.replace(/,?\s*maximum-scale=[^,]*/i, "") + ", maximum-scale=1";
-  meta.setAttribute("content", pinned);
-  window.setTimeout(() => meta.setAttribute("content", original), 350);
-}
-
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
-}
-
-function describe(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
 function formatTime(ts: number) {
   return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
-
-function slugify(value: string) {
-  return value
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
 }
 
 function altFrom(name: string) {

@@ -1,3 +1,4 @@
+import { altFromName, embedFor, mediaKind, videoHtml } from "./embeds";
 import { blockToMarkdown, type SerializeContext } from "./html-to-md";
 import { icon, type IconName } from "./icons";
 import { SelectionBubble } from "./overlays";
@@ -23,7 +24,7 @@ export interface SaveSnapshot {
 export interface PageEditorHooks {
   /** Any DOM change inside the editable body (already debounced to a microtask). */
   onChange(): void;
-  /** Image files dropped or pasted onto the body; `range` is where they landed. */
+  /** Image / video files dropped or pasted onto the body; `range` is where they landed. */
   onFiles(files: File[], range: Range | null): void;
 }
 
@@ -56,54 +57,238 @@ const PAGE_STYLE = /* css */ `
   transition: background-color 120ms ease;
 }
 [data-float-editing]::after { inset: -14px -18px; }
-[data-float-editing]:hover::after, [data-float-editing-field]:hover::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+[data-float-editing]:hover::after, [data-float-editing][data-float-hover]::after, [data-float-editing-field]:hover::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
 [data-float-editing]:focus::after, [data-float-editing-field]:focus::after { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
 [data-float-editing][data-float-dragging]::after { background-color: color-mix(in srgb, currentColor 7%, transparent); }
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
 
-/* In-page source view for the body: a textarea in the prose's place, same wash. */
+/* In-page source view for the body (toolbar/source.ts): a wrapper with the prose box's exact geometry —
+ * same wash, same corner-control position — holding a highlighted mirror under a transparent textarea. */
 .astro-float-source {
+  position: relative;
+  z-index: 0;
   display: block;
-  width: 100%;
-  min-height: 240px;
-  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-  border-radius: 6px;
-  padding: 14px 18px;
-  margin: 0 0 18px;
   color: inherit;
-  font: 13.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  tab-size: 2;
-  resize: vertical;
-  white-space: pre-wrap;
-  outline: none;
-  caret-color: currentColor;
+}
+.astro-float-source::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -14px -18px;
+  border-radius: 6px;
   background-color: transparent;
+  pointer-events: none;
   transition: background-color 120ms ease;
 }
-.astro-float-source:hover { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
-.astro-float-source:focus { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
+.astro-float-source:hover::after, .astro-float-source[data-float-hover]::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+.astro-float-source:focus-within::after { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
+.astro-float-src-mirror, .astro-float-src-area {
+  display: block;
+  margin: 0;
+  border: 0;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: manual;
+  text-align: left;
+}
+.astro-float-src-mirror { position: relative; color: inherit; pointer-events: none; user-select: none; -webkit-user-select: none; overflow: visible; }
+.astro-float-src-area {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  background: transparent;
+  color: transparent;
+  caret-color: currentColor;
+  resize: none;
+  outline: none;
+  overflow: hidden;
+  -webkit-text-fill-color: transparent;
+}
+.astro-float-src-area::selection { background: color-mix(in srgb, currentColor 16%, transparent); }
+.astro-float-src-mirror .ln { display: block; }
+.astro-float-src-mirror .md-mark, .astro-float-src-mirror .md-hash, .astro-float-src-mirror .md-hr, .astro-float-src-mirror .md-url { color: color-mix(in srgb, currentColor 38%, transparent); }
+/* Nothing in the mirror may change a glyph's advance width: the caret in the textarea must land on the
+ * glyph it belongs to. So bold is a stroke, not a heavier face; italic is a synthesized slant; the # markers
+ * stay in flow; code keeps the text font and gets only a faint ground. */
+.astro-float-src-mirror .md-h, .astro-float-src-mirror .md-strong { -webkit-text-stroke: 0.5px currentColor; }
+.astro-float-src-mirror .md-hash { -webkit-text-stroke: 0; }
+.astro-float-src-mirror .md-em { color: color-mix(in srgb, currentColor 72%, transparent); } /* a slant, even synthesized, moves glyphs: italic is a shade, not a shape */
+.astro-float-src-mirror .md-link { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 30%, transparent); text-underline-offset: 3px; }
+.astro-float-src-mirror .md-code { background: color-mix(in srgb, currentColor 6%, transparent); border-radius: 3px; }
+.astro-float-src-mirror .md-codeline { background: color-mix(in srgb, currentColor 5%, transparent); }
+.astro-float-src-mirror .md-quote { position: relative; color: color-mix(in srgb, currentColor 70%, transparent); }
+.astro-float-src-mirror .md-quote::before { content: ""; position: absolute; left: -12px; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: color-mix(in srgb, currentColor 22%, transparent); }
+
+/* Body control: copy / source inside the top-right corner of the body's wash. Part of the wash —
+ * no pill, no shadow, no border. Two icon-only buttons that never change size or place; the
+ * tooltip says what they do. Hover: the icon darkens and a faint rounded background appears. */
+.astro-float-region {
+  position: fixed;
+  z-index: 1999999999;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  box-sizing: border-box;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, visibility 0s linear 120ms;
+}
+.astro-float-region[data-show] { opacity: 1; visibility: visible; pointer-events: auto; transition: opacity 120ms ease; }
+.astro-float-region button {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: inherit;
+  opacity: 0.65;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background 100ms ease, opacity 100ms ease;
+}
+.astro-float-region button svg { width: 14px; height: 14px; display: block; }
+.astro-float-region button:hover, .astro-float-region button:focus-visible { opacity: 1; background: color-mix(in srgb, currentColor 6%, transparent); }
+.astro-float-region button[data-on] { opacity: 1; }
+.astro-float-region button:disabled { opacity: 0.4; cursor: default; background: none; }
+.astro-float-region button[data-danger] { width: auto; padding: 0 8px; opacity: 1; color: #ef6f6c; font: 500 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; }
+.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px 0 8px; color: #ef6f6c; white-space: nowrap; font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; }
+
+/* The tooltip: one instance for everything Float draws (see toolbar/tooltip.ts). Dark on a light
+ * site, light on a dark one; above the trigger, below when there's no room; never in the way. */
+.astro-float-tip {
+  position: fixed;
+  z-index: 2000000003;
+  max-width: 280px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #1c1f24;
+  color: #fff;
+  font: 500 12px/1.35 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  text-align: center;
+  box-sizing: border-box;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+.astro-float-tip[data-below] { transform: translateY(-2px); }
+.astro-float-tip[data-show] { opacity: 1; transform: none; }
+:root[data-float-theme="dark"] .astro-float-tip { background: #f2f3f5; color: #1b1f26; }
 
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
 [data-float-editing] [data-float-island] * { cursor: default; }
+/* An iframe swallows clicks; while editing, a click on an embed must select its island (the wrapper) instead. */
+[data-float-editing] [data-float-island] iframe { pointer-events: none; }
 
 /* Frontmatter fields edited in place (title, description, date, …). */
 [data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
 [data-float-editing-field][data-float-date] { cursor: pointer; }
 [data-float-editing-field][data-float-date][data-float-open]::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+[data-float-editing-field][data-float-enum] { cursor: pointer; }
+[data-float-editing-field][data-float-invalid] { text-decoration: underline wavy color-mix(in srgb, #d4423e 70%, transparent); text-underline-offset: 3px; }
 
-/* Calendar popover, shared by the date on the page and the sidebar's date control. */
+/* Tags on the page: each chip takes a caret (a smaller wash than a field); a quiet "+" chip after
+ * the last one adds a tag. Both keep the page's own chip styling. */
+[data-float-chip], [data-float-add] { position: relative; z-index: 0; outline: none; caret-color: currentColor; }
+[data-float-chip]::after, [data-float-add]::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -3px -5px;
+  border-radius: 4px;
+  background-color: transparent;
+  pointer-events: none;
+  transition: background-color 120ms ease;
+}
+[data-float-chip]:hover::after, [data-float-add]:hover::after { background-color: color-mix(in srgb, currentColor 6%, transparent); }
+[data-float-chip]:focus::after, [data-float-add]:focus::after { background-color: color-mix(in srgb, currentColor 3.5%, transparent); }
+[data-float-add] { opacity: 0.55; cursor: pointer; user-select: none; -webkit-user-select: none; }
+[data-float-add]:hover, [data-float-add][data-float-adding] { opacity: 1; }
+[data-float-add][data-float-adding] { cursor: text; user-select: auto; -webkit-user-select: auto; min-width: 2ch; }
+
+/* Inline menu for an enum printed on the page: the options, current one marked. */
+.astro-float-menu {
+  position: fixed;
+  z-index: 2000000002;
+  min-width: 120px;
+  padding: 4px;
+  background: var(--dp-bg);
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  box-shadow: var(--dp-shadow);
+  color: var(--dp-fg);
+  font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  box-sizing: border-box;
+  animation: astro-float-dp-in 120ms ease;
+}
+.astro-float-menu button { all: unset; display: block; width: 100%; padding: 7px 8px; border-radius: 4px; cursor: pointer; box-sizing: border-box; color: var(--dp-fg); font: inherit; }
+.astro-float-menu button:hover, .astro-float-menu button:focus-visible { background: var(--dp-hover); }
+.astro-float-menu button[data-on] { font-weight: 500; }
+
+/* Page-side chrome (calendar, selection bubble, island bar) shares one palette
+ * and follows the panel: light by default, dark when the viewer prefers it. */
+.astro-float-datepicker, .astro-float-bubble, .astro-float-bar, .astro-float-menu {
+  --dp-bg: #ffffff;
+  --dp-input: #ffffff;
+  --dp-line: #d8dce3;
+  --dp-line-focus: #9aa1ad;
+  --dp-fg: #1b1f26;
+  --dp-muted: #6b7280;
+  --dp-faint: #9aa1ad;
+  --dp-hover: #f1f2f5;
+  --dp-accent: #1b1f26;
+  --dp-accent-fg: #ffffff;
+  --dp-err: #d4423e;
+  --dp-err-fg: #ffffff;
+  --dp-shadow: 0 1px 2px rgba(16, 20, 28, 0.06), 0 12px 32px -12px rgba(16, 20, 28, 0.3);
+}
+@media (prefers-color-scheme: dark) {
+  .astro-float-datepicker, .astro-float-bubble, .astro-float-bar, .astro-float-menu {
+    --dp-bg: #15181c;
+    --dp-input: #0b0d10;
+    --dp-line: #2a3038;
+    --dp-line-focus: #4a5260;
+    --dp-fg: #e6e8eb;
+    --dp-muted: #8b93a1;
+    --dp-faint: #5c6470;
+    --dp-hover: #22262c;
+    --dp-accent: #e6e8eb;
+    --dp-accent-fg: #0f1114;
+    --dp-err: #ef6f6c;
+    --dp-err-fg: #0f1114;
+    --dp-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Calendar popover, shared by the date on the page and the panel's date control. */
 .astro-float-datepicker {
   position: fixed;
   z-index: 2000000002;
   width: 244px;
   padding: 8px;
-  background: #15181c;
-  border: 1px solid #2a3038;
-  border-radius: 6px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
-  color: #e6e8eb;
+  background: var(--dp-bg);
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  box-shadow: var(--dp-shadow);
+  color: var(--dp-fg);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
@@ -111,6 +296,17 @@ const PAGE_STYLE = /* css */ `
   animation: astro-float-dp-in 120ms ease;
   user-select: none;
   -webkit-user-select: none;
+}
+:root[data-float-theme="dark"] .astro-float-datepicker {
+    --dp-bg: #15181c;
+    --dp-line: #2a3038;
+    --dp-fg: #e6e8eb;
+    --dp-muted: #8b93a1;
+    --dp-faint: #5c6470;
+    --dp-hover: #22262c;
+    --dp-accent: #e6e8eb;
+    --dp-accent-fg: #0f1114;
+    --dp-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
 }
 @keyframes astro-float-dp-in { from { opacity: 0; transform: translateY(-2px); } }
 .astro-float-datepicker[data-above] { animation-name: astro-float-dp-in-up; }
@@ -122,26 +318,26 @@ const PAGE_STYLE = /* css */ `
   justify-content: center;
   box-sizing: border-box;
   border-radius: 4px;
-  color: #b4bac4;
+  color: var(--dp-muted);
   cursor: pointer;
   font: inherit;
   transition: background 100ms ease, color 100ms ease;
 }
-.astro-float-datepicker button:hover { background: #22262c; color: #e6e8eb; }
-.astro-float-datepicker button:focus-visible { outline: 1px solid #4a5260; outline-offset: -1px; }
+.astro-float-datepicker button:hover { background: var(--dp-hover); color: var(--dp-fg); }
+.astro-float-datepicker button:focus-visible { outline: 1px solid var(--dp-faint); outline-offset: -1px; }
 .astro-float-dp-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; height: 28px; margin-bottom: 6px; }
 .astro-float-dp-head button { width: 26px; height: 26px; }
 .astro-float-dp-head button svg { width: 14px; height: 14px; display: block; }
-.astro-float-dp-label { flex: 1; text-align: center; font-weight: 500; color: #e6e8eb; }
+.astro-float-dp-label { flex: 1; text-align: center; font-weight: 500; color: var(--dp-fg); }
 .astro-float-dp-weekdays, .astro-float-dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
-.astro-float-dp-weekdays span { height: 22px; display: grid; place-items: center; font-size: 10.5px; color: #5c6470; }
-.astro-float-dp-grid button { height: 30px; font-size: 12px; font-variant-numeric: tabular-nums; position: relative; }
-.astro-float-dp-grid button[data-outside] { color: #5c6470; }
+.astro-float-dp-weekdays span { height: 22px; display: grid; place-items: center; font-size: 10.5px; color: var(--dp-faint); }
+.astro-float-dp-grid button { height: 30px; font-size: 12px; font-variant-numeric: tabular-nums; position: relative; color: var(--dp-fg); }
+.astro-float-dp-grid button[data-outside] { color: var(--dp-faint); }
 .astro-float-dp-grid button[data-today]::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 3px; height: 3px; border-radius: 999px; background: currentColor; transform: translateX(-50%); }
-.astro-float-dp-grid button[data-selected] { background: #e6e8eb; color: #0f1114; font-weight: 500; }
-.astro-float-dp-grid button[data-selected]:hover { background: #fff; color: #0f1114; }
-.astro-float-dp-foot { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px solid #2a3038; }
-.astro-float-dp-foot button { height: 24px; padding: 0 8px; font-size: 11.5px; color: #8b93a1; }
+.astro-float-dp-grid button[data-selected] { background: var(--dp-accent); color: var(--dp-accent-fg); font-weight: 500; }
+.astro-float-dp-grid button[data-selected]:hover { background: var(--dp-accent); color: var(--dp-accent-fg); opacity: 0.9; }
+.astro-float-dp-foot { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--dp-line); }
+.astro-float-dp-foot button { height: 24px; padding: 0 8px; font-size: 11.5px; color: var(--dp-muted); }
 
 /* Overlays live in the page, never inside the editable body. */
 .astro-float-frame, .astro-float-dropline { position: fixed; z-index: 1999999999; pointer-events: none; box-sizing: border-box; }
@@ -149,29 +345,29 @@ const PAGE_STYLE = /* css */ `
 .astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); }
 .astro-float-dropline { height: 2px; background: #8b93a1; border-radius: 1px; }
 
-/* Region control (copy / source), selection bubble and island bar: one quiet dark pill, one icon set.
- * They stack *below* the sidebar (2000000000): when a narrow window puts the prose's edge under the
- * sidebar, the pill is covered by it, never painted over it. The date picker is the one exception —
- * it's a dialog opened from either side, so it stays on top. */
-.astro-float-region, .astro-float-bubble, .astro-float-bar {
+/* Selection bubble and island bar: one quiet pill on the shared palette, one icon set. They stack
+ * *below* the panel (2000000000): when a narrow window puts the prose's edge under the panel, the
+ * pill is covered by it, never painted over it. The date picker is the one exception — it's a dialog
+ * opened from either side, so it stays on top. */
+.astro-float-bubble, .astro-float-bar {
   position: fixed;
   z-index: 1999999999;
   display: flex;
   align-items: center;
   gap: 1px;
   padding: 2px;
-  background: #15181c;
-  border: 1px solid #2a3038;
+  background: var(--dp-bg);
+  border: 1px solid var(--dp-line);
   border-radius: 6px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -12px rgba(0, 0, 0, 0.4);
-  color: #b4bac4;
+  box-shadow: var(--dp-shadow);
+  color: var(--dp-muted);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   letter-spacing: -0.005em;
   box-sizing: border-box;
   -webkit-font-smoothing: antialiased;
 }
-.astro-float-region[hidden], .astro-float-bubble[hidden], .astro-float-bar[hidden] { display: none; }
-.astro-float-region button, .astro-float-bubble button, .astro-float-bar button {
+.astro-float-bubble[hidden], .astro-float-bar[hidden] { display: none; }
+.astro-float-bubble button, .astro-float-bar button {
   all: unset;
   display: inline-flex;
   align-items: center;
@@ -181,34 +377,32 @@ const PAGE_STYLE = /* css */ `
   min-width: 24px;
   padding: 0 5px;
   border-radius: 4px;
-  color: #b4bac4;
+  color: var(--dp-muted);
   cursor: pointer;
   font: inherit;
   font-weight: 500;
   box-sizing: border-box;
   transition: background 100ms ease, color 100ms ease;
 }
-.astro-float-region button svg, .astro-float-bubble button svg, .astro-float-bar button svg { width: 14px; height: 14px; display: block; }
-.astro-float-region button[data-wide] { padding: 0 8px 0 6px; }
-.astro-float-region button:hover, .astro-float-bubble button:hover, .astro-float-bar button:hover { background: #22262c; color: #e6e8eb; }
-.astro-float-region button:disabled, .astro-float-bar button:disabled { opacity: 0.4; cursor: default; background: none; }
-.astro-float-bubble button[data-on] { color: #e6e8eb; background: #22262c; }
-.astro-float-region button[data-danger], .astro-float-bar button[data-danger]:hover { color: #ef6f6c; }
-.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: #ef6f6c; white-space: nowrap; border-left: 1px solid #2a3038; margin-left: 2px; }
+.astro-float-bubble button svg, .astro-float-bar button svg { width: 14px; height: 14px; display: block; }
+.astro-float-bubble button:hover, .astro-float-bar button:hover { background: var(--dp-hover); color: var(--dp-fg); }
+.astro-float-bar button:disabled { opacity: 0.4; cursor: default; background: none; }
+.astro-float-bubble button[data-on] { color: var(--dp-fg); background: var(--dp-hover); }
+.astro-float-bar button[data-danger]:hover { color: var(--dp-err); }
 .astro-float-bubble input {
   all: unset;
   width: 220px;
   height: 24px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #0b0d10;
-  border: 1px solid #2a3038;
-  color: #e6e8eb;
+  background: var(--dp-input);
+  border: 1px solid var(--dp-line);
+  color: var(--dp-fg);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   box-sizing: border-box;
 }
-.astro-float-bubble input:focus { border-color: #4a5260; }
-.astro-float-bubble input::placeholder { color: #5c6470; }
+.astro-float-bubble input:focus { border-color: var(--dp-line-focus); }
+.astro-float-bubble input::placeholder { color: var(--dp-faint); }
 .astro-float-bubble::after {
   content: "";
   position: absolute;
@@ -217,18 +411,18 @@ const PAGE_STYLE = /* css */ `
   transform: translateX(-50%);
   border: 4px solid transparent;
   border-bottom: 0;
-  border-top-color: #2a3038;
+  border-top-color: var(--dp-line);
 }
-.astro-float-bubble[data-below]::after { top: -5px; bottom: auto; border-top: 0; border-bottom: 4px solid #2a3038; }
+.astro-float-bubble[data-below]::after { top: -5px; bottom: auto; border-top: 0; border-bottom: 4px solid var(--dp-line); }
 .astro-float-bar button[data-grip] { cursor: grab; }
-.astro-float-bar .astro-float-sep, .astro-float-bubble .astro-float-sep { width: 1px; height: 16px; background: #2a3038; margin: 0 2px; flex: none; }
+.astro-float-bar .astro-float-sep, .astro-float-bubble .astro-float-sep { width: 1px; height: 16px; background: var(--dp-line); margin: 0 2px; flex: none; }
 .astro-float-bar .astro-float-confirm { display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; white-space: nowrap; }
 .astro-float-bar .astro-float-confirm button { width: auto; height: 24px; padding: 0 9px; }
-.astro-float-bar .astro-float-confirm button[data-danger] { background: #ef6f6c; color: #0f1114; }
-.astro-float-bar .astro-float-confirm button[data-danger]:hover { background: #f58c89; color: #0f1114; }
+.astro-float-bar .astro-float-confirm button[data-danger] { background: var(--dp-err); color: var(--dp-err-fg); }
+.astro-float-bar .astro-float-confirm button[data-danger]:hover { background: var(--dp-err); color: var(--dp-err-fg); opacity: 0.9; }
 @media (pointer: coarse) {
-  .astro-float-region button, .astro-float-bubble button, .astro-float-bar button { height: 36px; min-width: 36px; }
-  .astro-float-region, .astro-float-bubble, .astro-float-bar { padding: 3px; }
+  .astro-float-bubble button, .astro-float-bar button, .astro-float-region button { height: 36px; min-width: 36px; }
+  .astro-float-bubble, .astro-float-bar { padding: 3px; }
   .astro-float-datepicker { width: 300px; }
   .astro-float-dp-grid button { height: 38px; font-size: 14px; }
   .astro-float-dp-head button { width: 34px; height: 34px; }
@@ -272,12 +466,16 @@ export class PageEditor {
   private source: BodySource = { lead: "", blocks: [] };
   private snapshot: Array<{ key: string; block: SourceBlock }> = [];
   private baselineHTML = "";
+  /** Block keys at the last clean state; islands count by key, so a widget script redrawing inside one is not an edit. */
+  private baselineKeys = "";
   private absDir = "";
   private attached = false;
   private observer: MutationObserver | null = null;
   private changeQueued = false;
   private dragDepth = 0;
   private keyCounter = 0;
+  /** Raw-HTML islands inserted this session (video, embeds), by key: written back verbatim until the server has them. */
+  private pendingSource = new Map<string, string>();
 
   // islands
   private selected: HTMLElement | null = null;
@@ -313,6 +511,7 @@ export class PageEditor {
       el.removeAttribute("data-astro-source-file");
       el.removeAttribute("data-astro-source-loc");
     }
+    this.pendingSource.clear();
     this.decorateIslands(source);
     this.setBaseline(source);
   }
@@ -331,8 +530,13 @@ export class PageEditor {
     return {
       markdown: this.toMarkdown(),
       html: this.container?.innerHTML ?? "",
-      keys: this.domBlocks().map((n) => keyOf(n)),
+      keys: this.blockKeys(),
     };
+  }
+
+  /** One key per block that writes something: blank paragraphs (the caret's parking spots) emit no Markdown and get no key. */
+  private blockKeys(): string[] {
+    return this.domBlocks().filter((n) => !isBlankParagraph(n)).map((n) => keyOf(n));
   }
 
   /** Make a snapshot the new source of truth (call after the server confirmed it). */
@@ -340,6 +544,7 @@ export class PageEditor {
     if (!this.container) return;
     this.source = source;
     this.baselineHTML = snapshot.html;
+    this.baselineKeys = snapshot.keys.join("\n");
     this.mapped = snapshot.keys.length === source.blocks.length;
     this.snapshot = this.mapped ? snapshot.keys.map((key, i) => ({ key, block: source.blocks[i] })) : [];
   }
@@ -419,8 +624,15 @@ export class PageEditor {
     this.hideOverlays();
   }
 
+  /** Let go of the container and take back everything `bind` put on its islands. */
   unbind() {
     this.detach();
+    for (const node of Array.from(this.container?.querySelectorAll<HTMLElement>("[data-float-island]") ?? [])) {
+      node.removeAttribute("data-float-island");
+      node.removeAttribute("data-float-key");
+      node.removeAttribute("contenteditable");
+      node.removeAttribute("draggable");
+    }
     this.container = null;
     this.snapshot = [];
     this.mapped = false;
@@ -429,14 +641,14 @@ export class PageEditor {
   // ---- state ---------------------------------------------------------------------
 
   isDirty() {
-    return this.container ? this.container.innerHTML !== this.baselineHTML : false;
+    return this.container ? this.blockKeys().join("\n") !== this.baselineKeys : false;
   }
 
   /** Throw away every unsaved edit: the DOM goes back to the last clean baseline. Listeners are delegated, so nothing else to redo. */
   restoreBaseline() {
     if (!this.container) return;
     this.select(null);
-    if (this.container.innerHTML !== this.baselineHTML) this.container.innerHTML = this.baselineHTML;
+    if (this.isDirty()) this.container.innerHTML = this.baselineHTML;
   }
 
   /** Where the live DOM first departs from the clean baseline (for bug reports). */
@@ -567,7 +779,8 @@ export class PageEditor {
         const { block } = this.snapshot[j];
         return block.trailer ? `${block.src}\n\n${block.trailer}` : block.src;
       }
-      return blockToMarkdown(node, ctx);
+      const pending = node instanceof HTMLElement && node.dataset.floatKey ? this.pendingSource.get(node.dataset.floatKey) : undefined;
+      return pending ?? blockToMarkdown(node, ctx);
     });
   }
 
@@ -606,27 +819,55 @@ export class PageEditor {
     return parts.join("\n\n").replace(/\n{3,}/g, "\n\n") + "\n";
   }
 
+  /** Insert an uploaded file where it was dropped: an image as a paragraph, a video as a raw-HTML island. */
+  insertMedia(item: { name: string; src: string; url: string }, at: Range | null = null) {
+    if (mediaKind(item.name) === "video") this.insertHtmlBlock(videoHtml(item.src), at, videoHtml(item.url));
+    else this.insertImage(item.url, altFromName(item.name), at);
+  }
+
   /** Insert an image as its own block after the caret's block (or at the end). */
   insertImage(url: string, alt: string, at: Range | null = null) {
-    const el = this.container;
-    if (!el) return;
     const figure = document.createElement("p");
     const img = document.createElement("img");
     img.src = url;
     img.alt = alt;
     figure.appendChild(img);
+    this.placeBlock(figure, at);
+  }
 
+  /**
+   * Insert one raw-HTML block (a `<video>`, an embed) as an island. `html` is
+   * what gets written to the Markdown, verbatim; the DOM shows `preview`
+   * (defaults to the same markup — a fresh upload previews through `/@fs/`).
+   */
+  insertHtmlBlock(html: string, at: Range | null = null, preview = html) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = preview.trim();
+    const node = tpl.content.firstElementChild;
+    if (!(node instanceof HTMLElement)) return;
+    const key = `island-${++this.keyCounter}-${Date.now().toString(36)}`;
+    node.setAttribute("data-float-island", "");
+    node.dataset.floatKey = key;
+    node.contentEditable = "false";
+    node.draggable = true;
+    this.pendingSource.set(key, html.trim());
+    this.placeBlock(node, at);
+  }
+
+  /** Put a new block after the caret's block (replacing an empty paragraph, else at the end) and park the caret below it. */
+  private placeBlock(block: HTMLElement, at: Range | null) {
+    const el = this.container;
+    if (!el) return;
     const range = at ?? this.selectionRange();
     const anchor = range ? this.topLevelBlock(range.startContainer) : null;
     if (anchor && anchor.parentNode === el) {
-      const isEmptyParagraph = anchor.tagName === "P" && !anchor.textContent?.trim() && !anchor.querySelector("img");
-      if (isEmptyParagraph) anchor.replaceWith(figure);
-      else anchor.after(figure);
+      if (isEmptyBlock(anchor)) anchor.replaceWith(block);
+      else anchor.after(block);
     } else {
-      el.appendChild(figure);
+      el.appendChild(block);
     }
     const after = emptyParagraph();
-    figure.after(after);
+    block.after(after);
     placeCaret(after);
   }
 
@@ -991,7 +1232,7 @@ export class PageEditor {
       e.preventDefault();
       return;
     }
-    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => mediaKind(f.name, f.type) !== null);
     if (files.length) {
       e.preventDefault();
       this.hooks.onFiles(files, this.selectionRange());
@@ -1000,6 +1241,14 @@ export class PageEditor {
     const text = e.clipboardData?.getData("text/plain");
     if (text) {
       e.preventDefault();
+      // A lone URL pasted on an empty line becomes an embed (YouTube, Vimeo, tweet, video file).
+      const range = this.selectionRange();
+      const block = range ? this.topLevelBlock(range.startContainer) : null;
+      const embed = block && isEmptyBlock(block) && /^(P|DIV)$/.test(block.tagName) ? embedFor(text) : null;
+      if (embed) {
+        this.insertHtmlBlock(embed.html, range);
+        return;
+      }
       document.execCommand("insertText", false, text);
     }
   };
@@ -1178,7 +1427,7 @@ function button(name: IconName | null, label: string, onClick: () => void, text?
   b.type = "button";
   if (name) b.appendChild(icon(name, 14));
   if (text) b.appendChild(Object.assign(document.createElement("span"), { textContent: text }));
-  b.title = label;
+  b.setAttribute("data-tip", label);
   b.setAttribute("aria-label", label);
   b.addEventListener("click", (e) => {
     e.preventDefault();
@@ -1186,6 +1435,17 @@ function button(name: IconName | null, label: string, onClick: () => void, text?
     onClick();
   });
   return b;
+}
+
+/** A block with nothing in it but the browser's caret placeholder. */
+function isEmptyBlock(block: HTMLElement): boolean {
+  return !block.textContent?.trim() && !block.querySelector("img, video, iframe, audio");
+}
+
+/** `<p><br></p>` and friends: the paragraphs contenteditable makes for the caret, which write no Markdown. */
+function isBlankParagraph(node: Node): boolean {
+  if (!(node instanceof HTMLElement) || !/^(P|DIV)$/.test(node.tagName) || node.dataset.floatKey) return false;
+  return !node.textContent?.trim() && !node.querySelector(":not(br)");
 }
 
 function emptyParagraph(): HTMLParagraphElement {

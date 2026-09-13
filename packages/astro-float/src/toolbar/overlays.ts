@@ -1,14 +1,14 @@
 import { icon, type IconName } from "./icons";
+import { refreshTooltip } from "./tooltip";
 
 /**
- * Small page-side helpers shared by the body editor and the sidebar:
+ * Small page-side helpers for the body:
  *
- * - `RegionControl` is the copy / source toggle that sits just above the
- *   top-right corner of whichever region is being edited.
+ * - `RegionControl` is the quiet copy / source control tucked inside the
+ *   top-right corner of the body's wash.
  * - `SelectionBubble` is the bold / italic / link bubble for a text selection.
  *
- * Overlays live in `document.body`, never inside an editable region, and are
- * positioned above/beside their target so nothing stacks on the words.
+ * Both live in `document.body`, never inside the editable prose.
  */
 
 function makeButton(iconName: IconName | null, label: string, onClick: (e: MouseEvent) => void, text?: string): HTMLButtonElement {
@@ -16,7 +16,7 @@ function makeButton(iconName: IconName | null, label: string, onClick: (e: Mouse
   b.type = "button";
   if (iconName) b.appendChild(icon(iconName, 14));
   if (text) b.appendChild(Object.assign(document.createElement("span"), { textContent: text }));
-  b.title = label;
+  b.setAttribute("data-tip", label);
   b.setAttribute("aria-label", label);
   // Keep the page selection / focus where it is.
   b.addEventListener("mousedown", (e) => e.preventDefault());
@@ -28,88 +28,163 @@ function makeButton(iconName: IconName | null, label: string, onClick: (e: Mouse
   return b;
 }
 
-// ---- region control -----------------------------------------------------------------
+// ---- body control (copy / source) ------------------------------------------------------
 
 export interface RegionActions {
-  /** Return the text to copy for this region (markdown for the body, plain text for a field). */
+  /** The body's Markdown, for the clipboard. */
   copy(): string;
-  /** Present only for the body: flip between rendered and in-page source editing. */
-  toggleSource?: () => void;
-  isSource?: () => boolean;
+  /** Flip between the rendered prose and the in-page Markdown textarea. */
+  toggleSource(): void;
+  isSource(): boolean;
   /** A save is running as part of leaving source view. */
-  busy?: () => boolean;
+  busy(): boolean;
   /** The last attempt to leave source view failed; shown next to a Discard escape hatch. */
-  error?: () => string | null;
-  discard?: () => void;
+  error(): string | null;
+  discard(): void;
 }
 
-/** Copy / Source control anchored just above the top-right corner of the region being edited. */
+/**
+ * Copy / Source for the body: two quiet icons inside the top-right corner of
+ * the wash, part of it rather than floating over it. Shown while the body has
+ * the caret or the pointer (the wash's own conditions), fading with it; pinned
+ * inside the visible part of the region when its corner scrolls off.
+ */
 export class RegionControl {
   private el: HTMLElement | null = null;
   private target: HTMLElement | null = null;
   private actions: RegionActions | null = null;
   private hideTimer: number | undefined;
+  private visible = false;
 
   show(target: HTMLElement, actions: RegionActions) {
     window.clearTimeout(this.hideTimer);
+    if (this.target !== target) this.unbindTarget();
     this.target = target;
     this.actions = actions;
+    target.addEventListener("pointerenter", this.paint);
+    target.addEventListener("pointerleave", this.paint);
     this.render();
   }
 
-  /** Re-draw with the same target (busy / error state changed). */
-  refresh() {
-    if (this.target && this.actions && this.el && !this.el.hidden) this.render();
+  /** The pointer is on the control, which sits outside the body element: keep the body's wash on. */
+  private onEnter = () => {
+    this.target?.setAttribute("data-float-hover", "");
+    this.paint();
+  };
+
+  private onLeave = () => {
+    this.target?.removeAttribute("data-float-hover");
+    this.paint();
+    this.scheduleHide(); // unless the body still has the pointer or the caret
+  };
+
+  private unbindTarget() {
+    const t = this.target;
+    if (!t) return;
+    t.removeAttribute("data-float-hover");
+    t.removeEventListener("pointerenter", this.paint);
+    t.removeEventListener("pointerleave", this.paint);
   }
 
-  /** Hide after a beat, unless focus moved into the control itself. */
+  /**
+   * An opaque surface the colour of the wash: the page's effective background
+   * (first ancestor with a painted one) with the wash's tint of the text colour
+   * over it, so the label never lets the prose bleed through.
+   */
+  private paint = () => {
+    if (!this.el || !this.target) return;
+    const t = this.target;
+    const fg = parseColor(getComputedStyle(t).color) ?? { r: 0, g: 0, b: 0, a: 1 };
+    const over = t.matches(":hover") || t.hasAttribute("data-float-hover");
+    const tint = over ? 0.045 : 0.025;
+    const bg = pageBackground(t);
+    const mix = (k: "r" | "g" | "b") => Math.round(bg[k] * (1 - tint) + fg[k] * tint);
+    this.el.style.background = `rgb(${mix("r")}, ${mix("g")}, ${mix("b")})`;
+  };
+
+  /** Re-draw with the same target (source / busy / error state changed). */
+  refresh() {
+    if (this.target && this.actions && this.visible) this.render();
+  }
+
+  get shown() {
+    return this.visible;
+  }
+
+  /** Hide after a beat — unless the pointer or the focus is still on the region or the control itself. */
   scheduleHide() {
     window.clearTimeout(this.hideTimer);
     this.hideTimer = window.setTimeout(() => {
-      if (this.el?.contains(document.activeElement)) return;
+      const t = this.target;
+      if (this.actions?.isSource()) return; // in source view the control is the way back
+      if (this.el?.contains(document.activeElement) || this.el?.matches(":hover")) return;
+      if (t && (t.matches(":hover") || t === document.activeElement || t.contains(document.activeElement))) return;
       this.hide();
     }, 120);
   }
 
   hide() {
     window.clearTimeout(this.hideTimer);
+    this.unbindTarget();
     this.target = null;
     this.actions = null;
-    if (this.el) this.el.hidden = true;
+    this.visible = false;
+    this.el?.removeAttribute("data-show");
+  }
+
+  /**
+   * Edit off: take the element out of the page. Left behind, it would sit
+   * there unstyled once the page stylesheet is gone, and fade out in plain
+   * view when the next Edit on brings the stylesheet back.
+   */
+  dispose() {
+    this.hide();
+    if (!this.el) return;
+    window.removeEventListener("scroll", this.reposition, true);
+    window.removeEventListener("resize", this.reposition);
+    this.el.remove();
+    this.el = null;
   }
 
   reposition = () => {
-    if (!this.el || this.el.hidden || !this.target) return;
+    if (!this.el || !this.visible || !this.target) return;
     if (!this.target.isConnected) {
       this.hide();
       return;
     }
     const r = this.target.getBoundingClientRect();
-    const w = this.el.offsetWidth;
-    const hgt = this.el.offsetHeight;
-    // Region scrolled out of view entirely: nothing to anchor to.
+    const hgt = this.el.offsetHeight || 28;
+    // Region scrolled out of view entirely: nothing to sit in.
     if (r.bottom < 40 || r.top > window.innerHeight - 40) {
       this.el.style.opacity = "0";
       return;
     }
     this.el.style.opacity = "";
-    const above = r.top - hgt - 6;
-    // Always flush with the region's right edge — it never slides sideways. Above the
-    // region while its top is in view; held at the top of the viewport once it scrolls off.
-    const left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8));
-    const top = above >= 4 ? above : 8;
-    Object.assign(this.el.style, { left: `${left}px`, top: `${top}px` });
+    // Inside the wash's top-right corner (the wash reaches ~14px above and ~18px right of the box),
+    // held at the top of the viewport once that corner scrolls off, always flush with the right edge.
+    const inset = 8;
+    const right = Math.max(inset, window.innerWidth - (r.right + 18) + inset);
+    const top = Math.max(r.top - 14 + inset, inset);
+    const maxTop = r.bottom + 14 - inset - hgt;
+    Object.assign(this.el.style, { right: `${right}px`, top: `${Math.min(top, maxTop)}px` });
   };
 
   private render() {
     if (!this.el) {
       this.el = document.createElement("div");
       this.el.className = "astro-float-region";
+      this.el.addEventListener("pointerenter", this.onEnter);
+      this.el.addEventListener("pointerleave", this.onLeave);
       window.addEventListener("scroll", this.reposition, true);
       window.addEventListener("resize", this.reposition);
     }
-    // A page swap may have dropped it from the document; put it back.
-    if (!this.el.isConnected) document.body.appendChild(this.el);
+    // A page swap may have dropped it from the document; put it back — hidden, and painted once
+    // that way, so showing it below is a fade-in rather than an instant pop.
+    if (!this.el.isConnected) {
+      this.el.removeAttribute("data-show");
+      document.body.appendChild(this.el);
+      void this.el.offsetWidth;
+    }
     const el = this.el;
     const actions = this.actions!;
     el.textContent = "";
@@ -117,37 +192,62 @@ export class RegionControl {
     const copy = makeButton("copy", "Copy Markdown", () => {
       void navigator.clipboard?.writeText(actions.copy()).then(() => {
         copy.replaceChildren(icon("check", 14));
-        window.setTimeout(() => copy.replaceChildren(icon("copy", 14)), 1200);
+        copy.setAttribute("data-tip", "Copied");
+        refreshTooltip(copy);
+        window.setTimeout(() => {
+          copy.replaceChildren(icon("copy", 14));
+          copy.setAttribute("data-tip", "Copy Markdown");
+          refreshTooltip(copy);
+        }, 1000);
       });
     });
     el.appendChild(copy);
 
-    if (actions.toggleSource) {
-      const isSource = actions.isSource?.() ?? false;
-      const busy = actions.busy?.() ?? false;
-      const error = actions.error?.() ?? null;
-      const toggle = makeButton(
-        isSource ? "eye" : "code",
-        isSource ? "Save and go back to the rendered page" : "Edit this region as Markdown",
-        () => actions.toggleSource!(),
-        busy ? "Saving…" : isSource ? "Rendered" : "Source",
-      );
-      toggle.setAttribute("data-wide", "");
-      toggle.disabled = busy;
-      el.appendChild(toggle);
-      if (error && isSource && actions.discard) {
-        const note = document.createElement("span");
-        note.className = "astro-float-region-error";
-        note.append(icon("alert", 13), Object.assign(document.createElement("span"), { textContent: error }));
-        const discard = makeButton(null, "Discard the source edits and show the page as it was", () => actions.discard!(), "Discard");
-        discard.setAttribute("data-danger", "");
-        el.append(note, discard);
-      }
+    const isSource = actions.isSource();
+    const busy = actions.busy();
+    const error = actions.error();
+    // Icon only, always the same size and place; the tooltip says what it does.
+    const toggle = makeButton(isSource ? "eye" : "code", busy ? "Saving…" : isSource ? "Back to rendered" : "Edit as Markdown", () => actions.toggleSource());
+    toggle.disabled = busy;
+    toggle.toggleAttribute("data-on", isSource);
+    el.appendChild(toggle);
+    if (error && isSource) {
+      const note = document.createElement("span");
+      note.className = "astro-float-region-error";
+      note.append(icon("alert", 13), Object.assign(document.createElement("span"), { textContent: error }));
+      const discard = makeButton(null, "Discard the source edits and show the page as it was", () => actions.discard(), "Discard");
+      discard.setAttribute("data-danger", "");
+      el.append(note, discard);
     }
 
-    el.hidden = false;
+    this.visible = true;
+    el.setAttribute("data-show", "");
+    this.paint();
     this.reposition();
   }
+}
+
+interface Rgba {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+}
+
+function parseColor(color: string): Rgba | null {
+  const m = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?/);
+  if (!m) return null;
+  const a = m[4] === undefined ? 1 : m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+  return { r: parseFloat(m[1]), g: parseFloat(m[2]), b: parseFloat(m[3]), a };
+}
+
+/** The page's painted background behind an element; white or near-black by Float's theme when nothing paints one. */
+function pageBackground(el: Element): Rgba {
+  for (let node: Element | null = el; node; node = node.parentElement) {
+    const c = parseColor(getComputedStyle(node).backgroundColor);
+    if (c && c.a >= 0.99) return c;
+  }
+  return document.documentElement.getAttribute("data-float-theme") === "dark" ? { r: 15, g: 17, b: 20, a: 1 } : { r: 255, g: 255, b: 255, a: 1 };
 }
 
 // ---- selection bubble ----------------------------------------------------------------

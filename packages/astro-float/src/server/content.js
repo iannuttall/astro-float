@@ -3,9 +3,20 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { splitBlocks } from "./blocks.js";
+import { readCollectionSchema, templateFromSchema } from "./schema.js";
+import { validateDocument, validationError } from "./validate.js";
 
 export const ENTRY_EXTS = new Set([".md", ".mdx", ".markdown"]);
 export const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg"]);
+export const VIDEO_EXTS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
+
+/** "image" | "video" | null for a file name. */
+export function mediaKindOf(filename) {
+  const ext = path.extname(String(filename ?? "")).toLowerCase();
+  if (IMAGE_EXTS.has(ext)) return "image";
+  if (VIDEO_EXTS.has(ext)) return "video";
+  return null;
+}
 
 const FRONTMATTER_RE = /^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
@@ -176,6 +187,8 @@ export async function readEntry(ctx, collectionName, id) {
     body,
     ...splitBlocks(body, { mdx: isMdx(abs) }),
     hash: hashOf(raw),
+    // Field definitions for the panel: from the Zod schema (via Astro's generated JSON Schema) or inferred from values.
+    schema: await readCollectionSchema(ctx, collection),
   };
 }
 
@@ -190,6 +203,9 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
     throw httpError(409, "file changed on disk since it was loaded");
   }
   const next = serializeDocument(frontmatter ?? {}, typeof body === "string" ? body : "");
+  // Refuse what Astro would refuse, before anything touches the disk.
+  const { issues } = await validateDocument(ctx, collection, next, { entryDir: path.dirname(abs) });
+  if (issues.length) throw validationError(issues);
   const saved = parseDocument(next);
   const result = { file: entry.file, body: saved.body, ...splitBlocks(saved.body, { mdx: isMdx(abs) }) };
   if (next === current) return { ...result, hash: hashOf(current), changed: false };
@@ -198,19 +214,39 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
 }
 
 /**
- * Build a sensible frontmatter skeleton for a new entry by looking at what the
- * collection's existing entries use. Zod schemas in content.config.ts are not
- * consulted (yet) — this is inference, not validation.
+ * Build a frontmatter skeleton for a new entry. The collection's schema (when
+ * Astro has written one) comes first: defaults and required fields in schema
+ * order. Optional schema fields are left out — Astro treats them as absent,
+ * and an invented `""` or `0` would fail `image()`, `reference()` or `.min()`.
+ * Only keys the schema doesn't know are topped up from the existing entries,
+ * so a collection without a schema still gets a sensible start.
  */
-export async function inferFrontmatterTemplate(ctx, collection) {
+export async function inferFrontmatterTemplate(ctx, collection, collections) {
+  const schema = await readCollectionSchema(ctx, collection);
   /** @type {Record<string, unknown>} */
-  const template = {};
+  const template = templateFromSchema(schema);
+  const known = new Set(schema?.source === "zod" ? schema.fields.map((f) => f.key) : []);
+
+  // A required reference() has no valid placeholder in the abstract; the first
+  // entry of the collection it points at is one.
+  for (const field of schema?.source === "zod" ? schema.fields : []) {
+    if (field.type !== "reference" || !field.required || "default" in field) continue;
+    const target = (collections ?? []).find((c) => c.name === field.collection);
+    const first = target?.entries?.[0]?.id;
+    if (first) template[field.key] = first;
+    else delete template[field.key];
+  }
+  // A required image() can't be invented either: leave it for the author.
+  for (const field of schema?.source === "zod" ? schema.fields : []) {
+    if (field.type === "image" && template[field.key] === "") delete template[field.key];
+  }
+
   const today = new Date().toISOString().slice(0, 10);
   for (const e of collection.entries.slice(0, 8)) {
     try {
       const { frontmatter } = parseDocument(await fs.readFile(path.resolve(ctx.root, e.file), "utf8"));
       for (const [key, value] of Object.entries(frontmatter)) {
-        if (key in template) continue;
+        if (key in template || known.has(key)) continue;
         if (typeof value === "boolean") template[key] = false;
         else if (typeof value === "number") template[key] = 0;
         else if (Array.isArray(value)) template[key] = [];
@@ -242,7 +278,7 @@ export async function createEntry(ctx, { collection: collectionName, slug, title
     : path.join(collectionDir, `${slug}.md`);
   if (!isInside(collectionDir, abs)) throw httpError(400, "bad slug");
 
-  const template = await inferFrontmatterTemplate(ctx, collection);
+  const template = await inferFrontmatterTemplate(ctx, collection, collections);
   const data = { ...template, ...(frontmatter ?? {}) };
   if ("title" in template || !Object.keys(template).length) data.title = title || slug;
   else if (title) data.title = title;
@@ -250,8 +286,11 @@ export async function createEntry(ctx, { collection: collectionName, slug, title
   delete data.slug;
 
   const body = `Start writing…\n`;
+  const document = serializeDocument(data, body);
+  const { issues } = await validateDocument(ctx, collection.name, document, { entryDir: path.dirname(abs) });
+  if (issues.length) throw validationError(issues);
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  await fs.writeFile(abs, serializeDocument(data, body), { encoding: "utf8", flag: "wx" });
+  await fs.writeFile(abs, document, { encoding: "utf8", flag: "wx" });
 
   return {
     collection: collection.name,
@@ -290,14 +329,43 @@ export async function listMedia(ctx, collectionName, id) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Save a dropped / pasted file for an entry.
+ *
+ * Images go next to the entry and are referenced as `./photo.png` — Astro's
+ * Markdown pipeline resolves and optimises those. Videos can't live there:
+ * Astro only collects Markdown *image* nodes, so a raw `<video src="./clip.mp4">`
+ * would 404. They go under `public/media/<collection>/<id>/` and are referenced
+ * by their public URL, which works in dev and in the build with no config.
+ */
 export async function saveMedia(ctx, collectionName, id, filename, buffer) {
-  const { abs, entry, collectionDir } = await resolveEntry(ctx, collectionName, id);
+  const { abs, entry, collection, collectionDir } = await resolveEntry(ctx, collectionName, id);
   const ext = path.extname(filename).toLowerCase();
-  if (!IMAGE_EXTS.has(ext)) throw httpError(415, `unsupported image type "${ext || filename}"`);
+  const kind = mediaKindOf(filename);
+  if (!kind) throw httpError(415, `unsupported media type "${ext || filename}"`);
 
-  const base = slugify(path.basename(filename, ext)) || "image";
-  const dir = mediaDirFor(abs, entry);
-  if (!isInside(collectionDir, dir) && dir !== collectionDir) throw httpError(400, "bad media path");
+  const base = slugify(path.basename(filename, path.extname(filename))) || kind;
+  let dir;
+  let describe;
+  if (kind === "video") {
+    const publicDir = path.resolve(ctx.root, ctx.publicDir ?? "public");
+    const mediaRoot = path.join(publicDir, "media");
+    dir = path.join(mediaRoot, collection.name, ...entry.id.split("/"));
+    if (!isInside(mediaRoot, dir)) throw httpError(400, "bad media path");
+    // `src` is the public URL that belongs in the Markdown; `url` previews the
+    // file right away (Vite's public-file list only picks the write up a beat later).
+    describe = (file) => ({
+      src: "/" + path.relative(publicDir, file).split(path.sep).map(encodeURIComponent).join("/"),
+      url: "/@fs" + file.split(path.sep).join("/"),
+    });
+  } else {
+    dir = mediaDirFor(abs, entry);
+    if (!isInside(collectionDir, dir) && dir !== collectionDir) throw httpError(400, "bad media path");
+    describe = (file) => ({
+      src: "./" + path.relative(path.dirname(abs), file).split(path.sep).join("/"),
+      url: "/@fs" + file.split(path.sep).join("/"),
+    });
+  }
   await fs.mkdir(dir, { recursive: true });
 
   let candidate = `${base}${ext}`;
@@ -308,8 +376,8 @@ export async function saveMedia(ctx, collectionName, id, filename, buffer) {
 
   return {
     name: candidate,
-    src: "./" + path.relative(path.dirname(abs), file).split(path.sep).join("/"),
-    url: "/@fs" + file.split(path.sep).join("/"),
+    kind,
+    ...describe(file),
     file: path.relative(ctx.root, file).split(path.sep).join("/"),
   };
 }

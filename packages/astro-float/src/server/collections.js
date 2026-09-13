@@ -1,15 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { discoverCollections, httpError, serializeDocument, slugify } from "./content.js";
-
-const CONFIG_CANDIDATES = [
-  "src/content.config.ts",
-  "src/content.config.mts",
-  "src/content.config.js",
-  "src/content.config.mjs",
-  "src/content/config.ts",
-  "src/content/config.js",
-];
+import { CONFIG_CANDIDATES } from "./schema.js";
 
 /**
  * Create a brand-new collection the way an Astro 5 project expects it:

@@ -1,0 +1,46 @@
+{
+  "$ref": "#/definitions/kitchen",
+  "definitions": {
+    "kitchen": {
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "summary": { "type": "string", "maxLength": 400 },
+        "body": { "type": "string" },
+        "longText": { "type": "string", "maxLength": 500 },
+        "status": { "anyOf": [{ "type": "string", "enum": ["draft", "live"] }, { "type": "null" }], "description": "  Where it is  " },
+        "level": { "anyOf": [{ "const": "low" }, { "const": "high" }] },
+        "score": { "type": "number", "minimum": 0, "exclusiveMaximum": 10 },
+        "rank": { "type": "integer", "minimum": 1, "maximum": 5, "default": 3 },
+        "stepped": { "type": "number", "multipleOf": 1 },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "day": { "type": "string", "format": "date" },
+        "when": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "string", "format": "date" }, { "type": "integer", "format": "unix-time" }] },
+        "maybeDate": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "string", "format": "date" }, { "type": "null" }] },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "kinds": { "type": "array", "items": { "type": "string", "enum": ["a", "b"] } },
+        "links": {
+          "type": "array",
+          "items": { "type": "object", "properties": { "href": { "type": "string" }, "label": { "type": "string" } }, "required": ["href"], "additionalProperties": false }
+        },
+        "hero": { "$ref": "#/definitions/hero" },
+        "related": { "anyOf": [{ "type": "string" }, { "type": "object", "properties": { "id": { "type": "string" }, "collection": { "type": "string" } }, "required": ["id", "collection"] }] },
+        "nullableName": { "type": ["string", "null"] },
+        "anything": {},
+        "meta": { "type": "object", "additionalProperties": { "type": "string" } },
+        "numbers": { "enum": [1, 2] },
+        "flag": { "type": "boolean" },
+        "$schema": { "type": "string" }
+      },
+      "required": ["title", "body", "status", "score", "rank", "publishedAt", "when", "labels", "links", "hero", "related", "nullableName", "flag", "anything"],
+      "additionalProperties": false
+    },
+    "hero": {
+      "type": "object",
+      "properties": { "src": { "type": "string" }, "alt": { "type": "string", "default": "" } },
+      "required": ["src"],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

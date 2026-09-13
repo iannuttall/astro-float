@@ -19,6 +19,8 @@ export interface AstroFloatOptions {
   allowRemote?: boolean;
   /** Maximum image upload size in bytes. Default 15 MB. */
   maxUploadBytes?: number;
+  /** Maximum video upload size in bytes. Default 200 MB. Videos are saved under `public/media/`. */
+  maxVideoBytes?: number;
 }
 
 export default function astroFloat(options?: AstroFloatOptions): AstroIntegration;

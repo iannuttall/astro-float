@@ -1,13 +1,14 @@
 ---
 title: On hairlines
 description: A short note about borders, restraint, and why 1px still matters.
-pubDate: 2026-08-18
+pubDate: 2026-08-17
 tags:
   - design
+  - dev
 draft: false
 ---
 
-Most interface chrome can be replaced by a single 1px line at eight percent opacity. Not because the line is beautiful, but because it is quiet.
+Most interface chrome can be replaced by a single 1px line at eight percent opacity. Not because the line is beautiful, but because it's very quiet.
 
 > Good tools disappear. The best ones leave a faint edge so you know where they were.
 

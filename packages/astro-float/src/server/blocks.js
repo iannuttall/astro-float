@@ -22,7 +22,11 @@ export const ISLAND_TYPES = new Set(["mdxJsxFlowElement", "html"]);
  *
  * @param {string} body
  * @param {{ mdx?: boolean }} [options]
- * @returns {{ lead: string, blocks: Array<{ src: string, trailer: string, type: string, island: boolean }> }}
+ * Each block also carries `text`: the plain text it renders to (no markup,
+ * no images), which lets the client find the rendered body on a page that has
+ * no `data-float-body` attribute.
+ *
+ * @returns {{ lead: string, blocks: Array<{ src: string, trailer: string, type: string, island: boolean, text: string }> }}
  */
 export function splitBlocks(body, { mdx = false } = {}) {
   let tree;
@@ -49,6 +53,7 @@ export function splitBlocks(body, { mdx = false } = {}) {
     blocks.push({
       type: node.type,
       island: isIsland(node),
+      text: plainText(node),
       src: body.slice(start, end).replace(/\s+$/, ""),
       trailer: body.slice(end, trailerEnd).trim(),
     });
@@ -56,6 +61,16 @@ export function splitBlocks(body, { mdx = false } = {}) {
 
   const lead = rendering.length ? body.slice(0, rendering[0].position.start.offset).trim() : body.trim();
   return { lead, blocks };
+}
+
+/** The text a block renders to: text and inline code, minus images, raw HTML and JSX tags. */
+function plainText(node) {
+  if (node.type === "text" || node.type === "inlineCode") return node.value;
+  if (node.type === "code") return node.value;
+  if (node.type === "image" || node.type === "imageReference" || node.type === "html") return "";
+  if (node.type === "break") return " ";
+  if (!Array.isArray(node.children)) return "";
+  return node.children.map(plainText).join("");
 }
 
 function isIsland(node) {
