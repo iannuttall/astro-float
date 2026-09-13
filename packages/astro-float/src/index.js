@@ -22,6 +22,8 @@ export default function astroFloat(options = {}) {
   let root;
   /** @type {string | undefined} */
   let srcDir;
+  /** @type {string | undefined} */
+  let publicDir;
   let isDev = false;
 
   return {
@@ -33,6 +35,7 @@ export default function astroFloat(options = {}) {
 
         root = fileURLToPath(config.root);
         srcDir = fileURLToPath(config.srcDir);
+        publicDir = fileURLToPath(config.publicDir);
 
         addDevToolbarApp({
           id: "astro-float",
@@ -59,6 +62,8 @@ export default function astroFloat(options = {}) {
           collections: options.collections ?? {},
           allowRemote: options.allowRemote ?? false,
           maxUploadBytes: options.maxUploadBytes ?? 15 * 1024 * 1024,
+          maxVideoBytes: options.maxVideoBytes ?? 200 * 1024 * 1024,
+          publicDir,
           gate,
           logger,
         });

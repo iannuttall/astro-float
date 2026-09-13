@@ -32,6 +32,9 @@ export function blockToMarkdown(node: Node, ctx: SerializeContext): string {
   }
   if (!(node instanceof HTMLElement)) return "";
   const el = node;
+  // Islands (components, raw HTML such as a <video> or an embed) never become
+  // Markdown syntax — a tweet's <blockquote> must not turn into `> …`.
+  if (el.hasAttribute("data-float-island")) return rawHtml(el, ctx);
 
   switch (el.tagName) {
     case "H1": case "H2": case "H3": case "H4": case "H5": case "H6": {
@@ -68,6 +71,8 @@ export function blockToMarkdown(node: Node, ctx: SerializeContext): string {
     }
     case "BR":
       return "";
+    case "VIDEO": case "AUDIO": case "IFRAME":
+      return rawHtml(el, ctx);
     default:
       return rawHtml(el);
   }
@@ -303,8 +308,20 @@ function finishInline(md: string): string {
     .replace(/^\s+|\s+$/g, "");
 }
 
-function rawHtml(el: HTMLElement): string {
+/** The element as it was written, minus Float's editing attributes; media `src`s go back to what belongs in the file. */
+function rawHtml(el: HTMLElement, ctx?: SerializeContext): string {
   const clone = el.cloneNode(true) as HTMLElement;
-  clone.removeAttribute("contenteditable");
+  for (const node of [clone, ...Array.from(clone.querySelectorAll("*"))]) {
+    node.removeAttribute("contenteditable");
+    node.removeAttribute("draggable");
+    node.removeAttribute("data-float-island");
+    node.removeAttribute("data-float-key");
+  }
+  if (ctx) {
+    for (const media of [clone, ...Array.from(clone.querySelectorAll("video, audio, source"))]) {
+      const src = media.getAttribute("src");
+      if (src) media.setAttribute("src", ctx.imageSrc(src));
+    }
+  }
   return clone.outerHTML;
 }

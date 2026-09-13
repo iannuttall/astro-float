@@ -1,3 +1,4 @@
+import { altFromName, embedFor, mediaKind, videoHtml } from "./embeds";
 import { blockToMarkdown, type SerializeContext } from "./html-to-md";
 import { icon, type IconName } from "./icons";
 import { SelectionBubble } from "./overlays";
@@ -23,7 +24,7 @@ export interface SaveSnapshot {
 export interface PageEditorHooks {
   /** Any DOM change inside the editable body (already debounced to a microtask). */
   onChange(): void;
-  /** Image files dropped or pasted onto the body; `range` is where they landed. */
+  /** Image / video files dropped or pasted onto the body; `range` is where they landed. */
   onFiles(files: File[], range: Range | null): void;
 }
 
@@ -87,6 +88,8 @@ const PAGE_STYLE = /* css */ `
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
 [data-float-editing] [data-float-island] * { cursor: default; }
+/* An iframe swallows clicks; while editing, a click on an embed must select its island (the wrapper) instead. */
+[data-float-editing] [data-float-island] iframe { pointer-events: none; }
 
 /* Frontmatter fields edited in place (title, description, date, …). */
 [data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
@@ -272,12 +275,16 @@ export class PageEditor {
   private source: BodySource = { lead: "", blocks: [] };
   private snapshot: Array<{ key: string; block: SourceBlock }> = [];
   private baselineHTML = "";
+  /** Block keys at the last clean state; islands count by key, so a widget script redrawing inside one is not an edit. */
+  private baselineKeys = "";
   private absDir = "";
   private attached = false;
   private observer: MutationObserver | null = null;
   private changeQueued = false;
   private dragDepth = 0;
   private keyCounter = 0;
+  /** Raw-HTML islands inserted this session (video, embeds), by key: written back verbatim until the server has them. */
+  private pendingSource = new Map<string, string>();
 
   // islands
   private selected: HTMLElement | null = null;
@@ -313,6 +320,7 @@ export class PageEditor {
       el.removeAttribute("data-astro-source-file");
       el.removeAttribute("data-astro-source-loc");
     }
+    this.pendingSource.clear();
     this.decorateIslands(source);
     this.setBaseline(source);
   }
@@ -331,8 +339,13 @@ export class PageEditor {
     return {
       markdown: this.toMarkdown(),
       html: this.container?.innerHTML ?? "",
-      keys: this.domBlocks().map((n) => keyOf(n)),
+      keys: this.blockKeys(),
     };
+  }
+
+  /** One key per block that writes something: blank paragraphs (the caret's parking spots) emit no Markdown and get no key. */
+  private blockKeys(): string[] {
+    return this.domBlocks().filter((n) => !isBlankParagraph(n)).map((n) => keyOf(n));
   }
 
   /** Make a snapshot the new source of truth (call after the server confirmed it). */
@@ -340,6 +353,7 @@ export class PageEditor {
     if (!this.container) return;
     this.source = source;
     this.baselineHTML = snapshot.html;
+    this.baselineKeys = snapshot.keys.join("\n");
     this.mapped = snapshot.keys.length === source.blocks.length;
     this.snapshot = this.mapped ? snapshot.keys.map((key, i) => ({ key, block: source.blocks[i] })) : [];
   }
@@ -429,14 +443,14 @@ export class PageEditor {
   // ---- state ---------------------------------------------------------------------
 
   isDirty() {
-    return this.container ? this.container.innerHTML !== this.baselineHTML : false;
+    return this.container ? this.blockKeys().join("\n") !== this.baselineKeys : false;
   }
 
   /** Throw away every unsaved edit: the DOM goes back to the last clean baseline. Listeners are delegated, so nothing else to redo. */
   restoreBaseline() {
     if (!this.container) return;
     this.select(null);
-    if (this.container.innerHTML !== this.baselineHTML) this.container.innerHTML = this.baselineHTML;
+    if (this.isDirty()) this.container.innerHTML = this.baselineHTML;
   }
 
   /** Where the live DOM first departs from the clean baseline (for bug reports). */
@@ -567,7 +581,8 @@ export class PageEditor {
         const { block } = this.snapshot[j];
         return block.trailer ? `${block.src}\n\n${block.trailer}` : block.src;
       }
-      return blockToMarkdown(node, ctx);
+      const pending = node instanceof HTMLElement && node.dataset.floatKey ? this.pendingSource.get(node.dataset.floatKey) : undefined;
+      return pending ?? blockToMarkdown(node, ctx);
     });
   }
 
@@ -606,27 +621,55 @@ export class PageEditor {
     return parts.join("\n\n").replace(/\n{3,}/g, "\n\n") + "\n";
   }
 
+  /** Insert an uploaded file where it was dropped: an image as a paragraph, a video as a raw-HTML island. */
+  insertMedia(item: { name: string; src: string; url: string }, at: Range | null = null) {
+    if (mediaKind(item.name) === "video") this.insertHtmlBlock(videoHtml(item.src), at, videoHtml(item.url));
+    else this.insertImage(item.url, altFromName(item.name), at);
+  }
+
   /** Insert an image as its own block after the caret's block (or at the end). */
   insertImage(url: string, alt: string, at: Range | null = null) {
-    const el = this.container;
-    if (!el) return;
     const figure = document.createElement("p");
     const img = document.createElement("img");
     img.src = url;
     img.alt = alt;
     figure.appendChild(img);
+    this.placeBlock(figure, at);
+  }
 
+  /**
+   * Insert one raw-HTML block (a `<video>`, an embed) as an island. `html` is
+   * what gets written to the Markdown, verbatim; the DOM shows `preview`
+   * (defaults to the same markup — a fresh upload previews through `/@fs/`).
+   */
+  insertHtmlBlock(html: string, at: Range | null = null, preview = html) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = preview.trim();
+    const node = tpl.content.firstElementChild;
+    if (!(node instanceof HTMLElement)) return;
+    const key = `island-${++this.keyCounter}-${Date.now().toString(36)}`;
+    node.setAttribute("data-float-island", "");
+    node.dataset.floatKey = key;
+    node.contentEditable = "false";
+    node.draggable = true;
+    this.pendingSource.set(key, html.trim());
+    this.placeBlock(node, at);
+  }
+
+  /** Put a new block after the caret's block (replacing an empty paragraph, else at the end) and park the caret below it. */
+  private placeBlock(block: HTMLElement, at: Range | null) {
+    const el = this.container;
+    if (!el) return;
     const range = at ?? this.selectionRange();
     const anchor = range ? this.topLevelBlock(range.startContainer) : null;
     if (anchor && anchor.parentNode === el) {
-      const isEmptyParagraph = anchor.tagName === "P" && !anchor.textContent?.trim() && !anchor.querySelector("img");
-      if (isEmptyParagraph) anchor.replaceWith(figure);
-      else anchor.after(figure);
+      if (isEmptyBlock(anchor)) anchor.replaceWith(block);
+      else anchor.after(block);
     } else {
-      el.appendChild(figure);
+      el.appendChild(block);
     }
     const after = emptyParagraph();
-    figure.after(after);
+    block.after(after);
     placeCaret(after);
   }
 
@@ -991,7 +1034,7 @@ export class PageEditor {
       e.preventDefault();
       return;
     }
-    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => mediaKind(f.name, f.type) !== null);
     if (files.length) {
       e.preventDefault();
       this.hooks.onFiles(files, this.selectionRange());
@@ -1000,6 +1043,14 @@ export class PageEditor {
     const text = e.clipboardData?.getData("text/plain");
     if (text) {
       e.preventDefault();
+      // A lone URL pasted on an empty line becomes an embed (YouTube, Vimeo, tweet, video file).
+      const range = this.selectionRange();
+      const block = range ? this.topLevelBlock(range.startContainer) : null;
+      const embed = block && isEmptyBlock(block) && /^(P|DIV)$/.test(block.tagName) ? embedFor(text) : null;
+      if (embed) {
+        this.insertHtmlBlock(embed.html, range);
+        return;
+      }
       document.execCommand("insertText", false, text);
     }
   };
@@ -1186,6 +1237,17 @@ function button(name: IconName | null, label: string, onClick: () => void, text?
     onClick();
   });
   return b;
+}
+
+/** A block with nothing in it but the browser's caret placeholder. */
+function isEmptyBlock(block: HTMLElement): boolean {
+  return !block.textContent?.trim() && !block.querySelector("img, video, iframe, audio");
+}
+
+/** `<p><br></p>` and friends: the paragraphs contenteditable makes for the caret, which write no Markdown. */
+function isBlankParagraph(node: Node): boolean {
+  if (!(node instanceof HTMLElement) || !/^(P|DIV)$/.test(node.tagName) || node.dataset.floatKey) return false;
+  return !node.textContent?.trim() && !node.querySelector(":not(br)");
 }
 
 function emptyParagraph(): HTMLParagraphElement {
