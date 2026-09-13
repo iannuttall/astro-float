@@ -562,7 +562,7 @@ class Float {
       container = findBody(this.doc.blocks);
       if (container) markBody(container);
     }
-    this.fields.bind(this.doc.frontmatter, { body: container, schema: this.schema });
+    this.fields.bind(this.doc.frontmatter, { body: container, schema: this.schema, collection: this.doc.collection });
     if (container) {
       this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
       // MDX we can't line up with the source would be written back as HTML — never do that.
