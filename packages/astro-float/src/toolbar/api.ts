@@ -1,3 +1,5 @@
+import type { CollectionSchema } from "./schema";
+
 export const API_BASE = "/__float/api";
 
 export interface EntrySummary {
@@ -92,6 +94,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   collections: () => request<{ collections: Collection[] }>("/collections").then((r) => r.collections),
+
+  /** Field definitions for a collection, derived from its Zod schema (404 until the server learns to). */
+  schema: (collection: string) => request<CollectionSchema>(`/schema?collection=${encodeURIComponent(collection)}`),
 
   entry: (collection: string, id: string) =>
     request<EntryDoc>(`/entry?collection=${encodeURIComponent(collection)}&id=${encodeURIComponent(id)}`),
