@@ -225,7 +225,7 @@ class Float {
       this.fields.unbind();
       unmarkAuto();
       this.loadedFor = null;
-      this.region.hide();
+      this.region.dispose();
       this.releaseFocus();
       detachTooltips(this.canvas);
       detachTooltips(document);

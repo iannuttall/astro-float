@@ -132,6 +132,20 @@ export class RegionControl {
     this.el?.removeAttribute("data-show");
   }
 
+  /**
+   * Edit off: take the element out of the page. Left behind, it would sit
+   * there unstyled once the page stylesheet is gone, and fade out in plain
+   * view when the next Edit on brings the stylesheet back.
+   */
+  dispose() {
+    this.hide();
+    if (!this.el) return;
+    window.removeEventListener("scroll", this.reposition, true);
+    window.removeEventListener("resize", this.reposition);
+    this.el.remove();
+    this.el = null;
+  }
+
   reposition = () => {
     if (!this.el || !this.visible || !this.target) return;
     if (!this.target.isConnected) {
@@ -164,8 +178,13 @@ export class RegionControl {
       window.addEventListener("scroll", this.reposition, true);
       window.addEventListener("resize", this.reposition);
     }
-    // A page swap may have dropped it from the document; put it back.
-    if (!this.el.isConnected) document.body.appendChild(this.el);
+    // A page swap may have dropped it from the document; put it back — hidden, and painted once
+    // that way, so showing it below is a fade-in rather than an instant pop.
+    if (!this.el.isConnected) {
+      this.el.removeAttribute("data-show");
+      document.body.appendChild(this.el);
+      void this.el.offsetWidth;
+    }
     const el = this.el;
     const actions = this.actions!;
     el.textContent = "";
