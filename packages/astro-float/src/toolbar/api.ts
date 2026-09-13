@@ -16,6 +16,32 @@ export interface Collection {
 
 export type Frontmatter = Record<string, unknown>;
 
+/** How the sidebar draws a field. Mirrors `SchemaKind` on the server, plus what value inference can produce. */
+export type FieldKind = "string" | "text" | "boolean" | "number" | "date" | "tags" | "enum" | "json";
+
+/** One property of the collection's Zod schema, as read from Astro's generated JSON Schema. */
+export interface SchemaField {
+  key: string;
+  kind: FieldKind;
+  required: boolean;
+  nullable?: boolean;
+  default?: unknown;
+  /** `z.enum([...])` / literal unions: the allowed values. */
+  values?: Array<string | number>;
+  /** `.describe("...")` */
+  description?: string;
+  /** For `tags`: what the array holds. */
+  items?: "string" | "number";
+}
+
+export interface CollectionSchema {
+  /** `.astro/collections/<name>.schema.json`, relative to the project root. */
+  file: string;
+  fields: SchemaField[];
+  /** `additionalProperties: false` — Zod's default `z.object()` rejects keys it doesn't know. */
+  strict: boolean;
+}
+
 export interface SourceBlock {
   type: string;
   src: string;
@@ -37,6 +63,8 @@ export interface EntryDoc {
   lead: string;
   blocks: SourceBlock[];
   hash: string;
+  /** The collection's schema, or null when Astro hasn't generated one (no `schema:` in content.config.ts, or no sync yet). */
+  schema: CollectionSchema | null;
 }
 
 export interface SaveResult {
