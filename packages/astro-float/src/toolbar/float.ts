@@ -1,4 +1,4 @@
-import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem, type RenderedBlock } from "./api";
+import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
 import { h } from "./dom";
 import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
 import { DatePicker } from "./datepicker";
@@ -11,8 +11,6 @@ import { schemaFor, type CollectionSchema } from "./schema";
 import { STYLES } from "./styles";
 
 type Status = "idle" | "saving" | "refreshing" | "saved" | "warning" | "error" | "conflict";
-
-const PREVIEW_DELAY = 200;
 
 export interface FloatHandle {
   setEditing(on: boolean): Promise<void>;
@@ -64,22 +62,16 @@ class Float {
   private region = new RegionControl();
 
   /**
-   * Source mode: a Markdown textarea is the body's editor. Either in the page
-   * (the corner control's Source view, standing in for the prose) or in the
-   * panel (the Markdown tab, prose visible but read-only). Same draft, same
-   * save either way; they never fight because there is one state.
+   * Source mode: the corner control's Source view — a Markdown textarea
+   * standing in for the prose, right there in the page. Leaving it saves and
+   * swaps in Astro's fresh render.
    */
   private sourceArea: HTMLTextAreaElement | null = null;
-  private sourceInPage = false;
   private sourceDraft = "";
   private sourceBusy = false;
   private sourceError: string | null = null;
   private wiredAreas = new WeakSet<HTMLTextAreaElement>();
   private savePromise: Promise<void> | null = null;
-  /** Live preview while typing source: the body's blocks re-rendered by the server, debounced. */
-  private previewTimer: number | undefined;
-  private previewSeq = 0;
-  private previewShown = false;
   /** The panel follows the site's colour scheme: watch the page for changes while editing. */
   private themeObserver: MutationObserver | null = null;
   private themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
@@ -144,10 +136,6 @@ class Float {
       discard: () => this.discardChanges(),
       navigate: (href, opts) => this.navigate(href, opts),
       notify: (message) => this.setStatus("error", message),
-      openSource: (area) => this.enterSource(area),
-      closeSource: () => this.parkSource(),
-      sourceState: () => ({ active: !!this.sourceArea, busy: this.sourceBusy, error: this.sourceError }),
-      discardSource: () => this.discardSource(),
     });
 
     this.bindViewport();
@@ -197,8 +185,6 @@ class Float {
         editing: this.editing,
         status: this.status,
         sourceMode: !!this.sourceArea,
-        sourceInPage: this.sourceInPage,
-        tab: this.panel.activeTab,
         frontmatterDirty: this.frontmatterDirty(),
         bodyDirty: this.bodyDirty(),
         bodyBound: this.page.bound,
@@ -276,7 +262,7 @@ class Float {
 
   /** The body region: the prose container, or the in-page source textarea standing in for it. */
   private bodyRegion(): HTMLElement | null {
-    if (this.sourceArea && this.sourceInPage) return this.sourceArea;
+    if (this.sourceArea) return this.sourceArea;
     return this.page.bound && !this.bodyReadOnly ? this.page.container : null;
   }
 
@@ -290,8 +276,8 @@ class Float {
   };
 
   private onFocusOut = () => {
-    // In the in-page source view the control is the way back to the rendered page: keep it up.
-    if (this.editing && !(this.sourceArea && this.sourceInPage)) this.region.scheduleHide();
+    // In source view the control is the way back to the rendered page: keep it up.
+    if (this.editing && !this.sourceArea) this.region.scheduleHide();
   };
 
   private onPointerOver = (e: PointerEvent) => {
@@ -299,7 +285,7 @@ class Float {
   };
 
   private onPointerOut = (e: PointerEvent) => {
-    if (this.editing && this.inBody(e.target) && !this.inBody(e.relatedTarget) && !(this.sourceArea && this.sourceInPage)) this.region.scheduleHide();
+    if (this.editing && this.inBody(e.target) && !this.inBody(e.relatedTarget) && !this.sourceArea) this.region.scheduleHide();
   };
 
   private bodyRegionActions() {
@@ -313,34 +299,23 @@ class Float {
     };
   }
 
-  /** Escape hatch when leaving source view can't save: drop the source edits, show the body as it was. */
+  /** Escape hatch when leaving source view can't save: drop the source edits, show the page as it was. */
   private discardSource() {
     if (!this.sourceArea) return;
     this.sourceError = null;
     this.sourceDraft = this.doc?.body ?? "";
-    if (this.sourceInPage) this.exitSourceMode(true);
-    else this.panel.syncSource(this.sourceDraft);
+    this.exitSourceMode(true);
     if (this.status === "error" || this.status === "conflict") this.setStatus("idle");
     else this.renderStatus();
-    this.refreshSourceUi();
-  }
-
-  private refreshSourceUi() {
     this.region.refresh();
-    this.panel.refreshSource();
   }
 
-  // ---- source mode ---------------------------------------------------------------------
+  // ---- source mode (raw Markdown, in the page) -------------------------------------------
 
   /** The corner control's Source / Rendered: swap the prose for a Markdown textarea in the same spot (and back). */
   private async toggleSourceMode() {
     if (this.sourceBusy) return;
     if (this.sourceArea) {
-      // The panel's Markdown tab owns the source right now: leave through it, so the tab follows.
-      if (!this.sourceInPage) {
-        await this.panel.showFields();
-        return;
-      }
       await this.leaveSource();
       return;
     }
@@ -363,7 +338,7 @@ class Float {
     area.setAttribute("aria-label", "Markdown source");
     // Same height as the prose it replaces, so nothing below moves and the page keeps its scroll position.
     area.style.height = `${Math.max(240, rect.height)}px`;
-    this.enterSource(area, true);
+    this.enterSource(area);
     window.scrollTo(0, scrollY);
     area.focus({ preventScroll: true });
     // Open on the block he was looking at, at the height it had on the page.
@@ -385,51 +360,22 @@ class Float {
     this.region.show(area, this.bodyRegionActions());
   }
 
-  /**
-   * Make `area` the body's editor. In the page it stands in for the prose; in
-   * the panel (the Markdown tab) the prose stays visible, read-only, and the
-   * textarea opens on the block the page caret is in. Moving between the two
-   * keeps the draft.
-   */
-  private enterSource(area: HTMLTextAreaElement, inPage = false) {
-    if (!this.doc || this.bodyReadOnly) return;
-    if (this.sourceArea === area) return;
-    if (this.sourceArea) {
-      const draft = this.sourceDraft;
-      this.exitSourceMode(false);
-      this.sourceDraft = draft;
-    } else {
-      this.sourceDraft = this.currentBody();
-    }
+  /** Make `area` the body's editor, standing in for the prose. */
+  private enterSource(area: HTMLTextAreaElement) {
+    if (!this.doc || this.bodyReadOnly || this.sourceArea) return;
+    this.sourceDraft = this.currentBody();
     this.sourceError = null;
     this.wireSourceArea(area);
-    if (area.value !== this.sourceDraft) area.value = this.sourceDraft;
-    const where = inPage ? null : this.caretPlace();
+    area.value = this.sourceDraft;
     this.page.detach();
     const container = this.page.container;
-    if (inPage && container) {
+    if (container) {
       container.style.display = "none";
       container.after(area);
     }
     this.sourceArea = area;
-    this.sourceInPage = inPage;
-    if (where) {
-      area.setSelectionRange(where.offset, where.offset);
-      const lineHeight = parseFloat(getComputedStyle(area).lineHeight) || 20;
-      const line = area.value.slice(0, where.offset).split("\n").length - 1;
-      area.scrollTop = Math.max(0, line * lineHeight - 48);
-    }
     this.region.hide();
     this.renderStatus();
-  }
-
-  /** Where the page caret is (else the first block in view), as an offset into the body's Markdown. */
-  private caretPlace(): { index: number; offset: number } | null {
-    const container = this.page.container;
-    if (!container || !this.page.bound) return null;
-    const sel = document.getSelection();
-    const caretNode = sel && sel.rangeCount > 0 && sel.anchorNode && container.contains(sel.anchorNode) ? sel.anchorNode : null;
-    return this.page.markdownOffsetOf(caretNode ?? firstVisibleBlock(container));
   }
 
   private wireSourceArea(area: HTMLTextAreaElement) {
@@ -439,7 +385,6 @@ class Float {
       if (this.sourceArea !== area) return;
       this.sourceDraft = area.value;
       this.touched();
-      this.schedulePreview();
     });
     area.addEventListener("keyup", (e) => {
       if (e.key === "Escape") e.stopPropagation();
@@ -456,26 +401,25 @@ class Float {
         if (this.sourceArea === area) {
           this.sourceDraft = area.value;
           this.touched();
-          this.schedulePreview();
         }
       }
     });
   }
 
   /**
-   * Leave source mode: a save re-renders the page from what was typed, then
-   * the caret goes back to the block it was in (in the page, at the height it
-   * had on screen). False when the save didn't take.
+   * Leave source view: a save re-renders the page from what was typed, then
+   * the caret goes back to the block it was in, at the height it had on
+   * screen. False when the save didn't take.
    */
   private async leaveSource(): Promise<boolean> {
     if (!this.sourceArea) return true;
     if (this.sourceBusy) return false;
     this.sourceBusy = true;
     this.sourceError = null;
-    this.refreshSourceUi();
+    this.region.refresh();
     try {
       // Remember where he is in the text so the rendered page opens on the same block.
-      const place = this.sourceInPage ? this.sourcePlace(this.sourceArea) : { offset: this.sourceArea.selectionStart, viewportY: undefined };
+      const place = this.sourcePlace(this.sourceArea);
       if (this.savePromise) await this.savePromise; // an autosave already in flight
       if (this.isDirty()) {
         await this.save();
@@ -492,11 +436,11 @@ class Float {
       return true;
     } finally {
       this.sourceBusy = false;
-      this.refreshSourceUi();
+      this.region.refresh();
     }
   }
 
-  /** Caret offset in the in-page source textarea plus the viewport height of its line. */
+  /** Caret offset in the source textarea plus the viewport height of its line. */
   private sourcePlace(area: HTMLTextAreaElement): { offset: number; viewportY: number } | null {
     if (!area.isConnected) return null;
     const offset = area.selectionStart;
@@ -511,101 +455,13 @@ class Float {
   private exitSourceMode(restoreView: boolean) {
     if (!this.sourceArea) return;
     const area = this.sourceArea;
-    const inPage = this.sourceInPage;
     this.sourceArea = null;
-    this.sourceInPage = false;
-    window.clearTimeout(this.previewTimer);
-    this.previewSeq++;
-    if (inPage) area.remove();
+    area.remove();
     if (this.page.container) {
-      if (inPage) this.page.container.style.display = "";
-      // Unsaved preview on the page: back to the last saved render.
-      if (this.previewShown) {
-        this.page.restoreBaseline();
-        this.previewShown = false;
-      }
+      this.page.container.style.display = "";
       if (restoreView && this.editing && !this.bodyReadOnly) this.page.attach();
     }
     this.region.hide();
-  }
-
-  /**
-   * The Markdown tab was left. Nothing is written: with a clean draft the page
-   * simply becomes editable again; with source edits pending the page stays
-   * read-only (the source is the truth) until Save, ⌘S, autosave or Rendered.
-   */
-  private parkSource(): Promise<boolean> {
-    if (this.sourceArea && !this.sourceInPage && !this.bodyDirty()) this.exitSourceMode(true);
-    return Promise.resolve(true);
-  }
-
-  // ---- live preview (typing source) ----------------------------------------------------
-
-  private schedulePreview() {
-    if (!this.sourceArea || this.sourceInPage) return; // the in-page textarea stands in for the prose: nothing to update
-    window.clearTimeout(this.previewTimer);
-    this.previewTimer = window.setTimeout(() => void this.renderPreview(), PREVIEW_DELAY);
-  }
-
-  private async renderPreview() {
-    if (!this.doc || !this.sourceArea || this.sourceInPage || !this.page.container) return;
-    const body = this.sourceDraft;
-    const seq = ++this.previewSeq;
-    let blocks: RenderedBlock[];
-    try {
-      ({ blocks } = await api.render({ collection: this.doc.collection, id: this.doc.id, body }));
-    } catch {
-      return; // no render endpoint, or it failed: the last good DOM stays
-    }
-    if (seq !== this.previewSeq || !this.sourceArea || this.sourceInPage || !this.page.container) return;
-    this.applyPreview(blocks);
-  }
-
-  /**
-   * Swap the body's top-level children for the rendered blocks, in order.
-   * Islands (components, raw HTML) aren't re-rendered: the page's existing
-   * island elements are reused by position, a placeholder stands in for a new one.
-   */
-  private applyPreview(blocks: RenderedBlock[]) {
-    const container = this.page.container;
-    if (!container) return;
-    const islands = Array.from(container.querySelectorAll<HTMLElement>(":scope > [data-float-island]"));
-    let next = 0;
-    const frag = document.createDocumentFragment();
-    const tpl = document.createElement("template");
-    for (const block of blocks) {
-      if (block.island) {
-        const existing = islands[next++];
-        if (existing) frag.appendChild(existing);
-        else {
-          const ph = document.createElement("div");
-          ph.className = "astro-float-island-placeholder";
-          ph.setAttribute("data-float-island", "");
-          ph.textContent = "Component — rendered when you save";
-          frag.appendChild(ph);
-        }
-      } else {
-        tpl.innerHTML = block.html;
-        frag.append(...Array.from(tpl.content.childNodes));
-      }
-    }
-    container.replaceChildren(frag);
-    this.previewShown = true;
-    this.keepCaretBlockInView();
-  }
-
-  /** The page never scrolls away from the block being typed: bring it into view only when it isn't. */
-  private keepCaretBlockInView() {
-    const area = this.sourceArea;
-    const container = this.page.container;
-    if (!area || !container || !this.doc || this.canvas.activeElement !== area) return;
-    const index = Math.min(blockIndexAt(area.selectionStart, this.doc.lead, this.doc.blocks), container.children.length - 1);
-    const block = container.children[index];
-    if (!block) return;
-    const r = block.getBoundingClientRect();
-    const top = 80;
-    const bottom = window.innerHeight - 80;
-    if (r.bottom < top || r.top > bottom) window.scrollBy({ top: r.top - Math.min(160, window.innerHeight / 3), behavior: "auto" });
   }
 
   // ---- theme: follow the site, not (only) the viewer -------------------------------------
@@ -691,7 +547,6 @@ class Float {
   /** Bind the in-place editors to `[data-float-body]` and `[data-float-field]`; attach them if Edit is on. */
   private bindBody() {
     if (!this.doc) return;
-    this.previewShown = false;
     this.fields.bind(this.doc.frontmatter);
     const container = PageEditor.find();
     if (container) {
@@ -892,20 +747,15 @@ class Float {
     if (this.sourceArea) {
       this.sourceDraft = this.doc.body;
       this.sourceError = null;
-      if (this.sourceInPage) this.exitSourceMode(true);
-      else {
-        this.panel.syncSource(this.sourceDraft);
-        if (this.panel.activeTab !== "markdown") this.exitSourceMode(true);
-      }
+      this.exitSourceMode(true);
     }
     this.page.restoreBaseline();
-    this.previewShown = false;
     this.draftBody = this.doc.body;
     this.draftFrontmatter = clone(this.doc.frontmatter);
     for (const key of this.fields.keys()) this.fields.setValue(key, this.draftFrontmatter[key]);
     this.panel.syncAll();
     this.setStatus("idle");
-    this.refreshSourceUi();
+    this.region.refresh();
   }
 
   // ---- saving -----------------------------------------------------------------
@@ -926,7 +776,6 @@ class Float {
     this.setStatus("saving");
     const frontmatter = clone(this.draftFrontmatter);
     const fromSource = !!this.sourceArea;
-    const inPage = this.sourceInPage;
     const snapshot = this.page.bound && !this.bodyReadOnly && !fromSource ? this.page.snapshotForSave() : null;
     const body = snapshot ? snapshot.markdown : this.currentBody();
     // Re-rendering from the server would move the caret; skip it while the
@@ -945,10 +794,7 @@ class Float {
       });
       this.doc = { ...this.doc, frontmatter, body: result.body, lead: result.lead, blocks: result.blocks, hash: result.hash };
       if (snapshot) this.page.commit(snapshot, { lead: result.lead, blocks: result.blocks });
-      if (fromSource && this.sourceDraft === body) {
-        this.sourceDraft = result.body;
-        if (!inPage) this.panel.syncSource(result.body);
-      }
+      if (fromSource && this.sourceDraft === body) this.sourceDraft = result.body;
       // Source-only mode: adopt the server's normalized text unless more was typed meanwhile.
       else if (!snapshot && !this.bodyReadOnly && this.draftBody === body) this.draftBody = result.body;
 
@@ -957,23 +803,21 @@ class Float {
         try {
           const scrollY = window.scrollY;
           await swapPage();
-          if (inPage) this.exitSourceMode(false);
+          this.exitSourceMode(false);
           window.scrollTo(0, scrollY);
           this.bindBody();
         } catch (err) {
           // Saved fine, page didn't re-render: fall back to the DOM we have and say so.
           console.warn("[astro-float] page refresh failed", err);
-          if (inPage) this.exitSourceMode(true);
+          if (fromSource) this.exitSourceMode(true);
           this.setStatus("error", "Saved, but the page didn't refresh — reload to see it");
           this.saving = false;
           return;
         }
         void this.refreshCollections();
-      } else if (fromSource && inPage && !result.changed) {
+      } else if (fromSource && !result.changed) {
         this.exitSourceMode(true);
       }
-      // The panel's Markdown tab was left with unsaved source: now that it's written, the page is editable again.
-      if (fromSource && !inPage && this.sourceArea && this.panel.activeTab !== "markdown") this.exitSourceMode(true);
 
       this.savedAt = Date.now();
       if (result.changed && result.synced === false) {
