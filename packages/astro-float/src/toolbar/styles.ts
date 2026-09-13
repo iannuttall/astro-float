@@ -374,7 +374,6 @@ export const STYLES = /* css */ `
 .row[data-unset] .row-help::after { content: " · not set"; color: var(--fg-faint); }
 .row[data-unset][data-type="boolean"] .switch { opacity: 0.6; }
 .field-add { display: flex; gap: 6px; padding: 12px 14px; }
-.form-foot { margin: 0; padding: 10px 14px; font-size: 11.5px; line-height: 1.5; }
 .form-note { margin: 0; padding: 8px 14px; font-size: 11.5px; line-height: 1.5; color: var(--fg-muted); border-bottom: 1px solid var(--line); word-break: break-all; }
 
 /* ---- code views (YAML / Markdown) ---------------------------------------------- */
