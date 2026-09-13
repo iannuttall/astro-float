@@ -1,6 +1,5 @@
-import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { importFromAstro } from "./astro-deps.js";
 import { splitBlocks } from "./blocks.js";
 
 /**
@@ -30,7 +29,7 @@ export function createBlockRenderer(ctx) {
   let processor = null;
 
   const getProcessor = () => {
-    processor ??= loadMarkdownRemark(ctx.root)
+    processor ??= importFromAstro(ctx.root, "@astrojs/markdown-remark")
       .then((mod) => mod.createMarkdownProcessor(ctx.markdown ?? {}))
       .catch((err) => {
         processor = null;
@@ -79,21 +78,4 @@ function previewImages(html, absDir) {
     const rel = src.replace(/^\.\//, "");
     return `${open}/@fs${encodeURI(path.posix.join(absDir, rel))}${close}`;
   });
-}
-
-/**
- * Import `@astrojs/markdown-remark` from the astro the project uses. Resolution
- * goes root → astro → markdown-remark so pnpm's isolated layout works too.
- */
-async function loadMarkdownRemark(root) {
-  let astroEntry;
-  try {
-    astroEntry = createRequire(path.join(root, "package.json")).resolve("astro");
-  } catch {
-    // The project doesn't list astro directly (unusual): fall back to the copy next to astro-float.
-    astroEntry = import.meta.resolve("astro");
-    if (astroEntry.startsWith("file:")) astroEntry = decodeURIComponent(new URL(astroEntry).pathname);
-  }
-  const file = createRequire(astroEntry).resolve("@astrojs/markdown-remark");
-  return import(pathToFileURL(file).href);
 }
