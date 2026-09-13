@@ -29,6 +29,15 @@ export interface Control {
 const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
 
 export function makeControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
+  const control = buildControl(def, value, ctx);
+  // The label is text next to the control, not a <label>: name the control ourselves, and say when it's required.
+  const target = control.el.matches("input, textarea, select, button, [role=radiogroup]") ? control.el : control.el.querySelector("input, textarea, select, button");
+  if (target && !target.hasAttribute("aria-label")) target.setAttribute("aria-label", def.label);
+  if (target && def.required) target.setAttribute("aria-required", "true");
+  return control;
+}
+
+function buildControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
   switch (def.type) {
     case "boolean":
       return booleanControl(value, ctx);
@@ -590,7 +599,7 @@ export function nestedRow(def: FieldDef, value: unknown, ctx: ControlCtx): { el:
     h(
       "div",
       { class: "row-head" },
-      h("div", { class: "row-text" }, h("span", { class: "row-label", title: def.key }, def.label, def.required ? h("span", { class: "req", title: "Required" }, "*") : null), h("span", { class: "row-help" }, helpFor(def))),
+      h("div", { class: "row-text" }, h("span", { class: "row-label", title: def.key }, h("span", { class: "row-name" }, def.label), def.required ? h("span", { class: "req", title: "Required", "aria-hidden": "true" }, "*") : null), h("span", { class: "row-help" }, helpFor(def))),
       control.inline ? h("div", { class: "row-side" }, control.el) : null,
     ),
     control.inline ? null : control.el,

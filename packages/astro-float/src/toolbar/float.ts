@@ -5,7 +5,6 @@ import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
 import { DatePicker } from "./datepicker";
 import { findBody, markBody, unmarkAuto } from "./autobind";
 import { FieldBindings } from "./fields";
-import { RegionControl } from "./overlays";
 import { detectEntry, swapPage, type DetectedEntry } from "./page";
 import { Panel, type PanelPrefs, type StatusView } from "./panel/panel";
 import { clone, describe, resetViewportZoom } from "./panel/util";
@@ -60,15 +59,12 @@ class Float {
 
   private page: PageEditor;
   private fields: FieldBindings;
-  private region = new RegionControl();
 
   /**
-   * Source mode: a Markdown textarea is the body's editor. Either in the page
-   * (the region control's Source view, standing in for the prose) or in the
-   * panel (the Markdown tab). Same draft, same save either way.
+   * Source mode: the Markdown tab's textarea is the body's editor. The prose
+   * on the page stays visible but read-only and re-renders on save.
    */
   private sourceArea: HTMLTextAreaElement | null = null;
-  private sourceInPage = false;
   private sourceDraft = "";
   private sourceBusy = false;
   private sourceError: string | null = null;
@@ -134,7 +130,7 @@ class Float {
       discard: () => this.discardChanges(),
       navigate: (href, opts) => this.navigate(href, opts),
       notify: (message) => this.setStatus("error", message),
-      openSource: (area) => this.enterSource(area, false),
+      openSource: (area) => this.enterSource(area),
       closeSource: () => this.leaveSource(),
       sourceState: () => ({ active: !!this.sourceArea, busy: this.sourceBusy, error: this.sourceError }),
       discardSource: () => this.discardSource(),
@@ -173,8 +169,6 @@ class Float {
       if (this.editing && this.isDirty() && !this.navigating) e.preventDefault();
     });
     document.addEventListener("click", this.onDocumentClick);
-    document.addEventListener("focusin", this.onFocusIn);
-    document.addEventListener("focusout", this.onFocusOut);
     window.addEventListener("popstate", (e) => {
       if (this.editing || (e.state && (e.state as { astroFloat?: boolean }).astroFloat)) void this.navigate(location.href, { push: false });
     });
@@ -185,7 +179,6 @@ class Float {
         editing: this.editing,
         status: this.status,
         sourceMode: !!this.sourceArea,
-        sourceInPage: this.sourceInPage,
         tab: this.panel.activeTab,
         frontmatterDirty: this.frontmatterDirty(),
         bodyDirty: this.bodyDirty(),
@@ -219,7 +212,6 @@ class Float {
       this.exitSourceMode(false);
       this.page.detach();
       this.fields.detach();
-      this.region.hide();
       this.releaseFocus();
       removePageStyle();
       this.panel.destroy();
@@ -258,118 +250,26 @@ class Float {
     resetViewportZoom();
   }
 
-  // ---- region control (copy / source) ------------------------------------------------
-
-  private onFocusIn = (e: FocusEvent) => {
-    if (!this.editing) return;
-    const target = e.target as HTMLElement | null;
-    if (!target) return;
-    if (this.sourceArea && this.sourceInPage && target === this.sourceArea) {
-      this.region.show(this.sourceArea, this.bodyRegionActions());
-      return;
-    }
-    if (this.page.container && (target === this.page.container || this.page.container.contains(target))) {
-      this.region.show(this.page.container, this.bodyRegionActions());
-      return;
-    }
-    const key = target.dataset?.floatField;
-    if (key && this.fields.element(key) === target) {
-      this.region.show(target, { copy: () => String(this.draftFrontmatter[key] ?? "") });
-    }
-  };
-
-  private onFocusOut = () => {
-    // In the in-page source view the control is the way back to the rendered page: keep it up.
-    if (this.editing && !(this.sourceArea && this.sourceInPage)) this.region.scheduleHide();
-  };
-
-  private bodyRegionActions() {
-    return {
-      copy: () => this.currentBody(),
-      toggleSource: () => void this.toggleSourceMode(),
-      isSource: () => !!this.sourceArea && this.sourceInPage,
-      busy: () => this.sourceBusy,
-      error: () => this.sourceError,
-      discard: () => this.discardSource(),
-    };
-  }
+  // ---- source mode (the panel's Markdown tab) ------------------------------------------
 
   /** Escape hatch when leaving source view can't save: drop the source edits, show the body as it was. */
   private discardSource() {
     if (!this.sourceArea) return;
     this.sourceError = null;
     this.sourceDraft = this.doc?.body ?? "";
-    if (this.sourceInPage) this.exitSourceMode(true);
-    else this.panel.syncSource(this.sourceDraft);
+    this.panel.syncSource(this.sourceDraft);
     if (this.status === "error" || this.status === "conflict") this.setStatus("idle");
     else this.renderStatus();
-    this.refreshSourceUi();
-  }
-
-  private refreshSourceUi() {
-    this.region.refresh();
     this.panel.refreshSource();
   }
 
-  /** Region control's Source / Rendered button: swap the prose for a Markdown textarea in the same spot (and back). */
-  private async toggleSourceMode() {
-    if (this.sourceBusy) return;
-    if (this.sourceArea) {
-      // Remember where he is in the text so the rendered page opens on the same block, at the same height.
-      const place = this.sourceInPage ? this.sourcePlace(this.sourceArea) : null;
-      const left = await this.leaveSource();
-      if (left && place && this.doc && this.page.bound && !this.bodyReadOnly) {
-        this.page.focusBlock(blockIndexAt(place.offset, this.doc.lead, this.doc.blocks), place.viewportY);
-      }
-      return;
-    }
-    const container = this.page.container;
-    if (!container || this.bodyReadOnly) return;
-
-    // Where he is: the caret's block, else the first block visible in the viewport.
-    const sel = document.getSelection();
-    const caretNode = sel && sel.rangeCount > 0 && sel.anchorNode && container.contains(sel.anchorNode) ? sel.anchorNode : null;
-    const anchorNode = caretNode ?? firstVisibleBlock(container);
-    const where = this.page.markdownOffsetOf(anchorNode);
-    const anchorBlock = anchorNode ? (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement) : null;
-    const anchorTop = anchorBlock ? closestTopLevel(anchorBlock, container)?.getBoundingClientRect().top ?? null : null;
-    const scrollY = window.scrollY;
-    const rect = container.getBoundingClientRect();
-
-    const area = document.createElement("textarea");
-    area.className = "astro-float-source";
-    area.spellcheck = false;
-    area.setAttribute("aria-label", "Markdown source");
-    // Same height as the prose it replaces, so nothing below moves and the page keeps its scroll position.
-    area.style.height = `${Math.max(240, rect.height)}px`;
-    this.enterSource(area, true);
-    window.scrollTo(0, scrollY);
-    area.focus({ preventScroll: true });
-    // Open on the block he was looking at, at the height it had on the page.
-    if (where) {
-      area.setSelectionRange(where.offset, where.offset);
-      const cs = getComputedStyle(area);
-      const lineHeight = parseFloat(cs.lineHeight) || 21.6;
-      const padTop = parseFloat(cs.paddingTop) || 0;
-      const line = area.value.slice(0, where.offset).split("\n").length - 1;
-      const areaTop = area.getBoundingClientRect().top;
-      const wantedY = anchorTop ?? areaTop + padTop;
-      area.scrollTop = Math.max(0, padTop + line * lineHeight - (wantedY - areaTop));
-      // The textarea couldn't scroll far enough to line up? Only then nudge the page, and only enough to keep the line in view.
-      const lineY = areaTop + padTop + line * lineHeight - area.scrollTop;
-      if (lineY < 72 || lineY > window.innerHeight - 72) window.scrollBy(0, lineY - Math.min(wantedY, window.innerHeight - 120));
-    } else {
-      window.scrollTo(0, scrollY);
-    }
-    this.region.show(area, this.bodyRegionActions());
-  }
-
   /**
-   * Make `area` the body's editor. In the page it stands in for the prose; in
-   * the panel the prose stays visible (read-only) and re-renders on save.
-   * Moving between the two keeps the draft.
+   * Make `area` (the Markdown tab's textarea) the body's editor. The on-page
+   * editor lets go of the prose, which stays visible and re-renders on save.
+   * The textarea opens on the block the page caret is in (else the first block
+   * in view), so the source picks up where the page left off.
    */
-  private enterSource(area: HTMLTextAreaElement, inPage: boolean) {
+  private enterSource(area: HTMLTextAreaElement) {
     if (!this.doc || this.bodyReadOnly) return;
     if (this.sourceArea === area) return;
     if (this.sourceArea) {
@@ -382,16 +282,25 @@ class Float {
     this.sourceError = null;
     this.wireSourceArea(area);
     if (area.value !== this.sourceDraft) area.value = this.sourceDraft;
+    const where = this.caretPlace();
     this.page.detach();
-    const container = this.page.container;
-    if (inPage && container) {
-      container.style.display = "none";
-      container.after(area);
-    }
     this.sourceArea = area;
-    this.sourceInPage = inPage;
-    this.region.hide();
+    if (where) {
+      area.setSelectionRange(where.offset, where.offset);
+      const lineHeight = parseFloat(getComputedStyle(area).lineHeight) || 20;
+      const line = area.value.slice(0, where.offset).split("\n").length - 1;
+      area.scrollTop = Math.max(0, line * lineHeight - 48);
+    }
     this.renderStatus();
+  }
+
+  /** Where the page caret is (else the first block in view), as an offset into the body's Markdown. */
+  private caretPlace(): { index: number; offset: number } | null {
+    const container = this.page.container;
+    if (!container || !this.page.bound) return null;
+    const sel = document.getSelection();
+    const caretNode = sel && sel.rangeCount > 0 && sel.anchorNode && container.contains(sel.anchorNode) ? sel.anchorNode : null;
+    return this.page.markdownOffsetOf(caretNode ?? firstVisibleBlock(container));
   }
 
   private wireSourceArea(area: HTMLTextAreaElement) {
@@ -422,13 +331,16 @@ class Float {
     });
   }
 
-  /** Leave source mode: a save re-renders the page from what was typed. False when the save didn't take. */
+  /**
+   * Leave source mode: a save re-renders the page from what was typed, then
+   * the caret goes back to the block it was in. False when the save didn't take.
+   */
   private async leaveSource(): Promise<boolean> {
     if (!this.sourceArea) return true;
     if (this.sourceBusy) return false;
     this.sourceBusy = true;
     this.sourceError = null;
-    this.refreshSourceUi();
+    this.panel.refreshSource();
     try {
       if (this.savePromise) await this.savePromise; // an autosave already in flight
       if (this.isDirty()) {
@@ -439,38 +351,22 @@ class Float {
           return false;
         }
       }
-      if (this.sourceArea) this.exitSourceMode(true); // nothing changed, or the save didn't re-render
+      if (this.sourceArea) {
+        const offset = this.sourceArea.selectionStart;
+        this.exitSourceMode(true);
+        if (this.doc && this.page.bound && !this.bodyReadOnly) this.page.focusBlock(blockIndexAt(offset, this.doc.lead, this.doc.blocks));
+      }
       return true;
     } finally {
       this.sourceBusy = false;
-      this.refreshSourceUi();
+      this.panel.refreshSource();
     }
-  }
-
-  /** Caret offset in the source textarea plus the viewport height of its line. */
-  private sourcePlace(area: HTMLTextAreaElement): { offset: number; viewportY: number } | null {
-    if (!area.isConnected) return null;
-    const offset = area.selectionStart;
-    const cs = getComputedStyle(area);
-    const lineHeight = parseFloat(cs.lineHeight) || 21.6;
-    const padTop = parseFloat(cs.paddingTop) || 0;
-    const line = area.value.slice(0, offset).split("\n").length - 1;
-    const y = area.getBoundingClientRect().top + padTop + line * lineHeight - area.scrollTop;
-    return { offset, viewportY: Math.max(72, Math.min(y, window.innerHeight - 72)) };
   }
 
   private exitSourceMode(restoreView: boolean) {
     if (!this.sourceArea) return;
-    const area = this.sourceArea;
-    const inPage = this.sourceInPage;
     this.sourceArea = null;
-    this.sourceInPage = false;
-    if (inPage) area.remove();
-    if (this.page.container) {
-      if (inPage) this.page.container.style.display = "";
-      if (restoreView && this.editing && !this.bodyReadOnly) this.page.attach();
-    }
-    this.region.hide();
+    if (this.page.container && restoreView && this.editing && !this.bodyReadOnly) this.page.attach();
   }
 
   // ---- page lifecycle ---------------------------------------------------------
@@ -482,7 +378,6 @@ class Float {
     this.page.unbind();
     this.fields.unbind();
     unmarkAuto();
-    this.region.hide();
     this.doc = null;
     this.schema = null;
     this.detected = null;
@@ -707,8 +602,7 @@ class Float {
     if (this.sourceArea) {
       this.sourceDraft = this.doc.body;
       this.sourceError = null;
-      if (this.sourceInPage) this.exitSourceMode(true);
-      else this.panel.syncSource(this.sourceDraft);
+      this.panel.syncSource(this.sourceDraft);
     }
     this.page.restoreBaseline();
     this.draftBody = this.doc.body;
@@ -716,7 +610,7 @@ class Float {
     for (const key of this.fields.keys()) this.fields.setValue(key, this.draftFrontmatter[key]);
     this.panel.syncAll();
     this.setStatus("idle");
-    this.refreshSourceUi();
+    this.panel.refreshSource();
   }
 
   // ---- saving -----------------------------------------------------------------
@@ -736,7 +630,6 @@ class Float {
     this.setStatus("saving");
     const frontmatter = clone(this.draftFrontmatter);
     const fromSource = !!this.sourceArea;
-    const inPage = this.sourceInPage;
     const snapshot = this.page.bound && !this.bodyReadOnly && !fromSource ? this.page.snapshotForSave() : null;
     const body = snapshot ? snapshot.markdown : this.currentBody();
     // Re-rendering from the server would move the caret; skip it while the
@@ -757,7 +650,7 @@ class Float {
       if (snapshot) this.page.commit(snapshot, { lead: result.lead, blocks: result.blocks });
       if (fromSource && this.sourceDraft === body) {
         this.sourceDraft = result.body;
-        if (!inPage) this.panel.syncSource(result.body);
+        this.panel.syncSource(result.body);
       }
       // Source-only mode: adopt the server's normalized text unless more was typed meanwhile.
       else if (!snapshot && !this.bodyReadOnly && this.draftBody === body) this.draftBody = result.body;
@@ -767,20 +660,16 @@ class Float {
         try {
           const scrollY = window.scrollY;
           await swapPage();
-          if (inPage) this.exitSourceMode(false);
           window.scrollTo(0, scrollY);
           this.bindBody();
         } catch (err) {
           // Saved fine, page didn't re-render: fall back to the DOM we have and say so.
           console.warn("[astro-float] page refresh failed", err);
-          if (inPage) this.exitSourceMode(true);
           this.setStatus("error", "Saved, but the page didn't refresh — reload to see it");
           this.saving = false;
           return;
         }
         void this.refreshCollections();
-      } else if (fromSource && inPage && !result.changed) {
-        this.exitSourceMode(true);
       }
 
       this.savedAt = Date.now();
@@ -829,7 +718,7 @@ class Float {
       text: "",
       tone: "",
       dot,
-      showSave: dirty && !busy && !this.prefs.autosave && this.status !== "conflict" && this.status !== "error",
+      showSave: dirty && !busy && this.status !== "conflict" && this.status !== "error",
       showDiscard: dirty && !busy,
       actions: [],
     };
@@ -854,8 +743,8 @@ class Float {
         view.text = "Saved";
         break;
       default:
-        if (dirty) view.text = this.prefs.autosave ? "Unsaved · autosave on" : "Unsaved changes";
-        else view.text = this.doc ? (this.savedAt ? `Saved ${formatTime(this.savedAt)}` : "Up to date") : "";
+        if (dirty) view.text = "Unsaved changes";
+        else view.text = this.doc ? (this.savedAt ? `${this.prefs.autosave ? "Autosaved" : "Saved"} ${formatTime(this.savedAt)}` : "Up to date") : "";
     }
     this.panel.renderStatus(view);
   }
@@ -917,12 +806,6 @@ function firstVisibleBlock(container: HTMLElement): Element | null {
     if (child.getBoundingClientRect().bottom > 0) return child;
   }
   return container.firstElementChild;
-}
-
-function closestTopLevel(el: Element, container: HTMLElement): Element | null {
-  let node: Element | null = el;
-  while (node && node.parentElement !== container) node = node.parentElement;
-  return node;
 }
 
 function loadPrefs(): PanelPrefs {

@@ -1,6 +1,6 @@
 # astro-float
 
-A proof-of-concept content editor for Astro content collections that lives **on the page**. Click **Edit** in the Astro Dev Toolbar and the rendered entry becomes editable where it sits — title, description, Markdown body. Anything editable takes a soft grey wash when you hover it; that's the whole visual language. A **sidebar** docks to the right for the few things that aren't on the page: the rest of the frontmatter, the collection, Save. Turn Edit off and both are gone.
+A proof-of-concept content editor for Astro content collections that lives **on the page**. Click **Edit** in the Astro Dev Toolbar and the rendered entry becomes editable where it sits — title, description, Markdown body. Anything editable takes a soft grey wash when you hover it; that's the whole visual language. A **panel** docks to the right for the few things that aren't on the page: the rest of the frontmatter as a form (or as YAML, or the body as Markdown), the collection, Save. Turn Edit off and both are gone.
 
 No `/admin`, no desktop app, no CMS studio, no side textarea, no second always-on bar, no floating toolbar over the prose. Dev-only: the integration adds nothing to production builds.
 
@@ -19,7 +19,7 @@ Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal 
 
 > Local `astro dev` is the only real preview path — the editor writes to your filesystem. A Vercel/Netlify preview would only show the plain blog, since the integration is stripped from builds. Set `allowRemote: true` to preview through a tunnel.
 
-![Edit on: the sidebar on the right, the title and body editable in place](docs/sidebar.png)
+![Edit on: the panel on the right with its Fields view, the title and body editable in place](docs/sidebar.png)
 
 ## On the page
 
@@ -27,55 +27,50 @@ Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal 
 | --- | --- |
 | **Grey = editable** | With Edit on, hovering the title, the description, the body or any other bound field paints a soft grey wash behind it (lighter while your caret is inside). The wash is a pseudo-element painted behind the text and takes part in no layout — nothing moves when it appears. |
 | **Type** | The body under `[data-float-body]` is `contenteditable`. Native caret, native undo, native spellcheck. Links don't navigate while editing (⌘-click does). |
-| **Title, description** | Elements marked `data-float-field="<key>"` whose text is the frontmatter string verbatim are plain-text editable in place — Enter finishes. They also appear in the sidebar, **two-way**: type on the page and the sidebar input follows, edit the sidebar and the page follows. |
-| **Date** | A `data-float-field` element that prints a frontmatter date (`YYYY-MM-DD`, or that with a time suffix) formatted — `<time data-float-field="pubDate">` in the demo — becomes a button: click it (or Enter) and a small **calendar** opens under it. Float finds the Intl format the page used by reproducing the rendered text (or trusts a matching `datetime`), so the pick is re-formatted the same way on the page and written back in the value's original shape (date part swapped, any `T09:30:00Z` kept). The sidebar's date control is the same calendar; both stay in step. Keyboard: arrows, PageUp/Down, Home/End, Enter, Esc. |
+| **Title, description** | Elements marked `data-float-field="<key>"` whose text is the frontmatter string verbatim are plain-text editable in place — Enter finishes. They also appear in the panel, **two-way**: type on the page and the panel input follows, edit the panel and the page follows. |
+| **Date** | A `data-float-field` element that prints a frontmatter date (`YYYY-MM-DD`, or that with a time suffix) formatted — `<time data-float-field="pubDate">` in the demo — becomes a button: click it (or Enter) and a small **calendar** opens under it. Float finds the Intl format the page used by reproducing the rendered text (or trusts a matching `datetime`), so the pick is re-formatted the same way on the page and written back in the value's original shape (date part swapped, any `T09:30:00Z` kept). The panel's date control is the same calendar; both stay in step. Keyboard: arrows, PageUp/Down, Home/End, Enter, Esc. |
 | **Selection bubble** | Double-click or select text and a tiny bubble appears above it: **H1 / H2 / H3** (turn the block into that heading; again to go back to a paragraph — only on plain blocks, not inside lists, quotes or code), then bold, italic, link (inline URL field, Enter applies, Esc cancels). Gone on click-away. ⌘B / ⌘I / ⌘K still work. |
-| **Region control** | While a region has your caret, a small control sits just above its top-right corner (held at the top of the viewport once that corner scrolls off — always flush with the region's right edge, never sliding sideways): **copy** its Markdown, or — for the body — switch to **Source**: the prose is replaced in place by a Markdown textarea of the same height, opened on the block you were looking at, at the height it had. Type there, click **Rendered**: it shows *Saving…*, writes the file, swaps in the fresh render and puts the caret back in the block you were on, where it was on screen. The page never scrolls away from you. If the save fails it says why right there, stays in source, and offers **Discard** to get back to the page as it was. |
 | **Components** | MDX components and raw-HTML blocks are **islands**: no caret goes in, and clicking one shows a small bar — move up / down, drag grip, remove (inline confirm). Their source is written back verbatim wherever they end up. |
 | **Shortcuts** | At the start of an empty line: `# `…`###### `, `- ` / `* `, `1. `, `> `, ``` ``` ```. **Tab / ⇧Tab** nest lists. In a code block Enter is a newline, ⇧Enter leaves it. **Esc** leaves the field (it never turns Edit off — the pencil does). |
 | **Images** | Drop or paste onto the prose. The file is copied **next to the entry**, appears where you dropped it, and is written as `![alt](./photo.png)`. |
 | **Video** | Drop or paste a video file (mp4, webm, mov, m4v) the same way. It is copied to `public/media/<collection>/<id>/` (Astro only processes Markdown *images* from `src/`, so a video has to be served as-is) and written as a raw `<video controls src="/media/…/clip.mp4"></video>` block, which is an island: move it, remove it, no caret. Up to 200 MB (`maxVideoBytes`). |
 | **Embeds** | Paste a YouTube, Vimeo or X/Twitter link on an **empty line** and it becomes an embed island: `<figure class="embed"><iframe …></iframe></figure>` for videos (YouTube keeps a `t=` start time), Twitter's own `blockquote.twitter-tweet` + `widgets.js` for a post. A direct link to a video file becomes a `<video>`. Paste the same link inside a sentence and it stays text. |
-| **Save / Discard** | Top of the sidebar: status text, and **Discard** + **Save** the moment the page differs from disk (they stay put while you type). Discard puts the body, the frontmatter, the on-page fields and the source view back to what's on disk without writing anything. **⌘S / Ctrl+S** anywhere. Optional autosave (800ms after you stop typing). Turning Edit off saves first. |
-| **Live preview** | While your caret is in the text, a save doesn't touch the DOM. Save from the sidebar (caret elsewhere) and Astro re-renders the page in place, no reload. |
-| **Moving around** | While Edit is on, same-origin links, back/forward and Float's own create flows are soft navigations — fetch + swap under the sidebar, pending edits saved first, no "Leave site?". Edit off: links behave exactly as normal. |
+| **Save / Discard** | Top of the panel: status text, and **Discard** + **Save** the moment the page differs from disk (they stay put while you type). Discard puts the body, the frontmatter, the on-page fields and the source view back to what's on disk without writing anything. **⌘S / Ctrl+S** anywhere. Optional **Autosave** (a switch in the header; 800ms after you stop typing). Turning Edit off saves first. |
+| **Live preview** | While your caret is in the text, a save doesn't touch the DOM. Save from the panel (caret elsewhere) and Astro re-renders the page in place, no reload. |
+| **Moving around** | While Edit is on, same-origin links, back/forward and Float's own create flows are soft navigations — fetch + swap under the panel, pending edits saved first, no "Leave site?". Edit off: links behave exactly as normal. |
 
 <p>
-  <img src="docs/region-control.png" width="480" alt="Caret in the body: copy / Source control above the top-right corner of the prose">
   <img src="docs/bubble.png" width="480" alt="A selected word with the bold / italic / link bubble above it">
-</p>
-<p>
-  <img src="docs/source-view.png" width="480" alt="The body switched to its in-page Markdown source">
-  <img src="docs/source-save-failed.png" width="480" alt="Rendered failed to save: the error and a Discard sit in the region control, the source view stays">
 </p>
 <p>
   <img src="docs/float-island.png" width="480" alt="A selected MDX component block with its move / drag / remove bar">
 </p>
 
-## The sidebar
+## The panel
 
-A flush column on the right edge — full height, no card, no gap. Cool neutral grays, one hairline weight, one radius, 12–13px type; the only strong element is Save. It scrolls without ever showing a scrollbar, so opening Settings doesn't change the width of anything. **Drag its left edge** to resize (240px up to the smaller of half the viewport or 520px; the width is remembered in `localStorage`). The sidebar always stacks above the page-side pills — on a narrow window the region control slips *behind* it rather than over it; hide the sidebar to get at it.
+A flush column on the right edge — full height, no card, no gap. Light by default, dark when your system is; cool neutral greys, one hairline weight, one radius, 13px type with 12px help text; the only strong element is Save. Each view scrolls on its own without ever showing a scrollbar, so nothing changes width when a form gets taller. If a page has no editable body, the Fields view says so in one line at the top; the Markdown tab still edits it. **Drag its left edge** to resize (240px up to the smaller of half the viewport or 560px; the width is remembered in `localStorage`).
 
-- **Header** — the entry, status, **Discard** / **Save**, and a **hide** button. Hiding tucks the sidebar away while editing carries on; a small tab at the edge brings it back and carries the status dot / Save in the meantime. Only the pencil turns Edit off.
-- **Fields** — the whole frontmatter as a form, in file order. Fields that are also on the page (title, description, date in the demo) say so and stay in sync both ways. Controls inferred from values: text, long text, number, date (calendar), tags, boolean, JSON. `slug` is shown read-only, never edited. Add / remove fields. Nothing here is a trap: any field that differs from disk gets a **↺** to put it back; a removed field stays listed with **Restore** until you save; an emptied number is never written — the last real value is kept (with a note) until you enter a valid one (a date can't be emptied: the calendar only ever yields a real day).
-- **Collection** — entries in the selected collection (dropdown if several), current one marked; **New entry** asks for a title only and shows the derived path (its frontmatter starts from the collection's schema — defaults and required fields in schema order — topped up from what sibling entries use); **New collection** creates `src/content/<name>/`, registers it in `content.config.ts`, seeds a first entry and opens it.
-- **Settings** — autosave, a cheat-sheet, the file path.
+- **Header** — the entry, status, an **Autosave** switch, **Discard** / **Save**, and a **hide** button. Hiding tucks the panel away while editing carries on; a small tab at the edge brings it back and carries the status dot / Save in the meantime. Only the pencil turns Edit off.
+- **Fields** (the default tab) — one row per frontmatter field: a humanized label (`pubDate` → "Pub date"), a line of help, and the right control for the field's type. Text, long text, number, toggle, date and date-time (the same calendar), a segmented control or a select for enums, tag chips, image (thumbnail, **Upload**, **Choose** from the images next to the entry), a nested group for objects, a list with add / remove / reorder for arrays, a select of that collection's entries for references, JSON for anything else. Types come from the collection's Zod schema when the dev server can read it, otherwise they're inferred from the values. Fields that are also on the page (title, description, date in the demo) say so and stay in sync both ways. `slug` is shown read-only, never edited. Nothing here is a trap: any field that differs from disk gets a **↺** to put it back; with an inferred schema you can add and remove fields, and a removed field stays listed with **Restore** until you save; an emptied number is never written — the last real value is kept (with a note) until you enter a valid one (a date can't be emptied: the calendar only ever yields a real day).
+- **YAML** — the raw frontmatter, monospace with line numbers, long lines wrapped. It's parsed when you leave the text or switch tabs: valid YAML updates the same draft Fields shows; an error shows under the text and as a red dot on the tab, and the last valid frontmatter stays in force until you fix it.
+- **Markdown** — the whole body as source, monospace. It opens on the block your caret was in on the page; the prose stays visible (read-only) and re-renders when you save (⌘S, or autosave). Switching away saves first and puts the caret back in that block; if the save fails the tab stays put with the error and a **Discard**. A small **copy** button at the end of the tab row copies the Markdown.
+- **Footer** — the collection (dropdown if several), the entries behind a toggle with the current one marked, **New entry** (a title is all it asks; the derived path is shown) and **New collection** (creates `src/content/<name>/`, registers it in `content.config.ts`, seeds a first entry and opens it).
 
 <p>
-  <img src="docs/sidebar-hidden.png" width="480" alt="Sidebar hidden: a clean page with a small tab at the right edge, editing still on">
+  <img src="docs/sidebar-hidden.png" width="480" alt="Panel hidden: a clean page with a small tab at the right edge, editing still on">
   <img src="docs/field-revert.png" width="300" alt="Fields: title, description and date mirrored from the page, a changed date with its revert arrow, a removed field with Restore, Discard and Save in the header">
 </p>
 <p>
-  <img src="docs/date-picker.png" width="800" alt="The calendar open under the article's date; the sidebar's date control shows the same value">
+  <img src="docs/date-picker.png" width="800" alt="The calendar open under the article's date; the panel's date control shows the same value">
 </p>
 <p>
-  <img src="docs/date-picker-sidebar.png" width="360" alt="The same calendar opened from the sidebar's date control">
+  <img src="docs/date-picker-sidebar.png" width="360" alt="The same calendar opened from the panel's date control">
 </p>
 
-On phones (<640px) the sidebar is a bottom sheet flush with the bottom edge, sized to the visual viewport so the keyboard shrinks it instead of hiding its buttons; inputs are 16px (no iOS focus-zoom); Cancel on a form keeps the list where it was and snaps back a lingering zoom.
+On phones (<640px) the panel is a bottom sheet flush with the bottom edge, sized to the visual viewport so the keyboard shrinks it instead of hiding its buttons; inputs are 16px (no iOS focus-zoom); Cancel on a form keeps the list where it was and snaps back a lingering zoom.
 
 <p>
-  <img src="docs/mobile/sidebar.webp" width="200" alt="Sidebar as a bottom sheet on a phone">
+  <img src="docs/mobile/sidebar.webp" width="200" alt="The panel as a bottom sheet on a phone">
   <img src="docs/mobile/hidden.webp" width="200" alt="Sheet hidden on a phone, tab above the Astro bar">
   <img src="docs/mobile/editing.webp" width="200" alt="Typing into the body on a phone">
 </p>
@@ -133,11 +128,11 @@ A collection also needs pages. The demo ships generic `src/pages/[collection]/in
 
 ## How it works
 
-- **Dev toolbar app.** `addDevToolbarApp()` registers "Edit" (only when `command === "dev"`). The sidebar renders into the app's canvas, so Astro hides it when the app is off; page-side styles (wash, bubble, region control, island bar) are injected for the edit session and removed after. Edit state persists across reloads in `sessionStorage`; `beforeTogglingOff` saves pending work first. Escape keyups are stopped at the document while editing so Astro's "Escape closes the app" never fires mid-edit.
+- **Dev toolbar app.** `addDevToolbarApp()` registers "Edit" (only when `command === "dev"`). The panel renders into the app's canvas, so Astro hides it when the app is off; page-side styles (wash, bubble, island bar) are injected for the edit session and removed after. Edit state persists across reloads in `sessionStorage`; `beforeTogglingOff` saves pending work first. Escape keyups are stopped at the document while editing so Astro's "Escape closes the app" never fires mid-edit.
 - **Block-level round trip.** The server parses the body with `mdast-util-from-markdown` (+ GFM, + MDX for `.mdx`) and returns each top-level block's exact source slice. The client lines those up with the body's top-level DOM children. On save it aligns the current DOM against that snapshot (LCS on outerHTML): unchanged blocks emit their **original Markdown byte-for-byte**; only edited or new blocks go through the HTML→Markdown serializer.
 - **Islands.** `mdxJsxFlowElement`, raw `html` blocks and inline-JSX-only paragraphs are flagged by the server. On the client they get `contenteditable="false"`, a stable key, and are matched by that key (not by HTML) when serializing, so moving one just moves its source slice. An `.mdx` whose blocks don't line up is body-read-only (frontmatter still saves).
-- **Source view.** The body's rendered container is hidden and a textarea with the current Markdown takes its place. Leaving it (or saving) writes that text and swaps in Astro's fresh render. Saves are serialized, so *Rendered* during an in-flight autosave waits for it rather than dead-clicking; a failed save keeps the source view with the error and a Discard; a saved-but-not-refreshed page falls back to the DOM it had, with a message. The page-side overlays (region control, bubble, island bar) survive the swap — they're dev chrome, not page content.
-- **Icons.** One set: Lucide paths at 1.75 stroke, round caps, 14–15px, in `toolbar/icons.ts`. Sidebar, bubble, region control and island bar all draw from it.
+- **Markdown tab.** The body's source is the same draft the page edits. Opening the tab detaches the on-page editor (the prose stays visible, read-only); a save writes the text and swaps in Astro's fresh render under the panel. Saves are serialized, so switching tabs during an in-flight autosave waits for it rather than dead-clicking; a failed save keeps the tab with the error and a Discard; a saved-but-not-refreshed page falls back to the DOM it had, with a message. The page-side overlays (bubble, island bar) survive the swap — they're dev chrome, not page content.
+- **Icons.** One set: Lucide paths at 1.75 stroke, round caps, 14–15px, in `toolbar/icons.ts`. Panel, bubble and island bar all draw from it.
 - **HTML→Markdown** (`src/toolbar/html-to-md.ts`) covers what remark-rehype + Shiki emit: ATX headings, paragraphs, tight/loose/nested lists, task lists, links + titles, images (Vite `/@fs/…` and Astro `/_image?href=…` URLs mapped back to `./relative`), inline code, fenced code with language, blockquotes, rules, GFM tables with alignment, strong / em / strike, hard breaks. Unknown elements and islands pass through as raw HTML, minus Float's editing attributes.
 - **Media and embeds** (`src/toolbar/embeds.ts`) decides which dropped files are accepted, what each becomes in the Markdown, and which pasted URLs turn into an embed block. A block inserted this way is an island from the first keystroke: its HTML is remembered and written verbatim, so nothing it contains ever goes through the serializer. Dirtiness is judged on block keys, not raw HTML, so a widget script redrawing the inside of an island (Twitter's, a hydrated component's) does not count as an edit.
 - **Schema.** `GET /__float/api/schema?collection=<name>` describes the collection's fields (`src/toolbar/schema.ts`: key, humanized label, type, description, required, default, enum options, nested fields, array item, reference target, min/max). Source `zod`: `astro sync` (run by `astro dev` at start-up and on every config change) writes a JSON Schema per collection to `.astro/collections/<name>.schema.json`; `src/server/schema.js` reads that and maps it — `z.coerce.date()` → date, `z.enum()` → enum, `z.array(z.string())` → tags, nested `z.object()` → object, other arrays → array, `.optional()` / `.default()` / `.describe()` / `.nullable()` / `.min()` / `.max()` carried through. Two helpers don't survive the JSON round trip — `image()` comes out as a plain string and `reference("blog")` loses its target — so the config is also loaded through Vite (`ssrLoadModule`, as Astro does) and the Zod shapes are probed: a stub `image()` marks its fields, and running Astro's `reference()` transform on a probe id answers with the collection name. If the module can't be loaded, a literal source scan for `key: image()` / `key: reference("name")` fills the same gap. Source `inferred`: no schema, types guessed from the entries' values.
@@ -158,7 +153,7 @@ Only blocks you edit are re-serialized, so these only bite inside a paragraph yo
 
 ## Intentionally out of scope for v0
 
-- **Component picker** — browse the project's components and insert one from the sidebar. Islands are the groundwork; the catalog/insert UI is the next pass.
+- **Component picker** — browse the project's components and insert one from the panel. Islands are the groundwork; the catalog/insert UI is the next pass.
 - Schema-driven validation before save (the sidebar flags required/unknown/mismatched fields but never blocks a write — Astro reports the error); the starter schema for new collections is fixed
 - Renaming slugs, deleting entries or collections, git operations
 - JSON/YAML data collections, remote loaders, live-loader / `<ClientRouter />` pages
@@ -176,14 +171,16 @@ packages/astro-float/   the integration (what you'd publish to npm)
   src/server/content.js   frontmatter parse/serialize, collection discovery, entries, uploads
   src/server/sync-gate.js swallow Astro's post-save reload, signal "content synced"
   src/toolbar/app.ts      defineToolbarApp(): the Edit toggle
-  src/toolbar/float.ts    edit-mode lifecycle, the sidebar, source view, soft navigation
+  src/toolbar/float.ts    edit-mode lifecycle, the draft, saving, source mode, soft navigation
+  src/toolbar/panel/      the panel: shell, Fields form + controls, YAML and Markdown views, footer, settings
+  src/toolbar/schema.ts   field definitions (CollectionSchema / FieldDef) and the inferred fallback
   src/toolbar/editor.ts   on-page contenteditable controller, block alignment, islands, page styles
   src/toolbar/schema.ts   the shared FieldDef / CollectionSchema contract (what /schema returns)
   src/toolbar/fields.ts   on-page frontmatter fields (title, description, …)
-  src/toolbar/overlays.ts region control (copy / source) and the selection bubble
+  src/toolbar/overlays.ts the selection bubble
   src/toolbar/html-to-md.ts  HTML → Markdown for edited blocks
   src/toolbar/embeds.ts   accepted media files, their Markdown, and URL → embed blocks
-  src/toolbar/styles.ts   sidebar styles (Astro-toolbar palette); mobile sheet
+  src/toolbar/styles.ts   panel styles (light, dark under prefers-color-scheme); mobile sheet
 demo/                   a minimal Astro 5 blog (+ one .mdx post), a `notes` collection whose schema
                         uses z.enum / z.number / .optional / .describe / image() / reference("blog"), + generic [collection] routes
 docs/                   screenshots (docs/mobile/ for the phone set)

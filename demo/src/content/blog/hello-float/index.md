@@ -16,9 +16,9 @@ What *is* different is the pencil in the Astro dev toolbar at the bottom of the 
 
 1. Click the pencil in the dev toolbar.
 2. Click into this paragraph and change a word. **Save** appears at the top of the sidebar.
-3. Press ⌘S (or Ctrl+S), or click Save. Or turn on autosave in Settings and forget about it.
+3. Press ⌘S (or Ctrl+S), or click Save. Or turn on Autosave in the panel and forget about it.
 
-Select a word for bold, italic or a link. Start a new line and type `## ` for a heading, `- ` for a list, `> ` for a quote, or three backticks for code. Tab nests list items. The small control above a region copies its Markdown, or opens it as Markdown right here on the page.
+Select a word for bold, italic or a link. Start a new line and type `## ` for a heading, `- ` for a list, `> ` for a quote, or three backticks for code. Tab nests list items. The panel's Markdown tab shows the whole post as source.
 
 ## Why not a CMS?
 

@@ -6,14 +6,13 @@ import type { CollectionSchema } from "../schema";
 import { renderCollectionFooter, type FootState } from "./collection";
 import { renderForm } from "./form";
 import { createMarkdownView, type MarkdownView } from "./markdown";
-import { renderSettings } from "./settings";
 import { resetViewportZoom } from "./util";
 import { createYamlView, type YamlView } from "./yaml";
 
 /**
  * The panel: a flush column on the right edge (a bottom sheet on phones).
  *
- *   header   entry · status · Discard / Save · gear · hide
+ *   header   entry · hide · status · Autosave · Discard / Save
  *   tabs     Fields · YAML · Markdown
  *   view     one of the three, scrolling on its own
  *   footer   collection · entries · New entry
@@ -65,7 +64,7 @@ export interface PanelHost {
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
 
-  /** Source mode, shared with the region control's in-page Source view. */
+  /** Source mode: the Markdown tab's textarea edits the body. */
   openSource(area: HTMLTextAreaElement): void;
   closeSource(): Promise<boolean>;
   sourceState(): { active: boolean; busy: boolean; error: string | null };
@@ -96,8 +95,7 @@ export class Panel {
   private footHost: HTMLElement | null = null;
   private yaml: YamlView | null = null;
   private markdown: MarkdownView | null = null;
-  private settingsPop: HTMLElement | null = null;
-  private gear: HTMLButtonElement | null = null;
+  private copyButton: HTMLButtonElement | null = null;
   private foot: FootState = { open: false };
   private syncs = new Map<string, () => void>();
   private switching = false;
@@ -134,14 +132,6 @@ export class Panel {
     window.addEventListener("resize", () => {
       if (this.aside) this.applyWidth();
     });
-    // Click-away closes the settings popover.
-    this.root.addEventListener("pointerdown", (e) => {
-      if (!this.settingsPop || this.settingsPop.hidden) return;
-      const path = e.composedPath();
-      if (path.includes(this.settingsPop) || (this.gear && path.includes(this.gear))) return;
-      this.settingsPop.hidden = true;
-      this.gear?.setAttribute("aria-expanded", "false");
-    });
   }
 
   get activeTab() {
@@ -159,12 +149,24 @@ export class Panel {
     // header
     this.statusText = h("span", { class: "status-text" });
     this.statusActions = h("div", { class: "status-actions" }, this.statusSlot);
-    const gear = h(
+    // Autosave: one quiet switch in the status row. Persisted like the width.
+    const autosave = h(
       "button",
-      { class: "icon-btn gear", type: "button", "aria-label": "Settings", title: "Settings", "aria-expanded": "false", onClick: () => this.toggleSettings(gear) },
-      icon("gear", 15),
-    ) as HTMLButtonElement;
-    this.gear = gear;
+      {
+        class: "toggle autosave",
+        type: "button",
+        role: "switch",
+        "aria-checked": String(host.prefs.autosave),
+        title: "Write to disk shortly after you stop typing",
+        onClick: () => {
+          const next = !host.prefs.autosave;
+          host.setAutosave(next);
+          autosave.setAttribute("aria-checked", String(next));
+        },
+      },
+      h("span", { class: "autosave-label" }, "Autosave"),
+      h("span", { class: "switch switch-sm" }),
+    );
     const hide = h(
       "button",
       { class: "icon-btn", type: "button", "aria-label": "Hide the panel (keep editing)", title: "Hide the panel — editing stays on", onClick: () => this.setHidden(true) },
@@ -176,16 +178,32 @@ export class Panel {
       h(
         "div",
         { class: "head-row" },
-        h("span", { class: "head-entry", title: doc?.file ?? "" }, doc ? h("span", { class: "head-collection" }, `${doc.collection}/`) : null, doc ? doc.id : "No entry on this page"),
-        gear,
+        h("span", { class: "head-entry" }, doc ? h("span", { class: "head-collection" }, `${doc.collection}/`) : null, doc ? doc.id : "No entry on this page"),
         hide,
       ),
-      h("div", { class: "head-status" }, this.statusText, this.statusActions),
+      h("div", { class: "head-status" }, this.statusText, autosave, this.statusActions),
     );
-    this.settingsPop = h("div", { class: "settings-pop", hidden: true });
 
-    // tabs
+    // tabs (+ Copy Markdown at the end of the row, only while the Markdown tab is up)
     this.tabButtons.clear();
+    const copy = h(
+      "button",
+      {
+        class: "icon-btn tab-copy",
+        type: "button",
+        "aria-label": "Copy Markdown",
+        title: "Copy Markdown",
+        hidden: this.tab !== "markdown",
+        onClick: () => {
+          void navigator.clipboard?.writeText(host.body().text).then(() => {
+            replaceChildren(copy, icon("check", 14));
+            window.setTimeout(() => replaceChildren(copy, icon("copy", 14)), 1200);
+          });
+        },
+      },
+      icon("copy", 14),
+    ) as HTMLButtonElement;
+    this.copyButton = copy;
     const tabs = h(
       "div",
       { class: "tabs", role: "tablist" },
@@ -199,6 +217,7 @@ export class Panel {
         this.tabButtons.set(t.id, b);
         return b;
       }),
+      copy,
     );
 
     // views
@@ -224,7 +243,7 @@ export class Panel {
     // footer
     this.footHost = h("div", { class: "foot-host" });
 
-    this.aside = h("aside", { class: "panel", "aria-label": "Content editor" }, head, this.settingsPop, tabs, h("div", { class: "views" }, this.formHost, yamlView, mdView), this.footHost);
+    this.aside = h("aside", { class: "panel", "aria-label": "Content editor" }, head, tabs, h("div", { class: "views" }, this.formHost, yamlView, mdView), this.footHost);
 
     // A quiet tab at the edge brings the panel back; it carries the status dot / Save so nothing is lost while hidden.
     this.edgeTab = h(
@@ -252,10 +271,9 @@ export class Panel {
     this.edgeTab = null;
     this.formHost = null;
     this.footHost = null;
+    this.copyButton = null;
     this.yaml = null;
     this.markdown = null;
-    this.settingsPop = null;
-    this.gear = null;
     this.statusText = null;
     this.statusActions = null;
     this.syncs.clear();
@@ -286,6 +304,7 @@ export class Panel {
       this.tab = next;
       for (const [id, b] of this.tabButtons) b.setAttribute("aria-selected", String(id === next));
       for (const [id, v] of this.views) v.hidden = id !== next;
+      if (this.copyButton) this.copyButton.hidden = next !== "markdown";
       DatePicker.close();
       if (next === "fields" && !initial) this.renderFields();
       if (next === "yaml") this.yaml?.refresh();
@@ -321,6 +340,10 @@ export class Panel {
       );
       return;
     }
+    const body = this.host.body();
+    const note = !body.bound && !body.readOnly
+      ? h("p", { class: "form-note" }, `No editable body found on this page (${doc.file}). Fields save; use the Markdown tab for the body.`)
+      : null;
     const form = renderForm(
       {
         canvas: this.host.canvas,
@@ -337,7 +360,7 @@ export class Panel {
       },
       this.syncs,
     );
-    replaceChildren(this.formHost, form);
+    replaceChildren(this.formHost, note, form);
   }
 
   /** One field changed outside the form (typed on the page, YAML): mirror it. */
@@ -384,24 +407,6 @@ export class Panel {
 
   get markdownArea(): HTMLTextAreaElement | null {
     return this.markdown?.area ?? null;
-  }
-
-  private toggleSettings(gear: HTMLButtonElement) {
-    if (!this.settingsPop) return;
-    const open = this.settingsPop.hidden;
-    if (open) {
-      replaceChildren(
-        this.settingsPop,
-        renderSettings({
-          autosave: () => this.host.prefs.autosave,
-          setAutosave: (on) => this.host.setAutosave(on),
-          doc: () => this.host.doc(),
-          body: () => this.host.body(),
-        }),
-      );
-    }
-    this.settingsPop.hidden = !open;
-    gear.setAttribute("aria-expanded", String(open));
   }
 
   // ---- hide / width -------------------------------------------------------------------------

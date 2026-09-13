@@ -63,28 +63,6 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
 
-/* In-page source view for the body: a textarea in the prose's place, same wash. */
-.astro-float-source {
-  display: block;
-  width: 100%;
-  min-height: 240px;
-  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-  border-radius: 6px;
-  padding: 14px 18px;
-  margin: 0 0 18px;
-  color: inherit;
-  font: 13.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  tab-size: 2;
-  resize: vertical;
-  white-space: pre-wrap;
-  outline: none;
-  caret-color: currentColor;
-  background-color: transparent;
-  transition: background-color 120ms ease;
-}
-.astro-float-source:hover { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
-.astro-float-source:focus { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
-
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
 [data-float-editing] [data-float-island] * { cursor: default; }
@@ -175,11 +153,11 @@ const PAGE_STYLE = /* css */ `
 .astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); }
 .astro-float-dropline { height: 2px; background: #8b93a1; border-radius: 1px; }
 
-/* Region control (copy / source), selection bubble and island bar: one quiet dark pill, one icon set.
- * They stack *below* the sidebar (2000000000): when a narrow window puts the prose's edge under the
- * sidebar, the pill is covered by it, never painted over it. The date picker is the one exception —
- * it's a dialog opened from either side, so it stays on top. */
-.astro-float-region, .astro-float-bubble, .astro-float-bar {
+/* Selection bubble and island bar: one quiet dark pill, one icon set. They stack *below* the panel
+ * (2000000000): when a narrow window puts the prose's edge under the panel, the pill is covered by
+ * it, never painted over it. The date picker is the one exception — it's a dialog opened from either
+ * side, so it stays on top. */
+.astro-float-bubble, .astro-float-bar {
   position: fixed;
   z-index: 1999999999;
   display: flex;
@@ -196,8 +174,8 @@ const PAGE_STYLE = /* css */ `
   box-sizing: border-box;
   -webkit-font-smoothing: antialiased;
 }
-.astro-float-region[hidden], .astro-float-bubble[hidden], .astro-float-bar[hidden] { display: none; }
-.astro-float-region button, .astro-float-bubble button, .astro-float-bar button {
+.astro-float-bubble[hidden], .astro-float-bar[hidden] { display: none; }
+.astro-float-bubble button, .astro-float-bar button {
   all: unset;
   display: inline-flex;
   align-items: center;
@@ -214,13 +192,11 @@ const PAGE_STYLE = /* css */ `
   box-sizing: border-box;
   transition: background 100ms ease, color 100ms ease;
 }
-.astro-float-region button svg, .astro-float-bubble button svg, .astro-float-bar button svg { width: 14px; height: 14px; display: block; }
-.astro-float-region button[data-wide] { padding: 0 8px 0 6px; }
-.astro-float-region button:hover, .astro-float-bubble button:hover, .astro-float-bar button:hover { background: #22262c; color: #e6e8eb; }
-.astro-float-region button:disabled, .astro-float-bar button:disabled { opacity: 0.4; cursor: default; background: none; }
+.astro-float-bubble button svg, .astro-float-bar button svg { width: 14px; height: 14px; display: block; }
+.astro-float-bubble button:hover, .astro-float-bar button:hover { background: #22262c; color: #e6e8eb; }
+.astro-float-bar button:disabled { opacity: 0.4; cursor: default; background: none; }
 .astro-float-bubble button[data-on] { color: #e6e8eb; background: #22262c; }
-.astro-float-region button[data-danger], .astro-float-bar button[data-danger]:hover { color: #ef6f6c; }
-.astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 6px 0 8px; color: #ef6f6c; white-space: nowrap; border-left: 1px solid #2a3038; margin-left: 2px; }
+.astro-float-bar button[data-danger]:hover { color: #ef6f6c; }
 .astro-float-bubble input {
   all: unset;
   width: 220px;
@@ -253,8 +229,8 @@ const PAGE_STYLE = /* css */ `
 .astro-float-bar .astro-float-confirm button[data-danger] { background: #ef6f6c; color: #0f1114; }
 .astro-float-bar .astro-float-confirm button[data-danger]:hover { background: #f58c89; color: #0f1114; }
 @media (pointer: coarse) {
-  .astro-float-region button, .astro-float-bubble button, .astro-float-bar button { height: 36px; min-width: 36px; }
-  .astro-float-region, .astro-float-bubble, .astro-float-bar { padding: 3px; }
+  .astro-float-bubble button, .astro-float-bar button { height: 36px; min-width: 36px; }
+  .astro-float-bubble, .astro-float-bar { padding: 3px; }
   .astro-float-datepicker { width: 300px; }
   .astro-float-dp-grid button { height: 38px; font-size: 14px; }
   .astro-float-dp-head button { width: 34px; height: 34px; }

@@ -2,10 +2,10 @@ import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
 
 /**
- * The Markdown view: the whole body as source. It is the same "source mode"
- * the region control's Source button opens on the page — the same draft, the
- * same save (write, re-render the page, keep going) — only the textarea lives
- * in the panel instead of standing in for the prose.
+ * The Markdown view: the whole body as source. While it's up, the prose on the
+ * page is read-only; a save writes the text and re-renders the page under the
+ * panel. It opens on the block the page caret was in, and puts the caret back
+ * there when you leave.
  */
 export interface MarkdownHost {
   body(): { bound: boolean; readOnly: boolean; text: string };
