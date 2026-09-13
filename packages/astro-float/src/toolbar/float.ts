@@ -84,6 +84,8 @@ class Float {
   private navigating = false;
   private autosaveTimer: number | undefined;
   private savedTimer: number | undefined;
+  /** Watches the panel's root (width, hidden, resizing) to push the document over while it's open. */
+  private panelWatch: MutationObserver | null = null;
 
   constructor(
     private canvas: ShadowRoot,
@@ -211,6 +213,7 @@ class Float {
     this.editing = on;
     if (on) {
       ensurePageStyle();
+      this.watchPanel();
       if (this.loadedFor !== location.href) {
         await this.loadPage(); // renders the panel once it knows the entry
       } else {
@@ -221,12 +224,49 @@ class Float {
       window.clearTimeout(this.autosaveTimer);
       DatePicker.close();
       this.exitSourceMode(false);
-      this.page.detach();
-      this.fields.detach();
+      // Leave the page exactly as it was: no editors, nothing auto-binding put on it.
+      this.page.unbind();
+      this.fields.unbind();
+      unmarkAuto();
+      this.loadedFor = null;
       this.region.hide();
       this.releaseFocus();
       removePageStyle();
       this.panel.destroy();
+      this.unwatchPanel();
+    }
+  }
+
+  /**
+   * Push the document over by the panel's width while the panel is open, so
+   * the article's right edge never sits under it. The panel already puts its
+   * width (`--sb-width`) and its hidden / resizing state on our root; this
+   * mirrors them onto `<html>` for the page stylesheet. Phones keep the sheet.
+   */
+  private watchPanel() {
+    if (this.panelWatch) return;
+    this.panelWatch = new MutationObserver(() => this.syncPagePush());
+    this.panelWatch.observe(this.root, { attributes: true, attributeFilter: ["style", "data-panel-hidden", "data-resizing"], childList: true });
+    this.syncPagePush();
+  }
+
+  private unwatchPanel() {
+    this.panelWatch?.disconnect();
+    this.panelWatch = null;
+    this.syncPagePush();
+  }
+
+  private syncPagePush() {
+    const html = document.documentElement;
+    const width = this.root.style.getPropertyValue("--sb-width").trim();
+    const open = this.editing && this.root.childElementCount > 0 && !!width && !this.root.hasAttribute("data-panel-hidden");
+    if (open) {
+      html.style.setProperty("--float-panel-width", width);
+      html.setAttribute("data-float-panel", this.root.hasAttribute("data-resizing") ? "resizing" : "");
+    } else {
+      html.removeAttribute("data-float-panel");
+      html.style.removeProperty("--float-panel-width");
+      if (!html.getAttribute("style")) html.removeAttribute("style");
     }
   }
 

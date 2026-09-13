@@ -9,8 +9,8 @@ type SourceBlock = ApiBlock & { text?: string };
  *
  * - The body is the element whose direct children line up with the server's
  *   top-level source blocks (tag per block type, text per block). When nothing
- *   lines up 1:1 (footnotes, remark wrappers), it is the smallest wrapper that
- *   contains the first and last text blocks.
+ *   lines up 1:1 (footnotes, remark wrappers), it is the deepest wrapper whose
+ *   text starts with the first block and ends with the last.
  * - A field is the smallest element whose text is the frontmatter value (or a
  *   rendering of a date value), outside the body, site chrome and dev tooling.
  *
@@ -124,20 +124,32 @@ export function findBody(blocks: SourceBlock[]): HTMLElement | null {
   return findBodyLoosely(blocks);
 }
 
-/** No 1:1 match: the smallest wrapper whose text contains the first and last text blocks. */
+/**
+ * No 1:1 match: the deepest wrapper whose text *starts* with the first block's
+ * text and *ends* with the last block's. A wrapper that also holds the title
+ * (or the site footer) fails at one end, so it can't be the body; a wrapper
+ * holding an element bound as a field never is. When the renderer appends
+ * something after the last block (footnotes), no wrapper ends with it: the
+ * deepest one that starts right and still contains it is the fallback. A
+ * first or last block with no text (an image, an island) leaves its end open.
+ */
 function findBodyLoosely(blocks: SourceBlock[]): HTMLElement | null {
-  const texts = blocks.map((b) => compact(b.text ?? "")).filter((t) => t.length >= 8);
-  if (!texts.length) return null;
-  const first = texts[0];
-  const last = texts[texts.length - 1];
-  let best: HTMLElement | null = null;
+  const texts = blocks.map((b) => compact(b.text ?? ""));
+  const anchor = texts.find((t) => t.length >= 8);
+  if (!anchor) return null;
+  const head = texts[0];
+  const tail = texts[texts.length - 1];
+  let strict: HTMLElement | null = null;
+  let loose: HTMLElement | null = null;
   for (const el of walk(document.body)) {
     if (BLOCK_TAGS.has(el.tagName) || el.children.length < blocks.length) continue;
+    if (el.querySelector("[data-float-field]")) continue;
     const text = compact(el.textContent ?? "");
-    if (!text.includes(first) || !text.includes(last)) continue;
-    if (!best || best.contains(el)) best = el;
+    if (!text.startsWith(head) || !text.includes(anchor) || !text.includes(tail)) continue;
+    if (!loose || loose.contains(el)) loose = el;
+    if (text.endsWith(tail) && (!strict || strict.contains(el))) strict = el;
   }
-  return best;
+  return strict ?? loose;
 }
 
 /** Give an auto-detected body the attribute the rest of the editor keys off. */
