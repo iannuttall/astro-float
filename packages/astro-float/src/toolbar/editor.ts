@@ -135,9 +135,6 @@ const PAGE_STYLE = /* css */ `
 
 /* While the panel is open the document moves over by the panel's width so no
  * text sits under it. The phone-width bottom sheet overlaps instead. */
-html[data-float-panel] { margin-right: var(--float-panel-width, 0px); transition: margin-right 150ms ease; }
-html[data-float-panel="resizing"] { transition: none; }
-@media (max-width: 640px) { html[data-float-panel] { margin-right: 0; } }
 
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }

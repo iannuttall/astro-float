@@ -4,7 +4,7 @@ export const STYLES = /* css */ `
 }
 
 /*
- * The panel: light by default, dark when the viewer prefers it. Cool neutral
+ * The pill and its popover: light by default, dark when the site is. Cool neutral
  * greys, one hairline, one radius, 13px system type with 12px help text.
  * Nothing shouts: labels are quiet, controls are quiet until hovered, the only
  * strong element is Save.
@@ -32,7 +32,7 @@ export const STYLES = /* css */ `
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
 
-  /* A viewport-sized, click-through layer; the panel positions itself inside. */
+  /* A viewport-sized, click-through layer; the pill and its popover position themselves inside. */
   position: fixed;
   inset: 0;
   z-index: 2000000000;
@@ -98,140 +98,93 @@ export const STYLES = /* css */ `
 .muted { color: var(--fg-muted); }
 .mono { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0; }
 
-/* ---- the panel: a flush column on the right edge -------------------------- */
-.panel {
+/* ---- the pill: bottom right, above the Astro toolbar's row ------------------ */
+.pill {
   position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: var(--sb-width, 320px);
+  right: 16px;
+  bottom: 56px;
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  pointer-events: auto;
-  background: var(--bg);
-  border-left: 1px solid var(--line);
-  animation: panel-in 160ms ease;
-  transition: transform 200ms cubic-bezier(0.2, 0, 0, 1), opacity 140ms ease;
-}
-@keyframes panel-in { from { opacity: 0; transform: translateX(8px); } }
-.float[data-panel-hidden] .panel { transform: translateX(100%); opacity: 0; pointer-events: none; }
-.float[data-resizing] .panel { transition: none; }
-
-/* Only the left edge drags. Invisible until hovered; a hairline while you hold it. */
-.resize {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  right: calc(var(--sb-width, 320px) - 4px);
-  width: 9px;
-  cursor: col-resize;
-  pointer-events: auto;
-  z-index: 3;
-  touch-action: none;
-}
-.resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 1px; background: transparent; transition: background 120ms ease; }
-.resize:hover::after, .float[data-resizing] .resize::after { background: var(--line-focus); }
-.float[data-panel-hidden] .resize { display: none; }
-
-/* Hidden panel: a small tab flush to the edge brings it back and keeps status / Save in view. */
-.edge-tab {
-  position: absolute;
-  top: 50%;
-  right: 0;
-  transform: translate(100%, -50%);
-  display: flex;
-  flex-direction: column;
   align-items: center;
   gap: 4px;
-  padding: 4px;
+  height: 34px;
+  padding: 0 4px 0 0;
+  max-width: calc(100vw - 32px);
+  pointer-events: auto;
   background: var(--bg);
-  border: 1px solid var(--line);
-  border-right: 0;
-  border-radius: var(--radius) 0 0 var(--radius);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
   box-shadow: var(--shadow);
-  pointer-events: none;
-  opacity: 0;
-  transition: transform 200ms cubic-bezier(0.2, 0, 0, 1) 40ms, opacity 140ms ease 40ms;
+  font-size: 12px;
+  animation: pill-in 160ms ease;
 }
-.float[data-panel-hidden] .edge-tab { transform: translate(0, -50%); opacity: 1; pointer-events: auto; }
-.edge-open { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--radius-sm); color: var(--fg-muted); }
-.edge-open:hover { background: var(--bg-hover); color: var(--fg); }
-.edge-status { display: grid; place-items: center; min-height: 10px; }
-.edge-status .status-slot { min-width: 0; min-height: 0; padding: 2px 0; }
-.edge-status .btn-primary { width: 28px; height: 28px; padding: 0; justify-content: center; border-radius: var(--radius-sm); }
-.edge-status .btn-primary span, .edge-status .btn-discard { display: none; }
-.edge-status .status-dot { margin: 6px 0; }
-
-/* ---- header ---------------------------------------------------------------- */
-.head { display: flex; flex-direction: column; gap: 2px; padding: 10px 8px 8px 14px; border-bottom: 1px solid var(--line); flex: none; }
-.head-row { display: flex; align-items: center; gap: 2px; min-width: 0; height: 26px; }
-.head-entry { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 6px; }
-.head-collection { font-weight: 400; color: var(--fg-muted); }
-.icon-btn { width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--radius-sm); color: var(--fg-muted); }
-.icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
-.icon-btn:disabled { opacity: 0.35; cursor: default; background: none; }
-.icon-btn-danger:hover { color: var(--err); }
-.head-status { display: flex; align-items: center; gap: 8px; min-height: 26px; padding-right: 2px; }
-.status-text { flex: 1; min-width: 0; font-size: 12px; line-height: 1.35; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+@keyframes pill-in { from { opacity: 0; transform: translateY(4px); } }
+.pill-main { display: inline-flex; align-items: center; gap: 8px; height: 32px; min-width: 0; padding: 0 10px 0 12px; border-radius: 7px; color: var(--fg); }
+.pill-main:hover { background: var(--bg-hover); }
+.pill-main[aria-expanded="true"] { background: var(--bg-active); }
+.pill-actions { display: flex; align-items: center; gap: 4px; }
+.pill-actions:empty { display: none; }
+.status-text { min-width: 0; font-size: 12px; line-height: 1.3; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; max-width: 40vw; }
 .status-text[data-tone="err"] { color: var(--err); }
 .status-text[data-tone="warn"] { color: var(--warn); }
-.status-actions { display: flex; align-items: center; gap: 4px; flex: none; }
-.head-tools { display: flex; justify-content: flex-end; align-items: center; min-height: 22px; padding-right: 2px; }
-.status-slot { display: flex; align-items: center; gap: 4px; min-width: 12px; min-height: 12px; justify-content: center; }
-.status-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--line-strong); transition: background 200ms ease; margin-right: 6px; }
+.status-dot { flex: none; width: 7px; height: 7px; border-radius: 999px; background: var(--line-strong); transition: background 200ms ease; }
 .status-dot[data-state="dirty"], .status-dot[data-state="warning"] { background: var(--warn); }
 .status-dot[data-state="saving"] { background: var(--fg-faint); animation: float-pulse 900ms ease-in-out infinite; }
 .status-dot[data-state="saved"] { background: var(--ok); }
 .status-dot[data-state="error"], .status-dot[data-state="conflict"] { background: var(--err); }
 @keyframes float-pulse { 50% { opacity: 0.3; } }
+.icon-btn { width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--radius-sm); color: var(--fg-muted); }
+.icon-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; background: none; }
+.icon-btn-danger:hover { color: var(--err); }
 
-.autosave { flex: none; gap: 6px; height: 22px; padding: 0 4px; margin-right: 0; border-radius: 4px; }
-.autosave:hover { background: var(--bg-hover); }
-.autosave-label { font-size: 12px; color: var(--fg-muted); }
-.autosave[aria-checked="true"] .autosave-label { color: var(--fg); }
-.switch-sm { width: 26px; height: 16px; }
-.switch-sm::after { width: 12px; height: 12px; }
-[aria-checked="true"] > .switch-sm::after { transform: translateX(10px); }
-
-/* ---- tabs ------------------------------------------------------------------ */
-.tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); flex: none; }
-.tab {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 30px;
-  padding: 0 8px;
-  margin-bottom: -1px;
-  border-bottom: 2px solid transparent;
-  font-size: 12.5px;
-  font-weight: 500;
-  color: var(--fg-muted);
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  transition: color 120ms ease, background 120ms ease;
+/* ---- the popover: above the pill, never over its Save ---------------------- */
+.popover {
+  position: absolute;
+  right: 16px;
+  bottom: calc(56px + var(--pill-h, 34px) + 8px);
+  width: min(360px, calc(100vw - 32px));
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  animation: pop-in 120ms ease;
 }
-.tab:hover { color: var(--fg); background: var(--bg-hover); }
-.tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--fg); }
-.tab:disabled { opacity: 0.4; cursor: default; background: none; }
-.tab-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--err); }
-
-/* ---- views ----------------------------------------------------------------- */
-.views { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
-.view {
+@keyframes pop-in { from { opacity: 0; transform: translateY(4px); } }
+.pop-head { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 6px 8px 6px 14px; border-bottom: 1px solid var(--line); flex: none; }
+.pop-entry { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pop-collection { font-weight: 400; color: var(--fg-muted); }
+.pop-toggle { position: relative; height: 24px; padding: 0 8px; border-radius: var(--radius-sm); border: 1px solid var(--line-strong); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--fg-muted); }
+.pop-toggle:hover { background: var(--bg-hover); color: var(--fg); }
+.pop-toggle[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.pop-toggle[data-error]::after { content: ""; position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 999px; background: var(--err); border: 1px solid var(--bg); }
+.pop-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
-  /* Scroll, but never show a bar that would change the content width. */
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
-.view::-webkit-scrollbar { display: none; }
-.view-yaml { display: flex; flex-direction: column; }
+.pop-body::-webkit-scrollbar { display: none; }
+.pop-section { border-bottom: 1px solid var(--line); }
+.pop-section:last-child { border-bottom: 0; }
+.pop-yaml { display: flex; flex-direction: column; min-height: 200px; }
+.pop-settings { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px 6px 14px; }
 .empty { padding: 12px 14px; color: var(--fg-muted); font-size: 12.5px; line-height: 1.55; margin: 0; }
 .empty code { font-family: var(--mono); font-size: 11px; background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
+
+.autosave { flex: none; gap: 8px; height: 28px; padding: 0 6px; border-radius: var(--radius-sm); width: 100%; justify-content: space-between; }
+.autosave:hover { background: var(--bg-hover); }
+.autosave-label { font-size: 12.5px; color: var(--fg); }
+.switch-sm { width: 26px; height: 16px; }
+.switch-sm::after { width: 12px; height: 12px; }
+[aria-checked="true"] > .switch-sm::after { transform: translateX(10px); }
 
 /* ---- controls ------------------------------------------------------------- */
 .btn {
@@ -472,8 +425,7 @@ export const STYLES = /* css */ `
 .code-error-inline { display: inline-flex; align-items: center; gap: 5px; color: var(--err); flex: 1; min-width: 0; }
 
 /* ---- footer: collection / entries ----------------------------------------------- */
-.foot-host { flex: none; }
-.foot { border-top: 1px solid var(--line); background: var(--bg); }
+.foot { background: var(--bg); }
 .foot-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 6px; min-height: 40px; }
 .foot-name { font-weight: 500; font-size: 12.5px; padding: 0 8px; }
 .foot-toggle { display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 8px 0 4px; border-radius: var(--radius-sm); color: var(--fg-muted); font-size: 12px; flex: 1; min-width: 0; }
@@ -505,8 +457,8 @@ export const STYLES = /* css */ `
 
 /* ---- small screens ---------------------------------------------------------
  * The root becomes a box the size of the *visual* viewport (updated from JS as
- * the keyboard opens/closes) and the panel becomes a bottom sheet above the
- * Astro bar. Inputs are 16px so iOS never zooms.
+ * the keyboard opens/closes) so the pill and popover stay above it. Inputs are
+ * 16px so iOS never zooms.
  */
 @media (max-width: 640px) {
   .float {
@@ -516,21 +468,18 @@ export const STYLES = /* css */ `
     width: var(--vv-width, 100vw);
     height: var(--vv-height, 100dvh);
   }
-  .panel { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: min(70%, 560px); padding-bottom: 56px; border-left: 0; border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; animation-name: sheet-up; -webkit-overflow-scrolling: touch; }
-  @keyframes sheet-up { from { opacity: 0; transform: translateY(8px); } }
-  .float[data-panel-hidden] .panel { transform: translateY(100%); }
-  .edge-tab { top: auto; bottom: 64px; transform: translate(100%, 0); }
-  .float[data-panel-hidden] .edge-tab { transform: translate(0, 0); }
-  .resize { display: none; }
+  .pill { right: 12px; bottom: 64px; }
+  .popover { right: 12px; bottom: calc(64px + var(--pill-h, 34px) + 8px); width: calc(100vw - 24px); max-height: 60vh; }
   .input, .textarea, .select, .chips-input, .code { font-size: 16px; }
   .input, .select { min-height: 40px; }
   .select-inline { min-height: 32px; height: 32px; font-size: 14px; }
   .btn { height: 38px; padding: 0 14px; font-size: 14px; }
   .btn-icon { width: 40px; padding: 0; }
   .btn-sm { height: 32px; padding: 0 12px; font-size: 13px; }
+  .pill { height: 40px; }
+  .pill-main { height: 38px; }
+  .pill .btn-sm { height: 30px; }
   .icon-btn { width: 32px; height: 32px; }
-  .head-row { height: 32px; }
-  .tab { height: 36px; font-size: 14px; }
   .list-item { height: 44px; padding: 0 10px; font-size: 15px; }
   .row-label { font-size: 15px; }
   .row-help { font-size: 13px; }

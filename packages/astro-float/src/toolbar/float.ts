@@ -7,7 +7,7 @@ import { findBody, markBody, unmarkAuto } from "./autobind";
 import { FieldBindings } from "./fields";
 import { RegionControl } from "./overlays";
 import { detectEntry, swapPage, type DetectedEntry } from "./page";
-import { Panel, type PanelPrefs, type StatusView } from "./panel/panel";
+import { Pill, type PillPrefs, type StatusView } from "./panel/pill";
 import { clone, describe, resetViewportZoom } from "./panel/util";
 import { schemaFor, type CollectionSchema } from "./schema";
 import { STYLES } from "./styles";
@@ -41,9 +41,9 @@ export function mountFloat(canvas: ShadowRoot, host: FloatHost): FloatHandle {
  */
 class Float {
   private root: HTMLElement;
-  private panel: Panel;
+  private panel: Pill;
 
-  private prefs: PanelPrefs = loadPrefs();
+  private prefs: PillPrefs = loadPrefs();
   private editing = false;
   private loadedFor: string | null = null;
 
@@ -85,8 +85,6 @@ class Float {
   private navigating = false;
   private autosaveTimer: number | undefined;
   private savedTimer: number | undefined;
-  /** Watches the panel's root (width, hidden, resizing) to push the document over while it's open. */
-  private panelWatch: MutationObserver | null = null;
 
   constructor(
     private canvas: ShadowRoot,
@@ -111,10 +109,9 @@ class Float {
       },
     });
 
-    this.panel = new Panel(this.root, {
+    this.panel = new Pill(this.root, {
       canvas,
       prefs: this.prefs,
-      savePrefs: () => this.savePrefs(),
       setAutosave: (on) => {
         this.prefs.autosave = on;
         this.savePrefs();
@@ -209,10 +206,9 @@ class Float {
     this.editing = on;
     if (on) {
       ensurePageStyle();
-      this.watchPanel();
       this.watchTheme();
       if (this.loadedFor !== location.href) {
-        await this.loadPage(); // renders the panel once it knows the entry
+        await this.loadPage(); // renders the pill once it knows the entry
       } else {
         this.attachEditors();
         this.panel.render();
@@ -231,40 +227,6 @@ class Float {
       removePageStyle();
       this.unwatchTheme();
       this.panel.destroy();
-      this.unwatchPanel();
-    }
-  }
-
-  /**
-   * Push the document over by the panel's width while the panel is open, so
-   * the article's right edge never sits under it. The panel already puts its
-   * width (`--sb-width`) and its hidden / resizing state on our root; this
-   * mirrors them onto `<html>` for the page stylesheet. Phones keep the sheet.
-   */
-  private watchPanel() {
-    if (this.panelWatch) return;
-    this.panelWatch = new MutationObserver(() => this.syncPagePush());
-    this.panelWatch.observe(this.root, { attributes: true, attributeFilter: ["style", "data-panel-hidden", "data-resizing"], childList: true });
-    this.syncPagePush();
-  }
-
-  private unwatchPanel() {
-    this.panelWatch?.disconnect();
-    this.panelWatch = null;
-    this.syncPagePush();
-  }
-
-  private syncPagePush() {
-    const html = document.documentElement;
-    const width = this.root.style.getPropertyValue("--sb-width").trim();
-    const open = this.editing && this.root.childElementCount > 0 && !!width && !this.root.hasAttribute("data-panel-hidden");
-    if (open) {
-      html.style.setProperty("--float-panel-width", width);
-      html.setAttribute("data-float-panel", this.root.hasAttribute("data-resizing") ? "resizing" : "");
-    } else {
-      html.removeAttribute("data-float-panel");
-      html.style.removeProperty("--float-panel-width");
-      if (!html.getAttribute("style")) html.removeAttribute("style");
     }
   }
 
@@ -1041,11 +1003,10 @@ function luminance(color: string): number | null {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-function loadPrefs(): PanelPrefs {
+function loadPrefs(): PillPrefs {
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    const width = Number(stored.sidebarWidth);
-    return { autosave: Boolean(stored.autosave), sidebarWidth: Number.isFinite(width) && width > 0 ? width : undefined };
+    return { autosave: Boolean(stored.autosave) };
   } catch {
     return { autosave: false };
   }
