@@ -299,42 +299,59 @@ function enumControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
   const current = value == null ? "" : String(value);
   if (current && !options.includes(current)) options.push(current);
 
-  if (options.length <= 4 && options.every((o) => o.length <= 14)) {
-    // Optional enums get a "none" segment too, so they can be unset without falling back to a select.
-    const choices: Array<{ value: string | undefined; label: string }> = [...(def.required ? [] : [{ value: undefined, label: "—" }]), ...options.map((o) => ({ value: o, label: o }))];
-    const buttons = choices.map((c) =>
-      h(
-        "button",
-        {
-          class: "seg-btn",
-          type: "button",
-          role: "radio",
-          "aria-checked": String((c.value ?? "") === current),
-          "aria-label": c.value === undefined ? "None" : undefined,
-          title: c.value === undefined ? "None" : undefined,
-          "data-value": c.value ?? "",
-          "data-none": c.value === undefined ? "" : null,
-          onClick: () => {
-            paint(c.value);
-            ctx.onChange(c.value);
-          },
-        },
-        c.label,
-      ),
-    );
-    const paint = (v: unknown) => {
-      const want = v == null ? "" : String(v);
-      for (const b of buttons) b.setAttribute("aria-checked", String((b.dataset.value ?? "") === want));
-    };
-    return { el: h("div", { class: "segmented", role: "radiogroup" }, buttons), inline: false, set: paint };
-  }
-
   const select = selectControl(
     [...(def.required ? [] : [{ value: "", label: "—" }]), ...options.map((o) => ({ value: o, label: o }))],
     current,
     (v) => ctx.onChange(v === "" ? undefined : v),
   );
-  return select;
+  if (options.length > 4) return select;
+
+  // Up to four options: a segmented control — but only while every label fits without truncating
+  // at the panel's current width; otherwise the select (which has the "—" none option too).
+  const choices: Array<{ value: string | undefined; label: string }> = [...(def.required ? [] : [{ value: undefined, label: "—" }]), ...options.map((o) => ({ value: o, label: o }))];
+  const buttons = choices.map((c) =>
+    h(
+      "button",
+      {
+        class: "seg-btn",
+        type: "button",
+        role: "radio",
+        "aria-checked": String((c.value ?? "") === current),
+        "aria-label": c.value === undefined ? "None" : undefined,
+        title: c.value === undefined ? "None" : undefined,
+        "data-value": c.value ?? "",
+        "data-none": c.value === undefined ? "" : null,
+        onClick: () => {
+          paint(c.value);
+          ctx.onChange(c.value);
+        },
+      },
+      c.label,
+    ),
+  );
+  const paint = (v: unknown) => {
+    const want = v == null ? "" : String(v);
+    for (const b of buttons) b.setAttribute("aria-checked", String((b.dataset.value ?? "") === want));
+    select.set(v);
+  };
+  const segmented = h("div", { class: "segmented", role: "radiogroup" }, buttons);
+  const wrap = h("div", { class: "enum" }, segmented);
+
+  // Segments share the row equally, so the widest label decides: it must fit in its share
+  // (room minus the frame and gaps, divided by the number of segments) with the button padding.
+  const layout = () => {
+    const room = wrap.clientWidth;
+    if (!room) return; // not laid out yet; the observer calls again
+    const font = getComputedStyle(buttons[0]).font || "500 12px system-ui";
+    const widest = Math.max(...choices.map((c) => textWidth(c.label, font)));
+    const share = (room - 6 - (choices.length - 1) * 2) / choices.length;
+    const want = widest + 20 <= share ? segmented : select.el;
+    if (wrap.firstElementChild !== want) replaceChildren(wrap, want);
+  };
+  new ResizeObserver(layout).observe(wrap);
+  queueMicrotask(layout);
+
+  return { el: wrap, inline: false, set: paint };
 }
 
 function referenceControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
@@ -613,6 +630,15 @@ function arrayControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
       paint();
     },
   };
+}
+
+let measurer: CanvasRenderingContext2D | null = null;
+/** Width of a label in the given CSS font, for deciding whether it fits without truncating. */
+function textWidth(text: string, font: string): number {
+  measurer ??= document.createElement("canvas").getContext("2d");
+  if (!measurer) return text.length * 8;
+  measurer.font = font;
+  return measurer.measureText(text).width;
 }
 
 /** A label + help + control row for a nested field (no revert / remove / on-page: those belong to the top level). */
