@@ -69,6 +69,12 @@ Esc or a click anywhere else closes it, and the caret goes back where it was on 
 
 ## Using it in your own Astro project
 
+Supported Astro versions: **5, 6 and 7** (`astro: ">=5.0.0 <8.0.0"`). Each release is checked against the latest patch of each major — 5.18, 6.4 and 7.3 at the time of writing — in the same headless-Chrome run: toolbar app, entry + schema, save round trip and reload swallow, live Markdown preview, embeds, and the `image()` / `reference()` schema hints. The differences between majors are handled by feature detection, never by version sniffing:
+
+- **Markdown preview** uses `config.markdown.processor` when Astro has one (6+, so Sätteri on 7 works without `@astrojs/markdown-remark` installed) and falls back to `@astrojs/markdown-remark` from the project's own astro on 5.
+- **Schema hints** walk both zod 3 (Astro 5) and zod 4 (Astro 6+) shapes, and load `content.config.ts` through Vite's SSR module runner when there is one, else `ssrLoadModule`.
+- **Reload swallow** wraps whichever hot channel Astro sends `full-reload` on (`server.ws` on 5, the client environment's channel on 6+) and watches the logger's destination even if Astro swaps it later (7 tees logs to `.astro/dev.log`).
+
 ```js
 // astro.config.mjs
 import { defineConfig } from "astro/config";
@@ -184,5 +190,5 @@ docs/                   screenshots
 - Astro prints `[glob-loader] Duplicate id … found` after every content save. That's Astro's own watcher log for changed files, not a Float bug.
 - Astro's audit app strips `data-astro-source-*` attributes shortly after load; Float strips them first so component-rendered blocks don't look edited.
 - If you delete an image that a post referenced, Astro's `.astro/` asset cache can 500 the page until you restart `astro dev`.
-- Tested against Astro 5.18 / Vite 6 / Chrome (desktop + iPhone emulation). Real iOS Safari's `contenteditable`, selection and keyboard behaviour are untested here; HTML5 drag of islands doesn't exist on touch (use ▲/▼); the selection bubble relies on `selectionchange`, which mobile long-press selection also fires.
+- Tested against Astro 5.18 / Vite 6, Astro 6.4 / Vite 7 and Astro 7.3 / Vite 8 with Chrome (desktop + iPhone emulation). Real iOS Safari's `contenteditable`, selection and keyboard behaviour are untested here; HTML5 drag of islands doesn't exist on touch (use ▲/▼); the selection bubble relies on `selectionchange`, which mobile long-press selection also fires.
 - Prefs (autosave) live in `localStorage` under `astro-float:prefs`.

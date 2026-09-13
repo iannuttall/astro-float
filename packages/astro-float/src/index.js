@@ -31,9 +31,17 @@ export default function astroFloat(options = {}) {
   return {
     name: "astro-float",
     hooks: {
-      "astro:config:setup": ({ command, config, addDevToolbarApp, logger }) => {
+      "astro:config:setup": ({ command, config, addDevToolbarApp, updateConfig, logger }) => {
         isDev = command === "dev";
         if (!isDev) return;
+
+        // The toolbar app imports `yaml` in the browser. Vite only pre-bundles
+        // what it finds by scanning the project, and the toolbar entry lives in
+        // this package, so it would discover `yaml` on the first page load,
+        // re-optimize and force a reload — which leaves the dev toolbar's own
+        // entry answering 504 "Outdated Optimize Dep" until the next manual
+        // reload (Astro 6 and 7). Declaring it up front avoids the round trip.
+        updateConfig({ vite: { optimizeDeps: { include: ["astro-float > yaml"] } } });
 
         root = fileURLToPath(config.root);
         srcDir = fileURLToPath(config.srcDir);

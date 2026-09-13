@@ -270,7 +270,7 @@ async function probeConfig(ctx, collectionName) {
   if (!configFile) return null;
   let mod;
   try {
-    mod = await server.ssrLoadModule("/" + path.relative(ctx.root, configFile).split(path.sep).join("/"));
+    mod = await loadServerModule(server, "/" + path.relative(ctx.root, configFile).split(path.sep).join("/"));
   } catch (err) {
     ctx.logger?.warn(`couldn't load ${path.basename(configFile)} to look for image()/reference() (${err?.message ?? err}); scanning the source instead`);
     return null;
@@ -287,6 +287,21 @@ async function probeConfig(ctx, collectionName) {
   const hints = new Map();
   if (schema && typeof schema === "object") walkZod(schema, "", hints);
   return hints;
+}
+
+/**
+ * Import a project module through the dev server the way Astro does on that
+ * version: the SSR environment's module runner (Astro 6+ / Vite 6+), else
+ * `ssrLoadModule` (Astro 5 / Vite 5, and still present in later Vites).
+ *
+ * @param {any} server
+ * @param {string} url
+ */
+function loadServerModule(server, url) {
+  const runner = server.environments?.ssr?.runner;
+  if (runner && typeof runner.import === "function") return runner.import(url);
+  if (typeof server.ssrLoadModule === "function") return server.ssrLoadModule(url);
+  return Promise.reject(new Error("this Vite server has neither an SSR module runner nor ssrLoadModule"));
 }
 
 /**
@@ -307,6 +322,24 @@ function chainable(node, marker) {
   return node;
 }
 
+/**
+ * One view over the two Zod generations Astro ships: zod 3 (Astro 5) keeps
+ * `_def.typeName` ("ZodOptional", …); zod 4 (Astro 6+) keeps `_zod.def.type`
+ * ("optional", …) with different child keys. Float's own `imageStub()` nodes
+ * use the zod 3 shape. Returns null for anything that isn't a Zod schema.
+ *
+ * @param {any} schema
+ * @returns {{ type: string, def: any, v4: boolean } | null}
+ */
+function zodNode(schema) {
+  if (!schema || typeof schema !== "object") return null;
+  const d4 = schema._zod?.def;
+  if (d4 && typeof d4.type === "string") return { type: d4.type, def: d4, v4: true };
+  const d3 = schema._def;
+  if (d3 && typeof d3.typeName === "string") return { type: d3.typeName, def: d3, v4: false };
+  return null;
+}
+
 /** Walk a Zod schema, recording image and reference fields by path. */
 function walkZod(schema, prefix, hints, depth = 0) {
   if (!schema || typeof schema !== "object" || depth > 6) return;
@@ -316,20 +349,29 @@ function walkZod(schema, prefix, hints, depth = 0) {
     if (prefix) hints.set(prefix, { image: true });
     return;
   }
-  const typeName = inner._def?.typeName;
-  if (typeName === "ZodObject") {
-    const shape = typeof inner._def.shape === "function" ? inner._def.shape() : inner._def.shape;
+  const node = zodNode(inner);
+  if (!node) return;
+  if (node.type === "ZodObject" || node.type === "object") {
+    const shape = typeof node.def.shape === "function" ? node.def.shape() : node.def.shape;
     for (const [key, child] of Object.entries(shape ?? {})) walkZod(child, prefix ? `${prefix}.${key}` : key, hints, depth + 1);
     return;
   }
-  if (typeName === "ZodArray") {
-    walkZod(inner._def.type, `${prefix}[]`, hints, depth + 1);
+  if (node.type === "ZodArray" || node.type === "array") {
+    walkZod(node.v4 ? node.def.element : node.def.type, `${prefix}[]`, hints, depth + 1);
     return;
   }
-  if (typeName === "ZodEffects" && inner._def.effect?.type === "transform" && inner._def.schema?._def?.typeName === "ZodUnion") {
+  if (isReferenceTransform(node)) {
     const target = probeReference(inner);
     if (target && prefix) hints.set(prefix, { reference: target });
   }
+}
+
+/** Astro's `reference()`: a transform over a union — zod 3 `ZodEffects`, zod 4 a `pipe` into a `transform`. */
+function isReferenceTransform(node) {
+  if (node.v4) {
+    return node.type === "pipe" && zodNode(node.def.in)?.type === "union" && zodNode(node.def.out)?.type === "transform";
+  }
+  return node.type === "ZodEffects" && node.def.effect?.type === "transform" && zodNode(node.def.schema)?.type === "ZodUnion";
 }
 
 /**
@@ -339,9 +381,30 @@ function walkZod(schema, prefix, hints, depth = 0) {
 function unwrapZod(schema, depth = 0) {
   if (!schema || typeof schema !== "object" || depth > 12) return schema;
   if (schema._floatImage) return schema;
-  const def = schema._def;
-  if (!def) return schema;
-  switch (def.typeName) {
+  const node = zodNode(schema);
+  if (!node) return schema;
+  const { type, def } = node;
+  if (node.v4) {
+    switch (type) {
+      case "optional":
+      case "nullable":
+      case "default":
+      case "prefault":
+      case "catch":
+      case "readonly":
+      case "nonoptional":
+        return unwrapZod(def.innerType, depth + 1);
+      case "lazy":
+        return typeof def.getter === "function" ? unwrapZod(def.getter(), depth + 1) : schema;
+      case "pipe":
+        // `.transform()` is a pipe into a transform: stop there (that's what reference() is).
+        if (zodNode(def.out)?.type === "transform") return schema;
+        return unwrapZod(def.in, depth + 1);
+      default:
+        return schema;
+    }
+  }
+  switch (type) {
     case "ZodOptional":
     case "ZodNullable":
     case "ZodDefault":
@@ -349,6 +412,8 @@ function unwrapZod(schema, depth = 0) {
     case "ZodBranded":
     case "ZodReadonly":
       return unwrapZod(def.innerType, depth + 1);
+    case "ZodLazy":
+      return typeof def.getter === "function" ? unwrapZod(def.getter(), depth + 1) : schema;
     case "ZodPipeline":
       return unwrapZod(def.in, depth + 1);
     case "ZodEffects":

@@ -25,7 +25,7 @@
     "content-collections"
   ],
   "peerDependencies": {
-    "astro": "^5.0.0"
+    "astro": ">=5.0.0 <8.0.0"
   },
   "dependencies": {
     "mdast-util-from-markdown": "^2.0.3",

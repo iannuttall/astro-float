@@ -33,7 +33,7 @@ importers:
   packages/astro-float:
     dependencies:
       astro:
-        specifier: ^5.0.0
+        specifier: '>=5.0.0 <8.0.0'
         version: 5.18.2(rollup@4.63.1)(typescript@7.0.2)(yaml@2.9.0)
       mdast-util-from-markdown:
         specifier: ^2.0.3
