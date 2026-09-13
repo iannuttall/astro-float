@@ -15,7 +15,7 @@ import path from "node:path";
  * up on the next load. When it doesn't exist the sidebar falls back to
  * inferring controls from the frontmatter values, as it always has.
  *
- * @typedef {"string" | "text" | "number" | "boolean" | "date" | "tags" | "enum" | "json"} SchemaKind
+ * @typedef {"string" | "text" | "number" | "boolean" | "date" | "tags" | "enum" | "reference" | "json"} SchemaKind
  * @typedef {{
  *   key: string,
  *   kind: SchemaKind,
@@ -25,12 +25,26 @@ import path from "node:path";
  *   values?: Array<string | number>,
  *   description?: string,
  *   items?: "string" | "number",
+ *   collection?: string,
+ *   integer?: boolean,
+ *   min?: number,
+ *   max?: number,
  * }} SchemaField
  * @typedef {{ file: string, fields: SchemaField[], strict: boolean }} CollectionSchema
  */
 
 /** Keys Astro adds to the JSON Schema for editor tooling; not frontmatter. */
 const SYNTHETIC_KEYS = new Set(["$schema"]);
+
+/** Where Astro looks for the content config, in order. */
+export const CONFIG_CANDIDATES = [
+  "src/content.config.ts",
+  "src/content.config.mts",
+  "src/content.config.js",
+  "src/content.config.mjs",
+  "src/content/config.ts",
+  "src/content/config.js",
+];
 
 /**
  * @param {{ root: string }} ctx
@@ -54,7 +68,39 @@ export async function readCollectionSchema(ctx, collectionName) {
   }
   const parsed = schemaFromJson(doc);
   if (!parsed) return null;
+  // `reference("blog")` reaches the JSON Schema as "a string or an { id, collection } object" — the
+  // collection name doesn't survive. The one thing we do read out of content.config.ts is that name.
+  if (parsed.fields.some((f) => f.kind === "reference")) {
+    const config = await readContentConfig(ctx.root);
+    for (const field of parsed.fields) {
+      if (field.kind !== "reference") continue;
+      const target = config && referenceTarget(config, field.key);
+      if (target) field.collection = target;
+    }
+  }
   return { file: path.relative(ctx.root, file).split(path.sep).join("/"), ...parsed };
+}
+
+async function readContentConfig(root) {
+  for (const candidate of CONFIG_CANDIDATES) {
+    try {
+      return await fs.readFile(path.join(root, candidate), "utf8");
+    } catch {
+      /* next */
+    }
+  }
+  return null;
+}
+
+/** `about: reference("blog")` → "blog". Exported for tests. */
+export function referenceTarget(configText, key) {
+  const re = new RegExp(`(?:^|[\\s{,])${escapeRegExp(key)}\\s*:\\s*reference\\(\\s*["'\`]([^"'\`]+)["'\`]\\s*\\)`);
+  const m = configText.match(re);
+  return m ? m[1] : null;
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
@@ -91,13 +137,16 @@ function describeField(doc, key, node, required) {
   const resolved = resolveRef(doc, node);
   if (!resolved || typeof resolved !== "object") return null;
 
-  const { kind, nullable, values, items } = kindOf(doc, resolved);
+  const { kind, nullable, values, items, integer, min, max } = kindOf(doc, resolved);
   /** @type {SchemaField} */
   const field = { key, kind, required };
   if (nullable) field.nullable = true;
   if ("default" in resolved) field.default = resolved.default;
   if (values) field.values = values;
   if (items) field.items = items;
+  if (integer) field.integer = true;
+  if (typeof min === "number") field.min = min;
+  if (typeof max === "number") field.max = max;
   if (typeof resolved.description === "string" && resolved.description.trim()) field.description = resolved.description.trim();
   return field;
 }
@@ -107,7 +156,7 @@ function describeField(doc, key, node, required) {
  *
  * @param {any} doc
  * @param {any} node
- * @returns {{ kind: SchemaKind, nullable?: boolean, values?: Array<string | number>, items?: "string" | "number" }}
+ * @returns {{ kind: SchemaKind, nullable?: boolean, values?: Array<string | number>, items?: "string" | "number", integer?: boolean, min?: number, max?: number }}
  */
 function kindOf(doc, node) {
   node = resolveRef(doc, node) ?? node;
@@ -121,6 +170,8 @@ function kindOf(doc, node) {
     if (!real.length) return { kind: "json", nullable };
     // z.coerce.date() / z.date(): Astro emits { date-time | date | unix-time }.
     if (real.some((b) => b.type === "string" && (b.format === "date-time" || b.format === "date"))) return { kind: "date", nullable };
+    // reference("blog"): a string id, or { id | slug, collection }.
+    if (isReferenceShape(real)) return { kind: "reference", nullable };
     if (real.length === 1) return { ...kindOf(doc, real[0]), nullable };
     // A union of literals is an enum.
     const literals = real.every((b) => Array.isArray(b.enum) || "const" in b);
@@ -147,7 +198,7 @@ function kindOf(doc, node) {
       return { kind: "string", nullable };
     case "number":
     case "integer":
-      return { kind: "number", nullable };
+      return { kind: "number", nullable, integer: type === "integer", min: node.minimum, max: node.maximum };
     case "boolean":
       return { kind: "boolean", nullable };
     case "array": {
@@ -161,6 +212,17 @@ function kindOf(doc, node) {
     default:
       return { kind: "json", nullable };
   }
+}
+
+/** Astro's `reference()`: `anyOf [ string, { id, collection }, { slug, collection } ]`. */
+function isReferenceShape(branches) {
+  if (!branches.some((b) => b.type === "string" && !b.format && !b.enum)) return false;
+  const objects = branches.filter((b) => b.type === "object");
+  if (!objects.length) return false;
+  return objects.every((b) => {
+    const props = b.properties && typeof b.properties === "object" ? Object.keys(b.properties) : [];
+    return props.includes("collection") && (props.includes("id") || props.includes("slug"));
+  });
 }
 
 /** Follow a local `$ref` (`#/definitions/blog`). Returns the node itself when it isn't a ref. */
@@ -209,6 +271,9 @@ export function templateFromSchema(schema) {
         break;
       case "enum":
         template[field.key] = field.values?.[0] ?? "";
+        break;
+      case "reference":
+        template[field.key] = "";
         break;
       case "json":
         template[field.key] = {};

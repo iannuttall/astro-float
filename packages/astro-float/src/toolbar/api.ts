@@ -17,7 +17,7 @@ export interface Collection {
 export type Frontmatter = Record<string, unknown>;
 
 /** How the sidebar draws a field. Mirrors `SchemaKind` on the server, plus what value inference can produce. */
-export type FieldKind = "string" | "text" | "boolean" | "number" | "date" | "tags" | "enum" | "json";
+export type FieldKind = "string" | "text" | "boolean" | "number" | "date" | "tags" | "enum" | "reference" | "json";
 
 /** One property of the collection's Zod schema, as read from Astro's generated JSON Schema. */
 export interface SchemaField {
@@ -32,6 +32,12 @@ export interface SchemaField {
   description?: string;
   /** For `tags`: what the array holds. */
   items?: "string" | "number";
+  /** For `reference`: the collection it points at (read from content.config.ts; absent when that couldn't be found). */
+  collection?: string;
+  /** For `number`: `z.number().int()`, `.min()`, `.max()`. */
+  integer?: boolean;
+  min?: number;
+  max?: number;
 }
 
 export interface CollectionSchema {

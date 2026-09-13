@@ -1076,7 +1076,24 @@ class Float {
         break;
       }
       case "number": {
-        const input = h("input", { class: "input", type: "number", step: "any", value: String(value), placeholder: schemaField && typeof schemaField.default === "number" ? String(schemaField.default) : null }) as HTMLInputElement;
+        const input = h("input", {
+          class: "input",
+          type: "number",
+          step: schemaField?.integer ? "1" : "any",
+          min: schemaField?.min ?? null,
+          max: schemaField?.max ?? null,
+          value: String(value),
+          placeholder: schemaField && typeof schemaField.default === "number" ? String(schemaField.default) : null,
+        }) as HTMLInputElement;
+        // Out of the schema's range (or not whole when it wants an integer): written as typed, but say so.
+        const range = (n: number) => {
+          const problems: string[] = [];
+          if (schemaField?.integer && !Number.isInteger(n)) problems.push("a whole number");
+          if (typeof schemaField?.min === "number" && n < schemaField.min) problems.push(`at least ${schemaField.min}`);
+          if (typeof schemaField?.max === "number" && n > schemaField.max) problems.push(`at most ${schemaField.max}`);
+          if (problems.length) note(`The schema wants ${problems.join(", ")}.`);
+          else hint.textContent = "";
+        };
         input.addEventListener("input", () => {
           if (input.value === "") {
             input.dataset.invalid = "";
@@ -1086,10 +1103,52 @@ class Float {
           const n = Number(input.value);
           if (Number.isNaN(n)) return;
           delete input.dataset.invalid;
-          hint.textContent = "";
+          range(n);
           set(n);
         });
+        if (typeof value === "number") range(value);
         control = input;
+        break;
+      }
+      case "reference": {
+        // `reference("blog")`: pick an entry of that collection. The id is what's stored, the title is what's shown.
+        const target = this.collections.find((c) => c.name === schemaField?.collection);
+        if (!target) {
+          const input = h("input", { class: "input", type: "text", value: value == null ? "" : String(value), placeholder: "entry id", spellcheck: false }) as HTMLInputElement;
+          input.addEventListener("input", () => set(input.value));
+          mirror((v) => {
+            if (this.canvas.activeElement === input) return;
+            const text = typeof v === "string" ? v : "";
+            if (input.value !== text) input.value = text;
+          });
+          control = input;
+          break;
+        }
+        const current = typeof value === "string" ? value : "";
+        const listed = target.entries.some((e) => e.id === current);
+        const select = h(
+          "select",
+          { class: "select", "aria-label": key, title: current ? `${target.name}/${current}` : `An entry of ${target.name}` },
+          !schemaField?.required || !current ? h("option", { value: "", selected: !current }, "—") : null,
+          current && !listed ? h("option", { value: UNLISTED, selected: true }, `${current} (no such entry)`) : null,
+          target.entries.map((e) => h("option", { value: e.id, selected: e.id === current, title: e.id }, e.title)),
+        ) as HTMLSelectElement;
+        select.addEventListener("change", () => {
+          if (select.value === UNLISTED) return;
+          select.title = select.value ? `${target.name}/${select.value}` : `An entry of ${target.name}`;
+          set(select.value === "" ? (schemaField?.nullable ? null : undefined) : select.value);
+          if (select.value === "" && !schemaField?.nullable) {
+            // An optional reference with nothing picked is left out of the file rather than written as "".
+            delete this.draftFrontmatter[key];
+            revert.hidden = !this.fieldChanged(key);
+          }
+        });
+        if (current && !listed) note(`No "${current}" in ${target.name}.`);
+        mirror((v) => {
+          if (typeof v === "string" && target.entries.some((e) => e.id === v)) select.value = v;
+          else if (v == null) select.value = "";
+        });
+        control = select;
         break;
       }
       case "date": {
@@ -1558,10 +1617,11 @@ function fieldKind(value: unknown): FieldKind {
 
 /** Can the schema's control edit this value as-is? (`null` only counts when the schema allows it.) */
 function valueFits(field: SchemaField, value: unknown): boolean {
-  if (value == null) return !!field.nullable || field.kind === "string" || field.kind === "text" || field.kind === "enum";
+  if (value == null) return !!field.nullable || field.kind === "string" || field.kind === "text" || field.kind === "enum" || field.kind === "reference";
   switch (field.kind) {
     case "string":
     case "text":
+    case "reference":
       return typeof value === "string";
     case "number":
       return typeof value === "number";
@@ -1592,6 +1652,8 @@ function emptyValueFor(field: SchemaField): unknown {
       return [];
     case "enum":
       return field.values?.[0] ?? "";
+    case "reference":
+      return "";
     case "json":
       return {};
     default:
@@ -1608,8 +1670,12 @@ function describeKind(field: SchemaField): string {
       return field.items === "number" ? "a list of numbers" : "a list of strings";
     case "date":
       return "a date";
-    case "number":
-      return "a number";
+    case "reference":
+      return field.collection ? `an entry of ${field.collection}` : "an entry id";
+    case "number": {
+      const bounds = [typeof field.min === "number" ? `at least ${field.min}` : null, typeof field.max === "number" ? `at most ${field.max}` : null].filter(Boolean);
+      return `${field.integer ? "a whole number" : "a number"}${bounds.length ? ` (${bounds.join(", ")})` : ""}`;
+    }
     case "boolean":
       return "true or false";
     case "json":
