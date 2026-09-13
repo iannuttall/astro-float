@@ -91,7 +91,7 @@ export interface FileChange {
   hash?: string;
 }
 
-/** `{ collection, id, hash }` of an entry file that changed on disk outside Float (see `api.onFileChanged`). */
+/** `{ collection, id, hash }` of an entry file that changed on disk — an outside edit, or a Float save from another tab (see `api.onFileChanged`). Compare `hash` with the doc you hold: equal means it was your own save. */
 export interface FileChanged {
   collection: string;
   id: string;
@@ -185,14 +185,24 @@ export const api = {
       config: { file: string; updated: boolean; created?: boolean; note?: string };
     }>("/collections", { method: "POST", body: JSON.stringify(payload) }),
 
+  /**
+   * Tell the server an edit session is on or off. While one is on, an outside
+   * change to an entry file doesn't reload the page (which would drop the
+   * draft); it arrives as `onFileChanged` instead. Any API call keeps the
+   * session alive for another 60 s; `app.ts` also refreshes it on a timer.
+   */
+  session: (editing: boolean) =>
+    request<{ editing: boolean }>("/session", { method: "POST", body: JSON.stringify({ editing }) }),
+
   /** The schema's verdict on the entry as it is on disk (a 422's `issues`, without saving). */
   diagnose: (collection: string, id: string) =>
     request<Diagnosis>(`/diagnose?collection=${encodeURIComponent(collection)}&id=${encodeURIComponent(id)}`),
 
   /**
-   * Called when an entry file changes on disk outside Float (your editor, git).
-   * Rides Vite's HMR socket, so it needs the dev server's client; returns an
-   * unsubscribe. Does nothing (and returns a no-op) when HMR isn't available.
+   * Called when an entry file changes on disk (your editor, git, another tab's
+   * Float save), after Astro has re-synced it. Rides Vite's HMR socket, so it
+   * needs the dev server's client; returns an unsubscribe. Does nothing (and
+   * returns a no-op) when HMR isn't available.
    */
   onFileChanged: (cb: (change: FileChanged) => void): (() => void) => {
     const hot = (import.meta as ImportMeta & { hot?: ViteHot }).hot;
