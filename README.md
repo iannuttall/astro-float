@@ -183,6 +183,7 @@ packages/astro-float/   the integration (what you'd publish to npm)
 demo/                   a minimal Astro 5 blog (+ one .mdx post), a `notes` collection whose schema
                         uses z.enum / z.number / .optional / .describe / image() / reference("blog"), + generic [collection] routes
 docs/                   screenshots
+scripts/compat/         Astro-version compat check: `scripts/compat/switch.sh 7.3.2 8.0.1 && scripts/compat/run.sh 4367 astro7` (see its README)
 ```
 
 ## Notes
