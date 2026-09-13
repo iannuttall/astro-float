@@ -63,6 +63,12 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
 
+/* While the panel is open the document moves over by the panel's width so no
+ * text sits under it. The phone-width bottom sheet overlaps instead. */
+html[data-float-panel] { margin-right: var(--float-panel-width, 0px); transition: margin-right 150ms ease; }
+html[data-float-panel="resizing"] { transition: none; }
+@media (max-width: 640px) { html[data-float-panel] { margin-right: 0; } }
+
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
 [data-float-editing] [data-float-island] * { cursor: default; }
@@ -74,18 +80,43 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing-field][data-float-date] { cursor: pointer; }
 [data-float-editing-field][data-float-date][data-float-open]::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
 
-/* Calendar popover, shared by the date on the page and the panel's date control.
- * Follows the panel: light by default, dark when the viewer prefers it. */
-.astro-float-datepicker {
+/* Page-side chrome (calendar, selection bubble, island bar) shares one palette
+ * and follows the panel: light by default, dark when the viewer prefers it. */
+.astro-float-datepicker, .astro-float-bubble, .astro-float-bar {
   --dp-bg: #ffffff;
+  --dp-input: #ffffff;
   --dp-line: #d8dce3;
+  --dp-line-focus: #9aa1ad;
   --dp-fg: #1b1f26;
   --dp-muted: #6b7280;
   --dp-faint: #9aa1ad;
   --dp-hover: #f1f2f5;
   --dp-accent: #1b1f26;
   --dp-accent-fg: #ffffff;
+  --dp-err: #d4423e;
+  --dp-err-fg: #ffffff;
   --dp-shadow: 0 1px 2px rgba(16, 20, 28, 0.06), 0 12px 32px -12px rgba(16, 20, 28, 0.3);
+}
+@media (prefers-color-scheme: dark) {
+  .astro-float-datepicker, .astro-float-bubble, .astro-float-bar {
+    --dp-bg: #15181c;
+    --dp-input: #0b0d10;
+    --dp-line: #2a3038;
+    --dp-line-focus: #4a5260;
+    --dp-fg: #e6e8eb;
+    --dp-muted: #8b93a1;
+    --dp-faint: #5c6470;
+    --dp-hover: #22262c;
+    --dp-accent: #e6e8eb;
+    --dp-accent-fg: #0f1114;
+    --dp-err: #ef6f6c;
+    --dp-err-fg: #0f1114;
+    --dp-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Calendar popover, shared by the date on the page and the panel's date control. */
+.astro-float-datepicker {
   position: fixed;
   z-index: 2000000002;
   width: 244px;
@@ -102,19 +133,6 @@ const PAGE_STYLE = /* css */ `
   animation: astro-float-dp-in 120ms ease;
   user-select: none;
   -webkit-user-select: none;
-}
-@media (prefers-color-scheme: dark) {
-  .astro-float-datepicker {
-    --dp-bg: #15181c;
-    --dp-line: #2a3038;
-    --dp-fg: #e6e8eb;
-    --dp-muted: #8b93a1;
-    --dp-faint: #5c6470;
-    --dp-hover: #22262c;
-    --dp-accent: #e6e8eb;
-    --dp-accent-fg: #0f1114;
-    --dp-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
-  }
 }
 @keyframes astro-float-dp-in { from { opacity: 0; transform: translateY(-2px); } }
 .astro-float-datepicker[data-above] { animation-name: astro-float-dp-in-up; }
@@ -153,10 +171,10 @@ const PAGE_STYLE = /* css */ `
 .astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); }
 .astro-float-dropline { height: 2px; background: #8b93a1; border-radius: 1px; }
 
-/* Selection bubble and island bar: one quiet dark pill, one icon set. They stack *below* the panel
- * (2000000000): when a narrow window puts the prose's edge under the panel, the pill is covered by
- * it, never painted over it. The date picker is the one exception — it's a dialog opened from either
- * side, so it stays on top. */
+/* Selection bubble and island bar: one quiet pill on the shared palette, one icon set. They stack
+ * *below* the panel (2000000000): when a narrow window puts the prose's edge under the panel, the
+ * pill is covered by it, never painted over it. The date picker is the one exception — it's a dialog
+ * opened from either side, so it stays on top. */
 .astro-float-bubble, .astro-float-bar {
   position: fixed;
   z-index: 1999999999;
@@ -164,11 +182,11 @@ const PAGE_STYLE = /* css */ `
   align-items: center;
   gap: 1px;
   padding: 2px;
-  background: #15181c;
-  border: 1px solid #2a3038;
+  background: var(--dp-bg);
+  border: 1px solid var(--dp-line);
   border-radius: 6px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -12px rgba(0, 0, 0, 0.4);
-  color: #b4bac4;
+  box-shadow: var(--dp-shadow);
+  color: var(--dp-muted);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   letter-spacing: -0.005em;
   box-sizing: border-box;
@@ -185,7 +203,7 @@ const PAGE_STYLE = /* css */ `
   min-width: 24px;
   padding: 0 5px;
   border-radius: 4px;
-  color: #b4bac4;
+  color: var(--dp-muted);
   cursor: pointer;
   font: inherit;
   font-weight: 500;
@@ -193,24 +211,24 @@ const PAGE_STYLE = /* css */ `
   transition: background 100ms ease, color 100ms ease;
 }
 .astro-float-bubble button svg, .astro-float-bar button svg { width: 14px; height: 14px; display: block; }
-.astro-float-bubble button:hover, .astro-float-bar button:hover { background: #22262c; color: #e6e8eb; }
+.astro-float-bubble button:hover, .astro-float-bar button:hover { background: var(--dp-hover); color: var(--dp-fg); }
 .astro-float-bar button:disabled { opacity: 0.4; cursor: default; background: none; }
-.astro-float-bubble button[data-on] { color: #e6e8eb; background: #22262c; }
-.astro-float-bar button[data-danger]:hover { color: #ef6f6c; }
+.astro-float-bubble button[data-on] { color: var(--dp-fg); background: var(--dp-hover); }
+.astro-float-bar button[data-danger]:hover { color: var(--dp-err); }
 .astro-float-bubble input {
   all: unset;
   width: 220px;
   height: 24px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #0b0d10;
-  border: 1px solid #2a3038;
-  color: #e6e8eb;
+  background: var(--dp-input);
+  border: 1px solid var(--dp-line);
+  color: var(--dp-fg);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   box-sizing: border-box;
 }
-.astro-float-bubble input:focus { border-color: #4a5260; }
-.astro-float-bubble input::placeholder { color: #5c6470; }
+.astro-float-bubble input:focus { border-color: var(--dp-line-focus); }
+.astro-float-bubble input::placeholder { color: var(--dp-faint); }
 .astro-float-bubble::after {
   content: "";
   position: absolute;
@@ -219,15 +237,15 @@ const PAGE_STYLE = /* css */ `
   transform: translateX(-50%);
   border: 4px solid transparent;
   border-bottom: 0;
-  border-top-color: #2a3038;
+  border-top-color: var(--dp-line);
 }
-.astro-float-bubble[data-below]::after { top: -5px; bottom: auto; border-top: 0; border-bottom: 4px solid #2a3038; }
+.astro-float-bubble[data-below]::after { top: -5px; bottom: auto; border-top: 0; border-bottom: 4px solid var(--dp-line); }
 .astro-float-bar button[data-grip] { cursor: grab; }
-.astro-float-bar .astro-float-sep, .astro-float-bubble .astro-float-sep { width: 1px; height: 16px; background: #2a3038; margin: 0 2px; flex: none; }
+.astro-float-bar .astro-float-sep, .astro-float-bubble .astro-float-sep { width: 1px; height: 16px; background: var(--dp-line); margin: 0 2px; flex: none; }
 .astro-float-bar .astro-float-confirm { display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; white-space: nowrap; }
 .astro-float-bar .astro-float-confirm button { width: auto; height: 24px; padding: 0 9px; }
-.astro-float-bar .astro-float-confirm button[data-danger] { background: #ef6f6c; color: #0f1114; }
-.astro-float-bar .astro-float-confirm button[data-danger]:hover { background: #f58c89; color: #0f1114; }
+.astro-float-bar .astro-float-confirm button[data-danger] { background: var(--dp-err); color: var(--dp-err-fg); }
+.astro-float-bar .astro-float-confirm button[data-danger]:hover { background: var(--dp-err); color: var(--dp-err-fg); opacity: 0.9; }
 @media (pointer: coarse) {
   .astro-float-bubble button, .astro-float-bar button { height: 36px; min-width: 36px; }
   .astro-float-bubble, .astro-float-bar { padding: 3px; }
@@ -432,8 +450,15 @@ export class PageEditor {
     this.hideOverlays();
   }
 
+  /** Let go of the container and take back everything `bind` put on its islands. */
   unbind() {
     this.detach();
+    for (const node of Array.from(this.container?.querySelectorAll<HTMLElement>("[data-float-island]") ?? [])) {
+      node.removeAttribute("data-float-island");
+      node.removeAttribute("data-float-key");
+      node.removeAttribute("contenteditable");
+      node.removeAttribute("draggable");
+    }
     this.container = null;
     this.snapshot = [];
     this.mapped = false;

@@ -156,6 +156,7 @@ export class FieldBindings {
     if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
     el.setAttribute("data-float-editing-field", "");
     el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
+    const spellcheck = el.getAttribute("spellcheck");
     el.spellcheck = true;
 
     const onInput = () => {
@@ -191,6 +192,8 @@ export class FieldBindings {
       el.removeEventListener("keydown", onKeydown);
       el.removeEventListener("keyup", onKeyup);
       el.removeEventListener("paste", onPaste);
+      if (spellcheck === null) el.removeAttribute("spellcheck");
+      else el.setAttribute("spellcheck", spellcheck);
     });
   }
 
