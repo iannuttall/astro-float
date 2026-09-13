@@ -88,6 +88,9 @@ export interface FileChange {
   collection?: string;
   id?: string;
   file?: string;
+  hash?: string;
+}
+
 /** `{ collection, id, hash }` of an entry file that changed on disk outside Float (see `api.onFileChanged`). */
 export interface FileChanged {
   collection: string;
