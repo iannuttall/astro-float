@@ -33,18 +33,25 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
 ---
 
 <Base title={`${title} · ${collection}`} description={description}>
-  <article data-float-entry={`${collection}:${entry.id}`}>
+  {/* No data-float-* attributes are needed: Float finds the entry from the URL,
+      the rendered body by lining it up with the Markdown source, and the
+      title / description / date by their text. They remain optional overrides:
+      - data-float-entry="<collection>:<id>" pins the page to an entry
+      - data-float-body marks the element that wraps the rendered body
+      - data-float-field="<key>" marks an element that prints a field verbatim
+        (or a formatted date) */}
+  <article>
     <header>
       <div class="meta">
         <a href={`/${collection}/`}>{collection}</a>
         {date && <span>·</span>}
-        {date && <time datetime={date.toISOString()} data-float-field="pubDate">{fmt.format(date)}</time>}
+        {date && <time datetime={date.toISOString()}>{fmt.format(date)}</time>}
         {data.draft === true && <span class="badge">Draft</span>}
       </div>
-      <h1 data-float-field="title">{title}</h1>
-      <p class="lede" data-float-field="description">{description}</p>
+      <h1>{title}</h1>
+      <p class="lede">{description}</p>
     </header>
-    <div class="prose" data-float-body>
+    <div class="prose">
       <Content />
     </div>
   </article>

@@ -34,6 +34,8 @@ Open <http://localhost:4321/blog/hello-float/>, hover the bottom edge to reveal 
 | **Components** | MDX components and raw-HTML blocks are **islands**: no caret goes in, and clicking one shows a small bar — move up / down, drag grip, remove (inline confirm). Their source is written back verbatim wherever they end up. |
 | **Shortcuts** | At the start of an empty line: `# `…`###### `, `- ` / `* `, `1. `, `> `, ``` ``` ```. **Tab / ⇧Tab** nest lists. In a code block Enter is a newline, ⇧Enter leaves it. **Esc** leaves the field (it never turns Edit off — the pencil does). |
 | **Images** | Drop or paste onto the prose. The file is copied **next to the entry**, appears where you dropped it, and is written as `![alt](./photo.png)`. |
+| **Video** | Drop or paste a video file (mp4, webm, mov, m4v) the same way. It is copied to `public/media/<collection>/<id>/` (Astro only processes Markdown *images* from `src/`, so a video has to be served as-is) and written as a raw `<video controls src="/media/…/clip.mp4"></video>` block, which is an island: move it, remove it, no caret. Up to 200 MB (`maxVideoBytes`). |
+| **Embeds** | Paste a YouTube, Vimeo or X/Twitter link on an **empty line** and it becomes an embed island: `<figure class="embed"><iframe …></iframe></figure>` for videos (YouTube keeps a `t=` start time), Twitter's own `blockquote.twitter-tweet` + `widgets.js` for a post. A direct link to a video file becomes a `<video>`. Paste the same link inside a sentence and it stays text. |
 | **Save / Discard** | Top of the panel: status text, and **Discard** + **Save** the moment the page differs from disk (they stay put while you type). If Astro rejects what was written (a value the collection's schema won't take) the status says so in amber and Save stays. Discard puts the body, the frontmatter, the on-page fields and the source view back to what's on disk without writing anything. **⌘S / Ctrl+S** anywhere. Optional **Autosave** (a switch in the header; 800ms after you stop typing). Turning Edit off saves first. |
 | **Live preview** | While your caret is in the text, a save doesn't touch the DOM. Save from the panel (caret elsewhere) and Astro re-renders the page in place, no reload. |
 | **Moving around** | While Edit is on, same-origin links, back/forward and Float's own create flows are soft navigations — fetch + swap under the panel, pending edits saved first, no "Leave site?". Edit off: links behave exactly as normal. |
@@ -113,7 +115,8 @@ astroFloat({
     blog: { dir: "src/content/blog", route: "/blog/[id]" },
   },
   allowRemote: false,                    // answer non-localhost requests (astro dev --host, tunnels)
-  maxUploadBytes: 15 * 1024 * 1024,
+  maxUploadBytes: 15 * 1024 * 1024,      // images (copied next to the entry)
+  maxVideoBytes: 200 * 1024 * 1024,      // videos (copied to public/media/)
 });
 ```
 
@@ -130,8 +133,10 @@ A collection also needs pages. The demo ships generic `src/pages/[collection]/in
 - **Islands.** `mdxJsxFlowElement`, raw `html` blocks and inline-JSX-only paragraphs are flagged by the server. On the client they get `contenteditable="false"`, a stable key, and are matched by that key (not by HTML) when serializing, so moving one just moves its source slice. An `.mdx` whose blocks don't line up is body-read-only (frontmatter still saves).
 - **Source view.** From the corner control the body's rendered container is hidden and a textarea with the current Markdown takes its place, in the page. Leaving it (or saving) writes that text and swaps in Astro's fresh render. Saves are serialized, so *Rendered* during an in-flight autosave waits for it rather than dead-clicking; a failed save keeps the source view with the error and a Discard; a saved-but-not-refreshed page falls back to the DOM it had, with a message. The page-side overlays (body control, bubble, island bar) survive the swap — they're dev chrome, not page content.
 - **Icons.** One set: Lucide paths at 1.75 stroke, round caps, 14–15px, in `toolbar/icons.ts`. Panel, body control, bubble and island bar all draw from it.
-- **HTML→Markdown** (`src/toolbar/html-to-md.ts`) covers what remark-rehype + Shiki emit: ATX headings, paragraphs, tight/loose/nested lists, task lists, links + titles, images (Vite `/@fs/…` and Astro `/_image?href=…` URLs mapped back to `./relative`), inline code, fenced code with language, blockquotes, rules, GFM tables with alignment, strong / em / strike, hard breaks. Unknown elements pass through as raw HTML.
-- **API.** `astro:server:setup` mounts `/__float/api/*`: collections, read/write entry, create entry, create collection, upload media. Localhost-only (host + socket address), same-origin, custom header on mutations, paths confined to the collection dir, image extension allowlist. Saves carry the file hash as loaded; a 409 gives you Reload / Overwrite.
+- **HTML→Markdown** (`src/toolbar/html-to-md.ts`) covers what remark-rehype + Shiki emit: ATX headings, paragraphs, tight/loose/nested lists, task lists, links + titles, images (Vite `/@fs/…` and Astro `/_image?href=…` URLs mapped back to `./relative`), inline code, fenced code with language, blockquotes, rules, GFM tables with alignment, strong / em / strike, hard breaks. Unknown elements and islands pass through as raw HTML, minus Float's editing attributes.
+- **Media and embeds** (`src/toolbar/embeds.ts`) decides which dropped files are accepted, what each becomes in the Markdown, and which pasted URLs turn into an embed block. A block inserted this way is an island from the first keystroke: its HTML is remembered and written verbatim, so nothing it contains ever goes through the serializer. Dirtiness is judged on block keys, not raw HTML, so a widget script redrawing the inside of an island (Twitter's, a hydrated component's) does not count as an edit.
+- **Schema.** `GET /__float/api/schema?collection=<name>` describes the collection's fields (`src/toolbar/schema.ts`: key, humanized label, type, description, required, default, enum options, nested fields, array item, reference target, min/max). Source `zod`: `astro sync` (run by `astro dev` at start-up and on every config change) writes a JSON Schema per collection to `.astro/collections/<name>.schema.json`; `src/server/schema.js` reads that and maps it — `z.coerce.date()` → date, `z.enum()` → enum, `z.array(z.string())` → tags, nested `z.object()` → object, other arrays → array, `.optional()` / `.default()` / `.describe()` / `.nullable()` / `.min()` / `.max()` carried through. Two helpers don't survive the JSON round trip — `image()` comes out as a plain string and `reference("blog")` loses its target — so the config is also loaded through Vite (`ssrLoadModule`, as Astro does) and the Zod shapes are probed: a stub `image()` marks its fields, and running Astro's `reference()` transform on a probe id answers with the collection name. If the module can't be loaded, a literal source scan for `key: image()` / `key: reference("name")` fills the same gap. Source `inferred`: no schema, types guessed from the entries' values.
+- **API.** `astro:server:setup` mounts `/__float/api/*`: collections, schema, read/write entry (the read carries the schema too), create entry, create collection, upload media, and `POST /render` (`{ collection, id, body }` → `{ blocks: [{ type, island, html }] }`): the draft body split with the same block splitter, each non-island block rendered by Astro's own Markdown pipeline (`@astrojs/markdown-remark` from the project's astro, with the project's `markdown` config) so the page can update live while you type in the Markdown tab. A save Astro rejects (schema mismatch) answers `synced: false` as soon as the content layer logs the error. Localhost-only (host + socket address), same-origin, custom header on mutations, paths confined to the collection dir, image extension allowlist. Saves carry the file hash as loaded; a 409 gives you Reload / Overwrite.
 - **No reload on save.** Astro's content layer full-reloads after a content change. `sync-gate.js` swallows that reload for a few seconds after a Float write and uses it as the "synced" signal, so save/create responses return once the store has the new content. IDE edits still reload as normal.
 
 ## Known round-trip limits (v0)
@@ -149,7 +154,7 @@ Only blocks you edit are re-serialized, so these only bite inside a paragraph yo
 ## Intentionally out of scope for v0
 
 - **Component picker** — browse the project's components and insert one from the panel. Islands are the groundwork; the catalog/insert UI is the next pass.
-- Zod schema awareness for Fields (types are inferred from values); the starter schema for new collections is fixed
+- Schema-driven validation before save (the sidebar flags required/unknown/mismatched fields but never blocks a write — Astro reports the error); the starter schema for new collections is fixed
 - Renaming slugs, deleting entries or collections, git operations
 - JSON/YAML data collections, remote loaders, live-loader / `<ClientRouter />` pages
 - Auth, multi-user, anything outside `astro dev`
@@ -162,18 +167,23 @@ packages/astro-float/   the integration (what you'd publish to npm)
   src/server/api.js       /__float/api/* endpoints (localhost-only JSON)
   src/server/blocks.js    Markdown/MDX → top-level source blocks (mdast, with offsets, islands flagged)
   src/server/collections.js  create a collection: dir, content.config.ts wiring, seed entry
+  src/server/schema.js    field definitions: Astro's .astro/collections/*.schema.json + image()/reference() probed from the loaded config, or inferred from values
+  src/server/render.js    live render: draft body → per-block HTML through the project's Astro Markdown pipeline
+  src/shared/infer.js     value → field inference (humanize, inferField), shared by the server and the toolbar
   src/server/content.js   frontmatter parse/serialize, collection discovery, entries, uploads
   src/server/sync-gate.js swallow Astro's post-save reload, signal "content synced"
   src/toolbar/app.ts      defineToolbarApp(): the Edit toggle
   src/toolbar/float.ts    edit-mode lifecycle, the draft, saving, source mode, soft navigation
   src/toolbar/panel/      the panel: shell, Fields form + controls, YAML and Markdown views, footer, settings
-  src/toolbar/schema.ts   field definitions (CollectionSchema / FieldDef) and the inferred fallback
+  src/toolbar/schema.ts   field definitions (CollectionSchema / FieldDef), help text, empty values; inference re-exported from src/shared/infer.js
   src/toolbar/editor.ts   on-page contenteditable controller, block alignment, islands, page styles
   src/toolbar/fields.ts   on-page frontmatter fields (title, description, …)
   src/toolbar/overlays.ts the body's copy / source control and the selection bubble
   src/toolbar/html-to-md.ts  HTML → Markdown for edited blocks
+  src/toolbar/embeds.ts   accepted media files, their Markdown, and URL → embed blocks
   src/toolbar/styles.ts   panel styles (light, dark under prefers-color-scheme); mobile sheet
-demo/                   a minimal Astro 5 blog (+ one .mdx post) + generic [collection] routes
+demo/                   a minimal Astro 5 blog (+ one .mdx post), a `notes` collection whose schema
+                        uses z.enum / z.number / .optional / .describe / image() / reference("blog"), + generic [collection] routes
 docs/                   screenshots (docs/mobile/ for the phone set)
 ```
 

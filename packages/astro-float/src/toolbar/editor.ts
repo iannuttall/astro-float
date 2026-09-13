@@ -1,3 +1,4 @@
+import { altFromName, embedFor, mediaKind, videoHtml } from "./embeds";
 import { blockToMarkdown, type SerializeContext } from "./html-to-md";
 import { icon, type IconName } from "./icons";
 import { SelectionBubble } from "./overlays";
@@ -23,7 +24,7 @@ export interface SaveSnapshot {
 export interface PageEditorHooks {
   /** Any DOM change inside the editable body (already debounced to a microtask). */
   onChange(): void;
-  /** Image files dropped or pasted onto the body; `range` is where they landed. */
+  /** Image / video files dropped or pasted onto the body; `range` is where they landed. */
   onFiles(files: File[], range: Range | null): void;
 }
 
@@ -132,27 +133,60 @@ const PAGE_STYLE = /* css */ `
 .astro-float-region button[data-danger] { opacity: 1; color: #ef6f6c; }
 .astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px 0 8px; color: #ef6f6c; white-space: nowrap; }
 
+/* While the panel is open the document moves over by the panel's width so no
+ * text sits under it. The phone-width bottom sheet overlaps instead. */
+html[data-float-panel] { margin-right: var(--float-panel-width, 0px); transition: margin-right 150ms ease; }
+html[data-float-panel="resizing"] { transition: none; }
+@media (max-width: 640px) { html[data-float-panel] { margin-right: 0; } }
+
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
 [data-float-editing] [data-float-island] * { cursor: default; }
+/* An iframe swallows clicks; while editing, a click on an embed must select its island (the wrapper) instead. */
+[data-float-editing] [data-float-island] iframe { pointer-events: none; }
 
 /* Frontmatter fields edited in place (title, description, date, …). */
 [data-float-editing-field]:empty::before { content: attr(data-float-placeholder); color: color-mix(in srgb, currentColor 35%, transparent); pointer-events: none; }
 [data-float-editing-field][data-float-date] { cursor: pointer; }
 [data-float-editing-field][data-float-date][data-float-open]::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
 
-/* Calendar popover, shared by the date on the page and the panel's date control.
- * Follows the panel: light by default, dark when the viewer prefers it. */
-.astro-float-datepicker {
+/* Page-side chrome (calendar, selection bubble, island bar) shares one palette
+ * and follows the panel: light by default, dark when the viewer prefers it. */
+.astro-float-datepicker, .astro-float-bubble, .astro-float-bar {
   --dp-bg: #ffffff;
+  --dp-input: #ffffff;
   --dp-line: #d8dce3;
+  --dp-line-focus: #9aa1ad;
   --dp-fg: #1b1f26;
   --dp-muted: #6b7280;
   --dp-faint: #9aa1ad;
   --dp-hover: #f1f2f5;
   --dp-accent: #1b1f26;
   --dp-accent-fg: #ffffff;
+  --dp-err: #d4423e;
+  --dp-err-fg: #ffffff;
   --dp-shadow: 0 1px 2px rgba(16, 20, 28, 0.06), 0 12px 32px -12px rgba(16, 20, 28, 0.3);
+}
+@media (prefers-color-scheme: dark) {
+  .astro-float-datepicker, .astro-float-bubble, .astro-float-bar {
+    --dp-bg: #15181c;
+    --dp-input: #0b0d10;
+    --dp-line: #2a3038;
+    --dp-line-focus: #4a5260;
+    --dp-fg: #e6e8eb;
+    --dp-muted: #8b93a1;
+    --dp-faint: #5c6470;
+    --dp-hover: #22262c;
+    --dp-accent: #e6e8eb;
+    --dp-accent-fg: #0f1114;
+    --dp-err: #ef6f6c;
+    --dp-err-fg: #0f1114;
+    --dp-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Calendar popover, shared by the date on the page and the panel's date control. */
+.astro-float-datepicker {
   position: fixed;
   z-index: 2000000002;
   width: 244px;
@@ -218,10 +252,10 @@ const PAGE_STYLE = /* css */ `
 .astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); }
 .astro-float-dropline { height: 2px; background: #8b93a1; border-radius: 1px; }
 
-/* Selection bubble and island bar: one quiet dark pill, one icon set. They stack *below* the panel
- * (2000000000): when a narrow window puts the prose's edge under the panel, the pill is covered by
- * it, never painted over it. The date picker is the one exception — it's a dialog opened from either
- * side, so it stays on top. */
+/* Selection bubble and island bar: one quiet pill on the shared palette, one icon set. They stack
+ * *below* the panel (2000000000): when a narrow window puts the prose's edge under the panel, the
+ * pill is covered by it, never painted over it. The date picker is the one exception — it's a dialog
+ * opened from either side, so it stays on top. */
 .astro-float-bubble, .astro-float-bar {
   position: fixed;
   z-index: 1999999999;
@@ -229,11 +263,11 @@ const PAGE_STYLE = /* css */ `
   align-items: center;
   gap: 1px;
   padding: 2px;
-  background: #15181c;
-  border: 1px solid #2a3038;
+  background: var(--dp-bg);
+  border: 1px solid var(--dp-line);
   border-radius: 6px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px -12px rgba(0, 0, 0, 0.4);
-  color: #b4bac4;
+  box-shadow: var(--dp-shadow);
+  color: var(--dp-muted);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   letter-spacing: -0.005em;
   box-sizing: border-box;
@@ -250,7 +284,7 @@ const PAGE_STYLE = /* css */ `
   min-width: 24px;
   padding: 0 5px;
   border-radius: 4px;
-  color: #b4bac4;
+  color: var(--dp-muted);
   cursor: pointer;
   font: inherit;
   font-weight: 500;
@@ -258,24 +292,24 @@ const PAGE_STYLE = /* css */ `
   transition: background 100ms ease, color 100ms ease;
 }
 .astro-float-bubble button svg, .astro-float-bar button svg { width: 14px; height: 14px; display: block; }
-.astro-float-bubble button:hover, .astro-float-bar button:hover { background: #22262c; color: #e6e8eb; }
+.astro-float-bubble button:hover, .astro-float-bar button:hover { background: var(--dp-hover); color: var(--dp-fg); }
 .astro-float-bar button:disabled { opacity: 0.4; cursor: default; background: none; }
-.astro-float-bubble button[data-on] { color: #e6e8eb; background: #22262c; }
-.astro-float-bar button[data-danger]:hover { color: #ef6f6c; }
+.astro-float-bubble button[data-on] { color: var(--dp-fg); background: var(--dp-hover); }
+.astro-float-bar button[data-danger]:hover { color: var(--dp-err); }
 .astro-float-bubble input {
   all: unset;
   width: 220px;
   height: 24px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #0b0d10;
-  border: 1px solid #2a3038;
-  color: #e6e8eb;
+  background: var(--dp-input);
+  border: 1px solid var(--dp-line);
+  color: var(--dp-fg);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   box-sizing: border-box;
 }
-.astro-float-bubble input:focus { border-color: #4a5260; }
-.astro-float-bubble input::placeholder { color: #5c6470; }
+.astro-float-bubble input:focus { border-color: var(--dp-line-focus); }
+.astro-float-bubble input::placeholder { color: var(--dp-faint); }
 .astro-float-bubble::after {
   content: "";
   position: absolute;
@@ -284,15 +318,15 @@ const PAGE_STYLE = /* css */ `
   transform: translateX(-50%);
   border: 4px solid transparent;
   border-bottom: 0;
-  border-top-color: #2a3038;
+  border-top-color: var(--dp-line);
 }
-.astro-float-bubble[data-below]::after { top: -5px; bottom: auto; border-top: 0; border-bottom: 4px solid #2a3038; }
+.astro-float-bubble[data-below]::after { top: -5px; bottom: auto; border-top: 0; border-bottom: 4px solid var(--dp-line); }
 .astro-float-bar button[data-grip] { cursor: grab; }
-.astro-float-bar .astro-float-sep, .astro-float-bubble .astro-float-sep { width: 1px; height: 16px; background: #2a3038; margin: 0 2px; flex: none; }
+.astro-float-bar .astro-float-sep, .astro-float-bubble .astro-float-sep { width: 1px; height: 16px; background: var(--dp-line); margin: 0 2px; flex: none; }
 .astro-float-bar .astro-float-confirm { display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; white-space: nowrap; }
 .astro-float-bar .astro-float-confirm button { width: auto; height: 24px; padding: 0 9px; }
-.astro-float-bar .astro-float-confirm button[data-danger] { background: #ef6f6c; color: #0f1114; }
-.astro-float-bar .astro-float-confirm button[data-danger]:hover { background: #f58c89; color: #0f1114; }
+.astro-float-bar .astro-float-confirm button[data-danger] { background: var(--dp-err); color: var(--dp-err-fg); }
+.astro-float-bar .astro-float-confirm button[data-danger]:hover { background: var(--dp-err); color: var(--dp-err-fg); opacity: 0.9; }
 @media (pointer: coarse) {
   .astro-float-bubble button, .astro-float-bar button, .astro-float-region button { height: 36px; min-width: 36px; }
   .astro-float-bubble, .astro-float-bar { padding: 3px; }
@@ -339,12 +373,16 @@ export class PageEditor {
   private source: BodySource = { lead: "", blocks: [] };
   private snapshot: Array<{ key: string; block: SourceBlock }> = [];
   private baselineHTML = "";
+  /** Block keys at the last clean state; islands count by key, so a widget script redrawing inside one is not an edit. */
+  private baselineKeys = "";
   private absDir = "";
   private attached = false;
   private observer: MutationObserver | null = null;
   private changeQueued = false;
   private dragDepth = 0;
   private keyCounter = 0;
+  /** Raw-HTML islands inserted this session (video, embeds), by key: written back verbatim until the server has them. */
+  private pendingSource = new Map<string, string>();
 
   // islands
   private selected: HTMLElement | null = null;
@@ -380,6 +418,7 @@ export class PageEditor {
       el.removeAttribute("data-astro-source-file");
       el.removeAttribute("data-astro-source-loc");
     }
+    this.pendingSource.clear();
     this.decorateIslands(source);
     this.setBaseline(source);
   }
@@ -398,8 +437,13 @@ export class PageEditor {
     return {
       markdown: this.toMarkdown(),
       html: this.container?.innerHTML ?? "",
-      keys: this.domBlocks().map((n) => keyOf(n)),
+      keys: this.blockKeys(),
     };
+  }
+
+  /** One key per block that writes something: blank paragraphs (the caret's parking spots) emit no Markdown and get no key. */
+  private blockKeys(): string[] {
+    return this.domBlocks().filter((n) => !isBlankParagraph(n)).map((n) => keyOf(n));
   }
 
   /** Make a snapshot the new source of truth (call after the server confirmed it). */
@@ -407,6 +451,7 @@ export class PageEditor {
     if (!this.container) return;
     this.source = source;
     this.baselineHTML = snapshot.html;
+    this.baselineKeys = snapshot.keys.join("\n");
     this.mapped = snapshot.keys.length === source.blocks.length;
     this.snapshot = this.mapped ? snapshot.keys.map((key, i) => ({ key, block: source.blocks[i] })) : [];
   }
@@ -486,8 +531,15 @@ export class PageEditor {
     this.hideOverlays();
   }
 
+  /** Let go of the container and take back everything `bind` put on its islands. */
   unbind() {
     this.detach();
+    for (const node of Array.from(this.container?.querySelectorAll<HTMLElement>("[data-float-island]") ?? [])) {
+      node.removeAttribute("data-float-island");
+      node.removeAttribute("data-float-key");
+      node.removeAttribute("contenteditable");
+      node.removeAttribute("draggable");
+    }
     this.container = null;
     this.snapshot = [];
     this.mapped = false;
@@ -496,14 +548,14 @@ export class PageEditor {
   // ---- state ---------------------------------------------------------------------
 
   isDirty() {
-    return this.container ? this.container.innerHTML !== this.baselineHTML : false;
+    return this.container ? this.blockKeys().join("\n") !== this.baselineKeys : false;
   }
 
   /** Throw away every unsaved edit: the DOM goes back to the last clean baseline. Listeners are delegated, so nothing else to redo. */
   restoreBaseline() {
     if (!this.container) return;
     this.select(null);
-    if (this.container.innerHTML !== this.baselineHTML) this.container.innerHTML = this.baselineHTML;
+    if (this.isDirty()) this.container.innerHTML = this.baselineHTML;
   }
 
   /** Where the live DOM first departs from the clean baseline (for bug reports). */
@@ -634,7 +686,8 @@ export class PageEditor {
         const { block } = this.snapshot[j];
         return block.trailer ? `${block.src}\n\n${block.trailer}` : block.src;
       }
-      return blockToMarkdown(node, ctx);
+      const pending = node instanceof HTMLElement && node.dataset.floatKey ? this.pendingSource.get(node.dataset.floatKey) : undefined;
+      return pending ?? blockToMarkdown(node, ctx);
     });
   }
 
@@ -673,27 +726,55 @@ export class PageEditor {
     return parts.join("\n\n").replace(/\n{3,}/g, "\n\n") + "\n";
   }
 
+  /** Insert an uploaded file where it was dropped: an image as a paragraph, a video as a raw-HTML island. */
+  insertMedia(item: { name: string; src: string; url: string }, at: Range | null = null) {
+    if (mediaKind(item.name) === "video") this.insertHtmlBlock(videoHtml(item.src), at, videoHtml(item.url));
+    else this.insertImage(item.url, altFromName(item.name), at);
+  }
+
   /** Insert an image as its own block after the caret's block (or at the end). */
   insertImage(url: string, alt: string, at: Range | null = null) {
-    const el = this.container;
-    if (!el) return;
     const figure = document.createElement("p");
     const img = document.createElement("img");
     img.src = url;
     img.alt = alt;
     figure.appendChild(img);
+    this.placeBlock(figure, at);
+  }
 
+  /**
+   * Insert one raw-HTML block (a `<video>`, an embed) as an island. `html` is
+   * what gets written to the Markdown, verbatim; the DOM shows `preview`
+   * (defaults to the same markup — a fresh upload previews through `/@fs/`).
+   */
+  insertHtmlBlock(html: string, at: Range | null = null, preview = html) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = preview.trim();
+    const node = tpl.content.firstElementChild;
+    if (!(node instanceof HTMLElement)) return;
+    const key = `island-${++this.keyCounter}-${Date.now().toString(36)}`;
+    node.setAttribute("data-float-island", "");
+    node.dataset.floatKey = key;
+    node.contentEditable = "false";
+    node.draggable = true;
+    this.pendingSource.set(key, html.trim());
+    this.placeBlock(node, at);
+  }
+
+  /** Put a new block after the caret's block (replacing an empty paragraph, else at the end) and park the caret below it. */
+  private placeBlock(block: HTMLElement, at: Range | null) {
+    const el = this.container;
+    if (!el) return;
     const range = at ?? this.selectionRange();
     const anchor = range ? this.topLevelBlock(range.startContainer) : null;
     if (anchor && anchor.parentNode === el) {
-      const isEmptyParagraph = anchor.tagName === "P" && !anchor.textContent?.trim() && !anchor.querySelector("img");
-      if (isEmptyParagraph) anchor.replaceWith(figure);
-      else anchor.after(figure);
+      if (isEmptyBlock(anchor)) anchor.replaceWith(block);
+      else anchor.after(block);
     } else {
-      el.appendChild(figure);
+      el.appendChild(block);
     }
     const after = emptyParagraph();
-    figure.after(after);
+    block.after(after);
     placeCaret(after);
   }
 
@@ -1058,7 +1139,7 @@ export class PageEditor {
       e.preventDefault();
       return;
     }
-    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith("image/"));
+    const files = Array.from(e.clipboardData?.files ?? []).filter((f) => mediaKind(f.name, f.type) !== null);
     if (files.length) {
       e.preventDefault();
       this.hooks.onFiles(files, this.selectionRange());
@@ -1067,6 +1148,14 @@ export class PageEditor {
     const text = e.clipboardData?.getData("text/plain");
     if (text) {
       e.preventDefault();
+      // A lone URL pasted on an empty line becomes an embed (YouTube, Vimeo, tweet, video file).
+      const range = this.selectionRange();
+      const block = range ? this.topLevelBlock(range.startContainer) : null;
+      const embed = block && isEmptyBlock(block) && /^(P|DIV)$/.test(block.tagName) ? embedFor(text) : null;
+      if (embed) {
+        this.insertHtmlBlock(embed.html, range);
+        return;
+      }
       document.execCommand("insertText", false, text);
     }
   };
@@ -1253,6 +1342,17 @@ function button(name: IconName | null, label: string, onClick: () => void, text?
     onClick();
   });
   return b;
+}
+
+/** A block with nothing in it but the browser's caret placeholder. */
+function isEmptyBlock(block: HTMLElement): boolean {
+  return !block.textContent?.trim() && !block.querySelector("img, video, iframe, audio");
+}
+
+/** `<p><br></p>` and friends: the paragraphs contenteditable makes for the caret, which write no Markdown. */
+function isBlankParagraph(node: Node): boolean {
+  if (!(node instanceof HTMLElement) || !/^(P|DIV)$/.test(node.tagName) || node.dataset.floatKey) return false;
+  return !node.textContent?.trim() && !node.querySelector(":not(br)");
 }
 
 function emptyParagraph(): HTMLParagraphElement {

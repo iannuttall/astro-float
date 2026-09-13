@@ -22,6 +22,10 @@ export default function astroFloat(options = {}) {
   let root;
   /** @type {string | undefined} */
   let srcDir;
+  /** @type {string | undefined} */
+  let publicDir;
+  /** @type {Record<string, unknown> | undefined} */
+  let markdown;
   let isDev = false;
 
   return {
@@ -33,6 +37,13 @@ export default function astroFloat(options = {}) {
 
         root = fileURLToPath(config.root);
         srcDir = fileURLToPath(config.srcDir);
+        publicDir = fileURLToPath(config.publicDir);
+        // The live-render endpoint runs the project's own Markdown pipeline (same options Astro's Markdown plugin uses).
+        markdown = {
+          image: config.image,
+          experimentalHeadingIdCompat: config.experimental?.headingIdCompat,
+          ...config.markdown,
+        };
 
         addDevToolbarApp({
           id: "astro-float",
@@ -55,10 +66,15 @@ export default function astroFloat(options = {}) {
 
         attachFloatApi(server, {
           root,
+          // The schema reader loads content.config.ts through Vite to find image() / reference() fields.
+          server,
           contentDir,
           collections: options.collections ?? {},
           allowRemote: options.allowRemote ?? false,
           maxUploadBytes: options.maxUploadBytes ?? 15 * 1024 * 1024,
+          maxVideoBytes: options.maxVideoBytes ?? 200 * 1024 * 1024,
+          publicDir,
+          markdown,
           gate,
           logger,
         });

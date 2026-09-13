@@ -1,7 +1,9 @@
 import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
+import { isMediaFile, mediaMarkdown } from "./embeds";
 import { h } from "./dom";
 import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
 import { DatePicker } from "./datepicker";
+import { findBody, markBody, unmarkAuto } from "./autobind";
 import { FieldBindings } from "./fields";
 import { RegionControl } from "./overlays";
 import { detectEntry, swapPage, type DetectedEntry } from "./page";
@@ -83,6 +85,8 @@ class Float {
   private navigating = false;
   private autosaveTimer: number | undefined;
   private savedTimer: number | undefined;
+  /** Watches the panel's root (width, hidden, resizing) to push the document over while it's open. */
+  private panelWatch: MutationObserver | null = null;
 
   constructor(
     private canvas: ShadowRoot,
@@ -205,6 +209,7 @@ class Float {
     this.editing = on;
     if (on) {
       ensurePageStyle();
+      this.watchPanel();
       this.watchTheme();
       if (this.loadedFor !== location.href) {
         await this.loadPage(); // renders the panel once it knows the entry
@@ -216,13 +221,50 @@ class Float {
       window.clearTimeout(this.autosaveTimer);
       DatePicker.close();
       this.exitSourceMode(false);
-      this.page.detach();
-      this.fields.detach();
+      // Leave the page exactly as it was: no editors, nothing auto-binding put on it.
+      this.page.unbind();
+      this.fields.unbind();
+      unmarkAuto();
+      this.loadedFor = null;
       this.region.hide();
       this.releaseFocus();
       removePageStyle();
       this.unwatchTheme();
       this.panel.destroy();
+      this.unwatchPanel();
+    }
+  }
+
+  /**
+   * Push the document over by the panel's width while the panel is open, so
+   * the article's right edge never sits under it. The panel already puts its
+   * width (`--sb-width`) and its hidden / resizing state on our root; this
+   * mirrors them onto `<html>` for the page stylesheet. Phones keep the sheet.
+   */
+  private watchPanel() {
+    if (this.panelWatch) return;
+    this.panelWatch = new MutationObserver(() => this.syncPagePush());
+    this.panelWatch.observe(this.root, { attributes: true, attributeFilter: ["style", "data-panel-hidden", "data-resizing"], childList: true });
+    this.syncPagePush();
+  }
+
+  private unwatchPanel() {
+    this.panelWatch?.disconnect();
+    this.panelWatch = null;
+    this.syncPagePush();
+  }
+
+  private syncPagePush() {
+    const html = document.documentElement;
+    const width = this.root.style.getPropertyValue("--sb-width").trim();
+    const open = this.editing && this.root.childElementCount > 0 && !!width && !this.root.hasAttribute("data-panel-hidden");
+    if (open) {
+      html.style.setProperty("--float-panel-width", width);
+      html.setAttribute("data-float-panel", this.root.hasAttribute("data-resizing") ? "resizing" : "");
+    } else {
+      html.removeAttribute("data-float-panel");
+      html.style.removeProperty("--float-panel-width");
+      if (!html.getAttribute("style")) html.removeAttribute("style");
     }
   }
 
@@ -502,6 +544,7 @@ class Float {
     this.exitSourceMode(false);
     this.page.unbind();
     this.fields.unbind();
+    unmarkAuto();
     this.region.hide();
     this.doc = null;
     this.schema = null;
@@ -535,23 +578,21 @@ class Float {
     this.panel.render();
   }
 
-  /** The collection's field definitions from the server; inferred from the entry's values when it has none to give. */
+  /** The collection's field definitions, carried on the entry response; inferred from the entry's values when the server had none to give. */
   private async loadSchema(doc: EntryDoc): Promise<CollectionSchema> {
     if (doc.schema && Array.isArray(doc.schema.fields)) return doc.schema;
-    try {
-      const schema = await api.schema(doc.collection);
-      if (schema && Array.isArray(schema.fields)) return schema;
-    } catch {
-      /* no schema endpoint (yet), or no schema for this collection */
-    }
     return schemaFor(doc.collection, doc.frontmatter);
   }
 
-  /** Bind the in-place editors to `[data-float-body]` and `[data-float-field]`; attach them if Edit is on. */
+  /** Bind the in-place editors to the body and the fields (attributes first, then auto-detected); attach them if Edit is on. */
   private bindBody() {
     if (!this.doc) return;
-    this.fields.bind(this.doc.frontmatter);
-    const container = PageEditor.find();
+    let container = PageEditor.find();
+    if (!container) {
+      container = findBody(this.doc.blocks);
+      if (container) markBody(container);
+    }
+    this.fields.bind(this.doc.frontmatter, { body: container });
     if (container) {
       this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
       // MDX we can't line up with the source would be written back as HTML — never do that.
@@ -908,29 +949,29 @@ class Float {
     this.panel.renderStatus(view);
   }
 
-  // ---- images (drop / paste on the prose only) ----------------------------------------
+  // ---- images and video (drop / paste on the prose only) ------------------------------
 
   private placeImage(item: MediaItem, range: Range | null) {
     if (this.sourceArea) {
       const area = this.sourceArea;
-      const snippet = `\n![${altFrom(item.name)}](${item.src})\n`;
+      const snippet = `\n${mediaMarkdown(item)}\n`;
       area.setRangeText(snippet, area.selectionStart, area.selectionEnd, "end");
       this.sourceDraft = area.value;
       this.touched();
     } else if (this.page.bound && !this.bodyReadOnly) {
-      this.page.insertImage(item.url, altFrom(item.name), range);
+      this.page.insertMedia(item, range);
     } else if (!this.bodyReadOnly) {
       const sep = this.draftBody === "" || this.draftBody.endsWith("\n\n") ? "" : this.draftBody.endsWith("\n") ? "\n" : "\n\n";
-      this.draftBody = `${this.draftBody}${sep}![${altFrom(item.name)}](${item.src})\n`;
+      this.draftBody = `${this.draftBody}${sep}${mediaMarkdown(item)}\n`;
       this.touched();
     }
   }
 
   private async uploadAll(files: File[], range: Range | null) {
     if (!this.doc) return;
-    const images = files.filter((f) => f.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(f.name));
+    const images = files.filter(isMediaFile);
     if (!images.length) {
-      this.setStatus("error", "Only images can be dropped here");
+      this.setStatus("error", "Only images and videos can be dropped here");
       return;
     }
     this.setStatus("saving");

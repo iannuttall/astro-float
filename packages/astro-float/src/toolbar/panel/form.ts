@@ -94,8 +94,6 @@ export function renderForm(host: FormHost, syncs: Map<string, () => void>): HTML
       if (e.key === "Enter") add();
     });
     children.push(h("div", { class: "field-add" }, newKey, h("button", { class: "btn btn-icon", type: "button", "aria-label": "Add field", title: "Add field", onClick: add }, icon("plus", 14))));
-  } else {
-    children.push(h("p", { class: "form-foot muted" }, "Fields come from the collection's schema in content.config.ts."));
   }
 
   return h("div", { class: "form" }, children);

@@ -39,15 +39,8 @@ export interface EntryDoc {
   lead: string;
   blocks: SourceBlock[];
   hash: string;
-  /** The collection's field definitions, when the server sends them along (saves a second request). */
-  schema?: CollectionSchema | null;
-}
-
-/** One top-level block of the body rendered for a live preview. Islands carry no HTML — the page's own element is kept. */
-export interface RenderedBlock {
-  type: string;
-  island: boolean;
-  html: string;
+  /** The collection's schema (`source: "zod"` from content.config.ts, `"inferred"` from values); null only if it couldn't be read. */
+  schema: CollectionSchema | null;
 }
 
 export interface SaveResult {
@@ -58,6 +51,13 @@ export interface SaveResult {
   body: string;
   lead: string;
   blocks: SourceBlock[];
+}
+
+/** One top-level block of a body, rendered by Astro's Markdown pipeline. Islands come back with `html: ""`. */
+export interface RenderedBlock {
+  type: string;
+  island: boolean;
+  html: string;
 }
 
 export interface MediaItem {
@@ -104,7 +104,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   collections: () => request<{ collections: Collection[] }>("/collections").then((r) => r.collections),
 
-  /** Field definitions for a collection, derived from its Zod schema (404 until the server learns to). */
+  /** Field definitions for a collection, derived from its Zod schema (see `toolbar/schema.ts`). */
   schema: (collection: string) => request<CollectionSchema>(`/schema?collection=${encodeURIComponent(collection)}`),
 
   entry: (collection: string, id: string) =>
@@ -135,7 +135,7 @@ export const api = {
       config: { file: string; updated: boolean; created?: boolean; note?: string };
     }>("/collections", { method: "POST", body: JSON.stringify(payload) }),
 
-  /** Render a body's Markdown to per-block HTML for the live preview while typing source. */
+  /** Render a draft body block by block (same split as `EntryDoc.blocks`); called while typing in the Markdown tab. */
   render: (payload: { collection: string; id: string; body: string }) =>
     request<{ blocks: RenderedBlock[] }>("/render", { method: "POST", body: JSON.stringify(payload) }),
 

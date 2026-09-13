@@ -18,8 +18,14 @@ export function createSyncGate(server, logger) {
   const QUIET_WINDOW_MS = 3000;
 
   let quietUntil = 0;
-  /** @type {Array<() => void>} */
+  /** @type {Array<(ok: boolean) => void>} */
   let waiters = [];
+
+  const settle = (ok) => {
+    const pending = waiters;
+    waiters = [];
+    for (const resolve of pending) resolve(ok);
+  };
 
   const ws = server.ws;
   const originalSend = ws.send.bind(ws);
@@ -33,11 +39,7 @@ export function createSyncGate(server, logger) {
       // Astro's data store invalidation sends `path: "*"`; other reloads
       // (SSR-only module updates) don't carry a path. Only the former means
       // "the entry you just saved is now in the store".
-      if (payload.path === "*") {
-        const pending = waiters;
-        waiters = [];
-        for (const resolve of pending) resolve();
-      }
+      if (payload.path === "*") settle(true);
       logger.debug("suppressed full-reload inside Float quiet window");
       return;
     }
@@ -45,11 +47,25 @@ export function createSyncGate(server, logger) {
     return originalSend(...args);
   };
 
+  // When Astro rejects the written entry (schema mismatch, YAML error) it never
+  // re-syncs, so no reload arrives and the wait would run to its timeout. The
+  // content layer logs that rejection through the logger's shared destination;
+  // watching for it answers `synced: false` right away.
+  const dest = logger?.options?.dest;
+  if (dest && typeof dest.write === "function") {
+    const originalWrite = dest.write.bind(dest);
+    dest.write = (event) => {
+      if (waiters.length && isContentFailure(event)) settle(false);
+      return originalWrite(event);
+    };
+  }
+
   return {
     /**
      * Open the quiet window and return a promise that resolves once Astro has
      * re-synced content (or after `timeoutMs`, whichever comes first).
-     * Resolves to `true` when the sync signal was observed.
+     * Resolves to `true` when the sync signal was observed, `false` when Astro
+     * reported an error for the content instead or the wait timed out.
      * @param {number} [timeoutMs]
      * @returns {Promise<boolean>}
      */
@@ -60,9 +76,9 @@ export function createSyncGate(server, logger) {
           waiters = waiters.filter((w) => w !== done);
           resolve(false);
         }, timeoutMs);
-        const done = () => {
+        const done = (ok) => {
           clearTimeout(timer);
-          resolve(true);
+          resolve(ok);
         };
         waiters.push(done);
       });
@@ -73,4 +89,12 @@ export function createSyncGate(server, logger) {
       quietUntil = Date.now() + QUIET_WINDOW_MS;
     },
   };
+}
+
+/** An error-level log event from the content layer or one of its loaders. */
+function isContentFailure(event) {
+  if (!event || typeof event !== "object" || event.level !== "error") return false;
+  const label = String(event.label ?? "");
+  const message = String(event.message ?? "");
+  return label === "content" || /loader$/.test(label) || /does not match collection schema|frontmatter/i.test(message);
 }
