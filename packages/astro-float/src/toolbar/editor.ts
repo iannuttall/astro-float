@@ -93,17 +93,27 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing-field][data-float-date] { cursor: pointer; }
 [data-float-editing-field][data-float-date][data-float-open]::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
 
-/* Calendar popover, shared by the date on the page and the sidebar's date control. */
+/* Calendar popover, shared by the date on the page and the panel's date control.
+ * Follows the panel: light by default, dark when the viewer prefers it. */
 .astro-float-datepicker {
+  --dp-bg: #ffffff;
+  --dp-line: #d8dce3;
+  --dp-fg: #1b1f26;
+  --dp-muted: #6b7280;
+  --dp-faint: #9aa1ad;
+  --dp-hover: #f1f2f5;
+  --dp-accent: #1b1f26;
+  --dp-accent-fg: #ffffff;
+  --dp-shadow: 0 1px 2px rgba(16, 20, 28, 0.06), 0 12px 32px -12px rgba(16, 20, 28, 0.3);
   position: fixed;
   z-index: 2000000002;
   width: 244px;
   padding: 8px;
-  background: #15181c;
-  border: 1px solid #2a3038;
-  border-radius: 6px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
-  color: #e6e8eb;
+  background: var(--dp-bg);
+  border: 1px solid var(--dp-line);
+  border-radius: 8px;
+  box-shadow: var(--dp-shadow);
+  color: var(--dp-fg);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   letter-spacing: -0.005em;
   -webkit-font-smoothing: antialiased;
@@ -111,6 +121,19 @@ const PAGE_STYLE = /* css */ `
   animation: astro-float-dp-in 120ms ease;
   user-select: none;
   -webkit-user-select: none;
+}
+@media (prefers-color-scheme: dark) {
+  .astro-float-datepicker {
+    --dp-bg: #15181c;
+    --dp-line: #2a3038;
+    --dp-fg: #e6e8eb;
+    --dp-muted: #8b93a1;
+    --dp-faint: #5c6470;
+    --dp-hover: #22262c;
+    --dp-accent: #e6e8eb;
+    --dp-accent-fg: #0f1114;
+    --dp-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
+  }
 }
 @keyframes astro-float-dp-in { from { opacity: 0; transform: translateY(-2px); } }
 .astro-float-datepicker[data-above] { animation-name: astro-float-dp-in-up; }
@@ -122,26 +145,26 @@ const PAGE_STYLE = /* css */ `
   justify-content: center;
   box-sizing: border-box;
   border-radius: 4px;
-  color: #b4bac4;
+  color: var(--dp-muted);
   cursor: pointer;
   font: inherit;
   transition: background 100ms ease, color 100ms ease;
 }
-.astro-float-datepicker button:hover { background: #22262c; color: #e6e8eb; }
-.astro-float-datepicker button:focus-visible { outline: 1px solid #4a5260; outline-offset: -1px; }
+.astro-float-datepicker button:hover { background: var(--dp-hover); color: var(--dp-fg); }
+.astro-float-datepicker button:focus-visible { outline: 1px solid var(--dp-faint); outline-offset: -1px; }
 .astro-float-dp-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; height: 28px; margin-bottom: 6px; }
 .astro-float-dp-head button { width: 26px; height: 26px; }
 .astro-float-dp-head button svg { width: 14px; height: 14px; display: block; }
-.astro-float-dp-label { flex: 1; text-align: center; font-weight: 500; color: #e6e8eb; }
+.astro-float-dp-label { flex: 1; text-align: center; font-weight: 500; color: var(--dp-fg); }
 .astro-float-dp-weekdays, .astro-float-dp-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
-.astro-float-dp-weekdays span { height: 22px; display: grid; place-items: center; font-size: 10.5px; color: #5c6470; }
-.astro-float-dp-grid button { height: 30px; font-size: 12px; font-variant-numeric: tabular-nums; position: relative; }
-.astro-float-dp-grid button[data-outside] { color: #5c6470; }
+.astro-float-dp-weekdays span { height: 22px; display: grid; place-items: center; font-size: 10.5px; color: var(--dp-faint); }
+.astro-float-dp-grid button { height: 30px; font-size: 12px; font-variant-numeric: tabular-nums; position: relative; color: var(--dp-fg); }
+.astro-float-dp-grid button[data-outside] { color: var(--dp-faint); }
 .astro-float-dp-grid button[data-today]::after { content: ""; position: absolute; left: 50%; bottom: 4px; width: 3px; height: 3px; border-radius: 999px; background: currentColor; transform: translateX(-50%); }
-.astro-float-dp-grid button[data-selected] { background: #e6e8eb; color: #0f1114; font-weight: 500; }
-.astro-float-dp-grid button[data-selected]:hover { background: #fff; color: #0f1114; }
-.astro-float-dp-foot { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px solid #2a3038; }
-.astro-float-dp-foot button { height: 24px; padding: 0 8px; font-size: 11.5px; color: #8b93a1; }
+.astro-float-dp-grid button[data-selected] { background: var(--dp-accent); color: var(--dp-accent-fg); font-weight: 500; }
+.astro-float-dp-grid button[data-selected]:hover { background: var(--dp-accent); color: var(--dp-accent-fg); opacity: 0.9; }
+.astro-float-dp-foot { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--dp-line); }
+.astro-float-dp-foot button { height: 24px; padding: 0 8px; font-size: 11.5px; color: var(--dp-muted); }
 
 /* Overlays live in the page, never inside the editable body. */
 .astro-float-frame, .astro-float-dropline { position: fixed; z-index: 1999999999; pointer-events: none; box-sizing: border-box; }
