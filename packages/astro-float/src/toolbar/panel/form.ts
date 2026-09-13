@@ -142,7 +142,7 @@ function renderRow(host: FormHost, doc: EntryDoc, def: FieldDef, value: unknown,
 
   const row = h(
     "div",
-    { class: "row", "data-type": def.type, "data-inline": control.inline ? "" : null, "data-on-page": onPage ? "" : null, "data-unset": isSet ? null : "" },
+    { class: "row", "data-key": key, "data-type": def.type, "data-inline": control.inline ? "" : null, "data-on-page": onPage ? "" : null, "data-unset": isSet ? null : "" },
     h(
       "div",
       { class: "row-head" },

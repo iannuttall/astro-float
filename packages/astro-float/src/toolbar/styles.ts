@@ -349,6 +349,9 @@ export const STYLES = /* css */ `
 .row-remove:hover { background: var(--bg-hover); color: var(--fg); }
 .row-note { font-size: 11.5px; line-height: 1.45; color: var(--warn); }
 .row-note:empty { display: none; }
+.row-error { font-size: 11.5px; line-height: 1.45; color: var(--err); }
+.form-errors { padding: 8px 14px; border-bottom: 0.5px solid var(--hairline); }
+.form-error-line { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--err); }
 .row-removed .row-label { text-decoration: line-through; color: var(--fg-faint); }
 .row[data-unset] .row-help::after { content: " · not set"; color: var(--fg-faint); }
 .row[data-unset][data-type="boolean"] .switch { opacity: 0.6; }

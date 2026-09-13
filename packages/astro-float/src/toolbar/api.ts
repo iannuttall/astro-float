@@ -66,12 +66,28 @@ export interface MediaItem {
   url: string;
 }
 
+/** One thing the collection's schema rejected: `path` names the field (a Zod path, or "body"). */
+export interface ValidationIssue {
+  path: string | Array<string | number>;
+  message: string;
+}
+
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** A 422 `{ error: "validation", issues }` carries what was wrong, field by field. */
+  issues?: ValidationIssue[];
+  constructor(status: number, message: string, issues?: ValidationIssue[]) {
     super(message);
     this.status = status;
+    if (issues?.length) this.issues = issues;
   }
+}
+
+/** The dev server saw a content file change (an editor, git…). Fields are whatever it could tell. */
+export interface FileChange {
+  collection?: string;
+  id?: string;
+  file?: string;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -94,11 +110,25 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     /* non-JSON error page */
   }
   if (!res.ok) {
-    const message =
-      data && typeof data === "object" && "error" in data ? String((data as { error: unknown }).error) : res.statusText;
-    throw new ApiError(res.status, message || `HTTP ${res.status}`);
+    const body = data && typeof data === "object" ? (data as { error?: unknown; issues?: unknown }) : null;
+    const message = body && "error" in body ? String(body.error) : res.statusText;
+    const issues = Array.isArray(body?.issues)
+      ? (body!.issues as unknown[]).filter((i): i is ValidationIssue => !!i && typeof i === "object" && "message" in i)
+      : undefined;
+    throw new ApiError(res.status, message || `HTTP ${res.status}`, issues);
   }
   return data as T;
+}
+
+/**
+ * Content changed on disk outside Float: the server tells Vite's HMR channel.
+ * Nothing to subscribe to (no HMR, older server) means the callback never fires.
+ */
+export function onFileChanged(cb: (change: FileChange) => void): () => void {
+  const hot = (import.meta as unknown as { hot?: { on(event: string, cb: (data: FileChange) => void): void; off?(event: string, cb: (data: FileChange) => void): void } }).hot;
+  if (!hot?.on) return () => {};
+  hot.on("astro-float:file-changed", cb);
+  return () => hot.off?.("astro-float:file-changed", cb);
 }
 
 export const api = {
