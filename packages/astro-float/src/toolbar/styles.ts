@@ -119,9 +119,9 @@ export const STYLES = /* css */ `
   animation: pill-in 160ms ease;
 }
 /* "Saved" slides open beside the dot while the pill is green, and closes again when it goes grey. */
-.pill-word { max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; font-size: 12px; font-weight: 500; line-height: 1; color: var(--ok); transition: max-width 150ms ease, opacity 150ms ease, margin 150ms ease; }
+.pill-word { flex: none; max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap; font-size: 12px; font-weight: 500; line-height: 1; color: var(--ok); transition: max-width 150ms ease, opacity 150ms ease, margin 150ms ease; }
 .pill[data-state="saved"] { padding: 0 11px; }
-.pill[data-state="saved"] .pill-word { max-width: 48px; opacity: 1; margin-right: 6px; }
+.pill[data-state="saved"] .pill-word { max-width: 64px; opacity: 1; margin-right: 6px; }
 @keyframes pill-in { from { opacity: 0; transform: translateY(4px); } }
 .pill:hover, .pill[aria-expanded="true"] { background: var(--bg-hover); }
 .pill-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--fg-faint); transition: background 200ms ease; }
