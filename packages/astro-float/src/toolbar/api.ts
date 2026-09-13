@@ -53,6 +53,13 @@ export interface SaveResult {
   blocks: SourceBlock[];
 }
 
+/** One top-level block of a body, rendered by Astro's Markdown pipeline. Islands come back with `html: ""`. */
+export interface RenderedBlock {
+  type: string;
+  island: boolean;
+  html: string;
+}
+
 export interface MediaItem {
   name: string;
   src: string;
@@ -127,6 +134,10 @@ export const api = {
       synced: boolean;
       config: { file: string; updated: boolean; created?: boolean; note?: string };
     }>("/collections", { method: "POST", body: JSON.stringify(payload) }),
+
+  /** Render a draft body block by block (same split as `EntryDoc.blocks`); called while typing in the Markdown tab. */
+  render: (payload: { collection: string; id: string; body: string }) =>
+    request<{ blocks: RenderedBlock[] }>("/render", { method: "POST", body: JSON.stringify(payload) }),
 
   media: (collection: string, id: string) =>
     request<{ media: MediaItem[] }>(

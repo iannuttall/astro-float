@@ -212,18 +212,37 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
 /**
  * Build a frontmatter skeleton for a new entry. The collection's schema (when
  * Astro has written one) comes first: defaults and required fields in schema
- * order. Anything the existing entries use on top of that is inferred from
- * their values, so a collection without a schema still gets a sensible start.
+ * order. Optional schema fields are left out — Astro treats them as absent,
+ * and an invented `""` or `0` would fail `image()`, `reference()` or `.min()`.
+ * Only keys the schema doesn't know are topped up from the existing entries,
+ * so a collection without a schema still gets a sensible start.
  */
-export async function inferFrontmatterTemplate(ctx, collection) {
+export async function inferFrontmatterTemplate(ctx, collection, collections) {
+  const schema = await readCollectionSchema(ctx, collection);
   /** @type {Record<string, unknown>} */
-  const template = templateFromSchema(await readCollectionSchema(ctx, collection));
+  const template = templateFromSchema(schema);
+  const known = new Set(schema?.source === "zod" ? schema.fields.map((f) => f.key) : []);
+
+  // A required reference() has no valid placeholder in the abstract; the first
+  // entry of the collection it points at is one.
+  for (const field of schema?.source === "zod" ? schema.fields : []) {
+    if (field.type !== "reference" || !field.required || "default" in field) continue;
+    const target = (collections ?? []).find((c) => c.name === field.collection);
+    const first = target?.entries?.[0]?.id;
+    if (first) template[field.key] = first;
+    else delete template[field.key];
+  }
+  // A required image() can't be invented either: leave it for the author.
+  for (const field of schema?.source === "zod" ? schema.fields : []) {
+    if (field.type === "image" && template[field.key] === "") delete template[field.key];
+  }
+
   const today = new Date().toISOString().slice(0, 10);
   for (const e of collection.entries.slice(0, 8)) {
     try {
       const { frontmatter } = parseDocument(await fs.readFile(path.resolve(ctx.root, e.file), "utf8"));
       for (const [key, value] of Object.entries(frontmatter)) {
-        if (key in template) continue;
+        if (key in template || known.has(key)) continue;
         if (typeof value === "boolean") template[key] = false;
         else if (typeof value === "number") template[key] = 0;
         else if (Array.isArray(value)) template[key] = [];
@@ -255,7 +274,7 @@ export async function createEntry(ctx, { collection: collectionName, slug, title
     : path.join(collectionDir, `${slug}.md`);
   if (!isInside(collectionDir, abs)) throw httpError(400, "bad slug");
 
-  const template = await inferFrontmatterTemplate(ctx, collection);
+  const template = await inferFrontmatterTemplate(ctx, collection, collections);
   const data = { ...template, ...(frontmatter ?? {}) };
   if ("title" in template || !Object.keys(template).length) data.title = title || slug;
   else if (title) data.title = title;

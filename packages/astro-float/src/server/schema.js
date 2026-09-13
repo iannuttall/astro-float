@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { humanize, inferField, TEXT_KEYS, TEXT_MAX } from "../shared/infer.js";
 import { parseDocument } from "./content.js";
+
+// The inference rules live in `shared/infer.js` so the toolbar applies the same ones.
+export { humanize, inferField };
 
 /**
  * The collection's schema, in the shape the toolbar consumes
@@ -34,9 +38,6 @@ import { parseDocument } from "./content.js";
 
 /** Keys Astro adds to the JSON Schema for editor tooling; not frontmatter. */
 const SYNTHETIC_KEYS = new Set(["$schema"]);
-/** Keys that read as long text even when the schema just says `z.string()`. */
-const TEXT_KEYS = new Set(["description", "summary", "excerpt"]);
-const TEXT_MAX = 160;
 
 /** Where Astro looks for the content config, in order. */
 export const CONFIG_CANDIDATES = [
@@ -134,6 +135,7 @@ function fieldFromNode(doc, key, node, listedRequired) {
   if (shape.fields) field.fields = shape.fields;
   if (typeof shape.min === "number") field.min = shape.min;
   if (typeof shape.max === "number") field.max = shape.max;
+  if (shape.integer) field.integer = true;
   return field;
 }
 
@@ -143,7 +145,7 @@ function fieldFromNode(doc, key, node, listedRequired) {
  * @param {any} doc
  * @param {any} node
  * @param {string} key
- * @returns {{ type: FieldType, nullable?: boolean, options?: string[], item?: FieldDef, fields?: FieldDef[], min?: number, max?: number }}
+ * @returns {{ type: FieldType, nullable?: boolean, options?: string[], item?: FieldDef, fields?: FieldDef[], min?: number, max?: number, integer?: boolean }}
  */
 function shapeOf(doc, node, key) {
   node = resolveRef(doc, node) ?? node;
@@ -189,8 +191,11 @@ function shapeOf(doc, node, key) {
       return { type: long ? "text" : "string", nullable, min, max };
     }
     case "number":
-    case "integer":
-      return { type: "number", nullable, min: numberOr(node.minimum, node.exclusiveMinimum), max: numberOr(node.maximum, node.exclusiveMaximum) };
+    case "integer": {
+      // z.number().int() → `type: "integer"`; some emitters write `multipleOf: 1` instead.
+      const integer = type === "integer" || node.multipleOf === 1;
+      return { type: "number", nullable, min: numberOr(node.minimum, node.exclusiveMinimum), max: numberOr(node.maximum, node.exclusiveMaximum), integer };
+    }
     case "boolean":
       return { type: "boolean", nullable };
     case "array": {
@@ -454,52 +459,11 @@ async function inferFields(ctx, collection) {
   return Array.from(samples, ([key, value]) => inferField(key, value));
 }
 
-/** @returns {FieldDef} */
-export function inferField(key, value) {
-  const shape = inferShape(key, value);
-  /** @type {FieldDef} */
-  const field = { key, label: humanize(key), type: shape.type, required: false };
-  if (shape.item) field.item = shape.item;
-  if (shape.fields) field.fields = shape.fields;
-  return field;
-}
-
-function inferShape(key, value) {
-  if (typeof value === "boolean") return { type: "boolean" };
-  if (typeof value === "number") return { type: "number" };
-  if (typeof value === "string") {
-    if (/^\d{4}-\d{2}-\d{2}[T ]\d/.test(value)) return { type: "datetime" };
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { type: "date" };
-    if (value.length > TEXT_MAX || value.includes("\n") || TEXT_KEYS.has(key.toLowerCase())) return { type: "text" };
-    return { type: "string" };
-  }
-  if (Array.isArray(value)) {
-    if (value.every((v) => typeof v === "string")) return { type: "tags" };
-    const first = value.find((v) => v != null);
-    return { type: "array", item: first === undefined ? { key: "item", label: "Item", type: "json", required: false } : inferField("item", first) };
-  }
-  if (value && typeof value === "object") {
-    return { type: "object", fields: Object.entries(value).map(([k, v]) => inferField(k, v)) };
-  }
-  return { type: "string" };
-}
-
 function isEmpty(value) {
   return value == null || value === "" || (Array.isArray(value) && value.length === 0);
 }
 
 // ---- helpers ---------------------------------------------------------------------------
-
-/** `pubDate` → "Pub date", `hero_image` → "Hero image", `SEOTitle` → "SEO title". */
-export function humanize(key) {
-  const words = key
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .trim()
-    .split(/\s+/);
-  return words.map((w, i) => (i === 0 ? w.charAt(0).toUpperCase() + w.slice(1) : /^[A-Z0-9]+$/.test(w) ? w : w.toLowerCase())).join(" ");
-}
 
 /**
  * A frontmatter skeleton for a new entry, from the schema alone: fields with a
@@ -524,9 +488,11 @@ export function templateFromSchema(schema) {
       case "boolean":
         template[field.key] = false;
         break;
-      case "number":
-        template[field.key] = typeof field.min === "number" ? field.min : 0;
+      case "number": {
+        const min = typeof field.min === "number" ? field.min : 0;
+        template[field.key] = field.integer ? Math.ceil(min) : min;
         break;
+      }
       case "date":
         template[field.key] = today;
         break;
@@ -543,8 +509,13 @@ export function templateFromSchema(schema) {
       case "object":
         template[field.key] = {};
         break;
+      case "json":
+        template[field.key] = null;
+        break;
       default:
-        // string, text, image, reference, json: nothing sensible to invent
+        // string, text: an empty string is valid. image, reference: nothing
+        // valid can be invented here; `createEntry` fills references from the
+        // target collection and leaves a required image for the author.
         template[field.key] = "";
     }
   }

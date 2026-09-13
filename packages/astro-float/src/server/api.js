@@ -1,3 +1,4 @@
+import path from "node:path";
 import { createCollection } from "./collections.js";
 import {
   createEntry,
@@ -6,9 +7,11 @@ import {
   listMedia,
   mediaKindOf,
   readEntry,
+  resolveEntry,
   saveMedia,
   writeEntry,
 } from "./content.js";
+import { createBlockRenderer } from "./render.js";
 import { readCollectionSchema } from "./schema.js";
 
 export const API_BASE = "/__float/api";
@@ -29,11 +32,28 @@ const LOOPBACK_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
  *   maxUploadBytes: number,
  *   maxVideoBytes: number,
  *   publicDir?: string,
+ *   markdown?: Record<string, unknown>,
  *   gate: ReturnType<import('./sync-gate.js').createSyncGate>,
  *   logger: import('astro').AstroIntegrationLogger,
  * }} ctx
  */
 export function attachFloatApi(server, ctx) {
+  const renderer = createBlockRenderer(ctx);
+  // The render endpoint fires on a typing debounce; remember where the entry
+  // lives for a moment instead of walking the collection on every call.
+  /** @type {Map<string, { at: number, mdx: boolean, absDir: string }>} */
+  const located = new Map();
+  const LOCATE_TTL_MS = 10_000;
+  const locate = async (collection, id) => {
+    const key = `${collection}\u0000${id}`;
+    const hit = located.get(key);
+    if (hit && Date.now() - hit.at < LOCATE_TTL_MS) return hit;
+    const { abs } = await resolveEntry(ctx, collection, id);
+    const found = { at: Date.now(), mdx: path.extname(abs).toLowerCase() === ".mdx", absDir: path.dirname(abs).split(path.sep).join("/") };
+    located.set(key, found);
+    return found;
+  };
+
   server.middlewares.use(API_BASE, async (req, res) => {
     const url = new URL(req.url ?? "/", "http://float.local");
     const method = req.method ?? "GET";
@@ -70,6 +90,15 @@ export function attachFloatApi(server, ctx) {
           return json(res, 200, { ...result, synced: ok });
         }
         return json(res, 200, { ...result, synced: true });
+      }
+
+      if (method === "POST" && url.pathname === "/render") {
+        const payload = await readJson(req, 5 * 1024 * 1024);
+        const { collection, id, body } = payload;
+        if (typeof collection !== "string" || typeof id !== "string") throw httpError(400, "collection and id required");
+        if (typeof body !== "string") throw httpError(400, "body must be a string");
+        const { mdx, absDir } = await locate(collection, id);
+        return json(res, 200, { blocks: await renderer.render(body, { mdx, absDir }) });
       }
 
       if (method === "POST" && url.pathname === "/entries") {

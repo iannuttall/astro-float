@@ -6,7 +6,14 @@
  * control for each field). When the server has nothing to say — no config, no
  * schema, endpoint not there yet — `schemaFor()` infers a definition from the
  * values in the entry itself, marked `source: "inferred"`.
+ *
+ * The inference rules (`inferField`, `humanize`) live in `shared/infer.js`,
+ * shared with the server so both sides agree on labels and types.
  */
+import { humanize, inferField, inferType } from "../shared/infer.js";
+
+export { humanize, inferField, inferType };
+
 export type FieldType =
   | "string"
   | "text" // long string: description-like, or z.string() with .max > 160 / key named description|summary|excerpt
@@ -35,6 +42,7 @@ export interface FieldDef {
   collection?: string; // reference
   min?: number;
   max?: number; // number / string length
+  integer?: boolean; // z.number().int(): step 1, no decimals
 }
 
 export interface CollectionSchema {
@@ -43,13 +51,6 @@ export interface CollectionSchema {
   fields: FieldDef[];
 }
 
-/** `2026-09-01`, `2026-09-01T10:00:00Z`, `2026-09-01 10:00` … */
-const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
-const HAS_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
-const IMAGE_LIKE = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
-const TEXT_KEYS = new Set(["description", "summary", "excerpt", "abstract", "intro", "lede"]);
-const IMAGE_KEYS = /^(image|cover|coverImage|heroImage|hero|thumbnail|thumb|ogImage|photo|banner)$/i;
-
 /** No server schema: guess a definition for every key from its value (the POC's `fieldKind`). */
 export function schemaFor(collection: string, frontmatter: Record<string, unknown>): CollectionSchema {
   return {
@@ -57,50 +58,6 @@ export function schemaFor(collection: string, frontmatter: Record<string, unknow
     source: "inferred",
     fields: Object.entries(frontmatter).map(([key, value]) => inferField(key, value)),
   };
-}
-
-/** A definition for one key, from its value alone. */
-export function inferField(key: string, value: unknown): FieldDef {
-  const def: FieldDef = { key, label: humanize(key), type: inferType(key, value), required: false };
-  if (def.type === "object") {
-    const obj = (value ?? {}) as Record<string, unknown>;
-    def.fields = Object.entries(obj).map(([k, v]) => inferField(k, v));
-  } else if (def.type === "array") {
-    const first = (value as unknown[])[0];
-    def.item = inferField("item", first);
-    def.item.label = "Item";
-  }
-  return def;
-}
-
-function inferType(key: string, value: unknown): FieldType {
-  if (typeof value === "boolean") return "boolean";
-  if (typeof value === "number") return "number";
-  if (typeof value === "string") {
-    if (DATE_LIKE.test(value)) return HAS_TIME.test(value) ? "datetime" : "date";
-    if (IMAGE_LIKE.test(value) || (IMAGE_KEYS.test(key) && value.length > 0)) return "image";
-    if (TEXT_KEYS.has(key) || value.length > 80 || value.includes("\n")) return "text";
-    return "string";
-  }
-  if (value == null) return TEXT_KEYS.has(key) ? "text" : "string";
-  if (Array.isArray(value)) {
-    if (value.every((v) => typeof v === "string" || typeof v === "number")) return "tags";
-    if (value.length > 0 && value.every((v) => v && typeof v === "object" && !Array.isArray(v))) return "array";
-    return "json";
-  }
-  if (typeof value === "object") return "object";
-  return "json";
-}
-
-/** `pubDate` → "Pub date", `hero_image` → "Hero image", `ogImage` → "Og image". */
-export function humanize(key: string): string {
-  const words = key
-    .replace(/[_-]+/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .trim()
-    .toLowerCase();
-  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 const KEY_HELP: Record<string, string> = {
@@ -175,7 +132,7 @@ export function emptyValue(def: FieldDef): unknown {
     case "boolean":
       return false;
     case "number":
-      return def.min ?? 0;
+      return def.integer ? Math.ceil(def.min ?? 0) : (def.min ?? 0);
     case "date":
       return new Date().toISOString().slice(0, 10);
     case "datetime":

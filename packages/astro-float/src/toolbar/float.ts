@@ -409,14 +409,9 @@ class Float {
     this.panel.render();
   }
 
-  /** The collection's field definitions from the server; inferred from the entry's values when it has none to give. */
+  /** The collection's field definitions, carried on the entry response; inferred from the entry's values when the server had none to give. */
   private async loadSchema(doc: EntryDoc): Promise<CollectionSchema> {
-    try {
-      const schema = await api.schema(doc.collection);
-      if (schema && Array.isArray(schema.fields)) return schema;
-    } catch {
-      /* no schema endpoint (yet), or no schema for this collection */
-    }
+    if (doc.schema && Array.isArray(doc.schema.fields)) return doc.schema;
     return schemaFor(doc.collection, doc.frontmatter);
   }
 
