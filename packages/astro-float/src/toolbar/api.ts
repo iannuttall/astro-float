@@ -39,6 +39,15 @@ export interface EntryDoc {
   lead: string;
   blocks: SourceBlock[];
   hash: string;
+  /** The collection's field definitions, when the server sends them along (saves a second request). */
+  schema?: CollectionSchema | null;
+}
+
+/** One top-level block of the body rendered for a live preview. Islands carry no HTML — the page's own element is kept. */
+export interface RenderedBlock {
+  type: string;
+  island: boolean;
+  html: string;
 }
 
 export interface SaveResult {
@@ -125,6 +134,10 @@ export const api = {
       synced: boolean;
       config: { file: string; updated: boolean; created?: boolean; note?: string };
     }>("/collections", { method: "POST", body: JSON.stringify(payload) }),
+
+  /** Render a body's Markdown to per-block HTML for the live preview while typing source. */
+  render: (payload: { collection: string; id: string; body: string }) =>
+    request<{ blocks: RenderedBlock[] }>("/render", { method: "POST", body: JSON.stringify(payload) }),
 
   media: (collection: string, id: string) =>
     request<{ media: MediaItem[] }>(

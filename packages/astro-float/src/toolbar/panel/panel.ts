@@ -31,7 +31,7 @@ export interface PanelPrefs {
 export interface StatusView {
   text: string;
   tone: "" | "warn" | "err";
-  dot: "idle" | "dirty" | "saving" | "saved" | "error" | "conflict";
+  dot: "idle" | "dirty" | "saving" | "saved" | "warning" | "error" | "conflict";
   showSave: boolean;
   showDiscard: boolean;
   actions: Array<{ label: string; primary?: boolean; onClick(): void }>;
@@ -58,6 +58,8 @@ export interface PanelHost {
   revertField(key: string): void;
   replaceDraft(next: Frontmatter): void;
   changed(key: string): boolean;
+  /** Something is dirty now (YAML text typed): status and autosave should know. */
+  markDirty(): void;
 
   save(force?: boolean): Promise<void>;
   discard(): void;
@@ -66,6 +68,7 @@ export interface PanelHost {
 
   /** Source mode: the Markdown tab's textarea edits the body. */
   openSource(area: HTMLTextAreaElement): void;
+  /** The tab was left: park the source (it's written on Save, not now); false only if it couldn't be. */
   closeSource(): Promise<boolean>;
   sourceState(): { active: boolean; busy: boolean; error: string | null };
   discardSource(): void;
@@ -232,6 +235,7 @@ export class Panel {
       draft: () => host.draft(),
       replaceDraft: (next) => host.replaceDraft(next),
       onErrorChange: (has) => this.setTabDot("yaml", has),
+      onInput: () => host.markDirty(),
     });
     this.markdown = createMarkdownView({
       body: () => host.body(),
@@ -368,17 +372,32 @@ export class Panel {
     replaceChildren(this.formHost, note, form);
   }
 
-  /** One field changed outside the form (typed on the page, YAML): mirror it. */
+  /** One field changed outside the form (typed on the page, set in place): mirror it, and let the YAML text follow. */
   syncField(key: string) {
     this.syncs.get(key)?.();
-    if (this.tab === "yaml" && this.yaml && !this.yaml.hasFocus()) this.yaml.refresh();
+    this.yaml?.sync();
   }
 
-  /** The whole draft changed (discard, revert, YAML replace): repaint everything that shows it. */
+  /** The whole draft changed (discard, revert): repaint everything that shows it; broken YAML text is dropped. */
   syncAll() {
     if (this.tab === "fields") this.renderFields();
     else for (const sync of this.syncs.values()) sync();
-    if (this.tab === "yaml" && this.yaml && !this.yaml.hasFocus()) this.yaml.refresh();
+    this.yaml?.sync();
+  }
+
+  /** The draft changed through the form: the YAML text follows (broken text is dropped). */
+  syncYaml() {
+    this.yaml?.sync();
+  }
+
+  /** YAML typed but not yet parsed into the draft: the entry is dirty. */
+  yamlPending() {
+    return this.yaml?.isPending() ?? false;
+  }
+
+  /** Parse pending YAML into the draft now (before a save reads it). */
+  commitYaml() {
+    this.yaml?.commit();
   }
 
   renderCollection() {
@@ -408,10 +427,6 @@ export class Panel {
 
   syncSource(text: string) {
     this.markdown?.sync(text);
-  }
-
-  get markdownArea(): HTMLTextAreaElement | null {
-    return this.markdown?.area ?? null;
   }
 
   // ---- hide / width -------------------------------------------------------------------------

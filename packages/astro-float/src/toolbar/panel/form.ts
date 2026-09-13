@@ -1,5 +1,5 @@
 import type { Collection, EntryDoc, Frontmatter } from "../api";
-import { h, replaceChildren } from "../dom";
+import { h } from "../dom";
 import { icon } from "../icons";
 import { helpFor, inferField, type CollectionSchema, type FieldDef } from "../schema";
 import { makeControl } from "./controls";
@@ -165,7 +165,3 @@ function renderRow(host: FormHost, doc: EntryDoc, def: FieldDef, value: unknown,
   return row;
 }
 
-/** Re-render in place (after discard / revert / add / remove). */
-export function replaceForm(host: HTMLElement, next: HTMLElement) {
-  replaceChildren(host, next);
-}

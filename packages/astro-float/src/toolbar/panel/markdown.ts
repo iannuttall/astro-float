@@ -30,11 +30,13 @@ export interface MarkdownView {
 export function createMarkdownView(host: MarkdownHost): MarkdownView {
   const area = h("textarea", { class: "code code-md", spellcheck: false, autocapitalize: "off", autocorrect: "off", "aria-label": "Markdown source" }) as HTMLTextAreaElement;
   const status = h("div", { class: "code-status" });
-  const el = h("div", { class: "code-view code-view-md" }, h("div", { class: "code-box" }, area), status);
+  const note = h("p", { class: "view-note" }, "Editing the source. The page updates as you type.");
+  const el = h("div", { class: "code-view code-view-md" }, note, h("div", { class: "code-box" }, area), status);
 
   const refresh = () => {
     const { busy, error } = host.sourceState();
     const { readOnly, bound } = host.body();
+    note.hidden = readOnly || !bound;
     const parts: Array<HTMLElement | string> = [];
     if (readOnly) {
       parts.push(h("span", { class: "muted" }, "MDX blocks didn't line up with the source — the body is read-only here."));

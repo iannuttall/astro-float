@@ -130,6 +130,9 @@ const PAGE_STYLE = /* css */ `
 .astro-float-region button[data-danger] { opacity: 1; color: #ef6f6c; }
 .astro-float-region-error { display: inline-flex; align-items: center; gap: 5px; padding: 0 4px 0 8px; color: #ef6f6c; white-space: nowrap; }
 
+/* Live preview while typing source: a component block we can't re-render yet keeps its place. */
+.astro-float-island-placeholder { padding: 14px 18px; margin: 0 0 18px; border: 1px dashed color-mix(in srgb, currentColor 25%, transparent); border-radius: 6px; color: color-mix(in srgb, currentColor 55%, transparent); font-size: 0.85em; }
+
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-float-editing] [data-float-island] { cursor: default; user-select: none; -webkit-user-select: none; }
 [data-float-editing] [data-float-island] * { cursor: default; }
@@ -168,8 +171,7 @@ const PAGE_STYLE = /* css */ `
   user-select: none;
   -webkit-user-select: none;
 }
-@media (prefers-color-scheme: dark) {
-  .astro-float-datepicker {
+:root[data-float-theme="dark"] .astro-float-datepicker {
     --dp-bg: #15181c;
     --dp-line: #2a3038;
     --dp-fg: #e6e8eb;
@@ -179,7 +181,6 @@ const PAGE_STYLE = /* css */ `
     --dp-accent: #e6e8eb;
     --dp-accent-fg: #0f1114;
     --dp-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 12px 32px -12px rgba(0, 0, 0, 0.5);
-  }
 }
 @keyframes astro-float-dp-in { from { opacity: 0; transform: translateY(-2px); } }
 .astro-float-datepicker[data-above] { animation-name: astro-float-dp-in-up; }

@@ -43,8 +43,10 @@ export const STYLES = /* css */ `
   letter-spacing: -0.005em;
   font-feature-settings: "cv11", "ss01";
 }
+/* Dark: chosen from the *site's* colour scheme (background luminance / color-scheme) by Float,
+ * with the viewer's preference as the fallback when the page hasn't said. */
 @media (prefers-color-scheme: dark) {
-  .float {
+  .float:not([data-theme]) {
     --bg: #0f1114;
     --bg-elev: #15181c;
     --bg-input: #0b0d10;
@@ -64,6 +66,26 @@ export const STYLES = /* css */ `
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
     color-scheme: dark;
   }
+}
+.float[data-theme="dark"] {
+  --bg: #0f1114;
+  --bg-elev: #15181c;
+  --bg-input: #0b0d10;
+  --bg-hover: #1b1f24;
+  --bg-active: #22262c;
+  --fg: #e6e8eb;
+  --fg-muted: #8b93a1;
+  --fg-faint: #5c6470;
+  --line: #1f242a;
+  --line-strong: #2a3038;
+  --line-focus: #4a5260;
+  --accent: #e6e8eb;
+  --accent-fg: #0f1114;
+  --ok: #3ecf8e;
+  --warn: #e5a83b;
+  --err: #ef6f6c;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
 }
 
 .float *, .float *::before, .float *::after { box-sizing: border-box; }
@@ -157,7 +179,7 @@ export const STYLES = /* css */ `
 .status-actions { display: flex; align-items: center; gap: 4px; }
 .status-slot { display: flex; align-items: center; gap: 4px; min-width: 12px; min-height: 12px; justify-content: center; }
 .status-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--line-strong); transition: background 200ms ease; margin-right: 6px; }
-.status-dot[data-state="dirty"] { background: var(--warn); }
+.status-dot[data-state="dirty"], .status-dot[data-state="warning"] { background: var(--warn); }
 .status-dot[data-state="saving"] { background: var(--fg-faint); animation: float-pulse 900ms ease-in-out infinite; }
 .status-dot[data-state="saved"] { background: var(--ok); }
 .status-dot[data-state="error"], .status-dot[data-state="conflict"] { background: var(--err); }
@@ -448,6 +470,7 @@ export const STYLES = /* css */ `
 .code-error:empty { display: none; }
 .code-status { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12px; line-height: 1.45; border-top: 1px solid var(--line); }
 .code-error-inline { display: inline-flex; align-items: center; gap: 5px; color: var(--err); flex: 1; min-width: 0; }
+.view-note { margin: 0; padding: 7px 14px; font-size: 11.5px; line-height: 1.4; color: var(--fg-muted); border-bottom: 1px solid var(--line); }
 
 /* ---- footer: collection / entries ----------------------------------------------- */
 .foot-host { flex: none; }

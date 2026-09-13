@@ -2,7 +2,7 @@ import { api, type Collection, type EntryDoc, type MediaItem } from "../api";
 import { DatePicker } from "../datepicker";
 import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
-import { emptyValue, helpFor, inferField, type FieldDef } from "../schema";
+import { DATE_LIKE, emptyValue, helpFor, inferField, type FieldDef } from "../schema";
 import { autosize, describe, formatDateLabel, imageUrl } from "./util";
 
 /**
@@ -25,8 +25,6 @@ export interface Control {
   /** Short controls sit on the right of the label; the rest take the full width below it. */
   inline: boolean;
 }
-
-const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
 
 export function makeControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
   const control = buildControl(def, value, ctx);
@@ -140,17 +138,39 @@ function jsonControl(value: unknown, ctx: ControlCtx): Control {
 
 function numberControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
   let last: unknown = value;
-  const input = h("input", { class: "input input-number", type: "number", step: "any", min: def.min, max: def.max, value: typeof value === "number" ? String(value) : "", placeholder: "—" }) as HTMLInputElement;
+  const input = h("input", {
+    class: "input input-number",
+    type: "number",
+    step: def.integer ? "1" : "any",
+    inputmode: def.integer ? "numeric" : "decimal",
+    min: def.min,
+    max: def.max,
+    value: typeof value === "number" ? String(value) : "",
+    placeholder: "—",
+  }) as HTMLInputElement;
+  const keeping = () => (typeof last === "number" ? ` — keeping ${String(last)}.` : " — not written yet.");
+  const problem = (n: number): string | null => {
+    if (def.integer && !Number.isInteger(n)) return "Whole numbers only";
+    if (def.min != null && n < def.min) return `At least ${def.min}`;
+    if (def.max != null && n > def.max) return `At most ${def.max}`;
+    return null;
+  };
   input.addEventListener("input", () => {
     if (input.value === "") {
       if (typeof last === "number") {
         input.dataset.invalid = "";
-        ctx.note(`Empty — keeping ${String(last)} until you enter a number.`);
+        ctx.note(`Empty${keeping()}`);
       }
       return;
     }
     const n = Number(input.value);
     if (Number.isNaN(n)) return;
+    const why = problem(n);
+    if (why) {
+      input.dataset.invalid = "";
+      ctx.note(why + keeping());
+      return;
+    }
     delete input.dataset.invalid;
     ctx.note("");
     last = n;
@@ -280,24 +300,31 @@ function enumControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
   if (current && !options.includes(current)) options.push(current);
 
   if (options.length <= 4 && options.every((o) => o.length <= 14)) {
-    const buttons = options.map((opt) =>
+    // Optional enums get a "none" segment too, so they can be unset without falling back to a select.
+    const choices: Array<{ value: string | undefined; label: string }> = [...(def.required ? [] : [{ value: undefined, label: "—" }]), ...options.map((o) => ({ value: o, label: o }))];
+    const buttons = choices.map((c) =>
       h(
         "button",
         {
           class: "seg-btn",
           type: "button",
           role: "radio",
-          "aria-checked": String(opt === current),
+          "aria-checked": String((c.value ?? "") === current),
+          "aria-label": c.value === undefined ? "None" : undefined,
+          title: c.value === undefined ? "None" : undefined,
+          "data-value": c.value ?? "",
+          "data-none": c.value === undefined ? "" : null,
           onClick: () => {
-            paint(opt);
-            ctx.onChange(opt);
+            paint(c.value);
+            ctx.onChange(c.value);
           },
         },
-        opt,
+        c.label,
       ),
     );
     const paint = (v: unknown) => {
-      for (const b of buttons) b.setAttribute("aria-checked", String(b.textContent === String(v ?? "")));
+      const want = v == null ? "" : String(v);
+      for (const b of buttons) b.setAttribute("aria-checked", String((b.dataset.value ?? "") === want));
     };
     return { el: h("div", { class: "segmented", role: "radiogroup" }, buttons), inline: false, set: paint };
   }
@@ -314,22 +341,21 @@ function referenceControl(def: FieldDef, value: unknown, ctx: ControlCtx): Contr
   const target = ctx.collections().find((c) => c.name === def.collection);
   const entries = target?.entries ?? [];
   const current = value == null ? "" : typeof value === "object" && value && "id" in value ? String((value as { id: unknown }).id) : String(value);
-  const options = [
-    ...(def.required ? [] : [{ value: "", label: "—" }]),
-    ...entries.map((e) => ({ value: e.id, label: e.title === e.id ? e.id : `${e.title} · ${e.id}` })),
-  ];
-  if (current && !entries.some((e) => e.id === current)) options.push({ value: current, label: `${current} (missing)` });
+  const options = [...(def.required ? [] : [{ value: "", label: "—" }]), ...entries.map((e) => ({ value: e.id, label: e.title, title: e.id }))];
+  if (current && !entries.some((e) => e.id === current)) options.push({ value: current, label: `${current} (missing)`, title: current });
   const select = selectControl(options, current, (v) => ctx.onChange(v === "" ? undefined : v));
   if (!target) ctx.note(def.collection ? `No collection "${def.collection}" found.` : "");
   return select;
 }
 
-function selectControl(options: Array<{ value: string; label: string }>, current: string, onChange: (v: string) => void): Control {
+function selectControl(options: Array<{ value: string; label: string; title?: string }>, current: string, onChange: (v: string) => void): Control {
   const select = h(
     "select",
     { class: "input select", onChange: () => onChange(select.value) },
-    options.map((o) => h("option", { value: o.value, selected: o.value === current }, o.label)),
+    options.map((o) => h("option", { value: o.value, selected: o.value === current, title: o.title }, o.label)),
   ) as HTMLSelectElement;
+  select.title = options.find((o) => o.value === current)?.title ?? "";
+  select.addEventListener("change", () => (select.title = options.find((o) => o.value === select.value)?.title ?? ""));
   return {
     el: select,
     inline: true,
@@ -431,8 +457,8 @@ function imageControl(value: unknown, ctx: ControlCtx): Control {
     path.title = current;
     clear.hidden = !current;
   };
-  const choose = (src: string) => {
-    current = src;
+  const choose = (src: string | undefined) => {
+    current = src ?? "";
     picker.hidden = true;
     paint();
     ctx.onChange(src);
@@ -488,7 +514,7 @@ function imageControl(value: unknown, ctx: ControlCtx): Control {
 
   const upload = h("button", { class: "btn btn-sm", type: "button", onClick: () => file.click() }, icon("upload", 13), "Upload") as HTMLButtonElement;
   const pick = h("button", { class: "btn btn-sm", type: "button", onClick: () => void openPicker() }, icon("image", 13), "Choose");
-  const clear = h("button", { class: "btn btn-sm btn-ghost", type: "button", title: "Clear", "aria-label": "Clear image", onClick: () => choose("") }, icon("close", 12)) as HTMLButtonElement;
+  const clear = h("button", { class: "btn btn-sm btn-ghost", type: "button", title: "Clear", "aria-label": "Clear image", onClick: () => choose(undefined) }, icon("close", 12)) as HTMLButtonElement;
   paint();
 
   return {

@@ -7,6 +7,8 @@
  * schema, endpoint not there yet — `schemaFor()` infers a definition from the
  * values in the entry itself, marked `source: "inferred"`.
  */
+import { clone } from "./panel/util";
+
 export type FieldType =
   | "string"
   | "text" // long string: description-like, or z.string() with .max > 160 / key named description|summary|excerpt
@@ -35,6 +37,7 @@ export interface FieldDef {
   collection?: string; // reference
   min?: number;
   max?: number; // number / string length
+  integer?: boolean; // z.number().int()
 }
 
 export interface CollectionSchema {
@@ -43,8 +46,8 @@ export interface CollectionSchema {
   fields: FieldDef[];
 }
 
-/** `2026-09-01`, `2026-09-01T10:00:00Z`, `2026-09-01 10:00` … */
-const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
+/** `2026-09-01`, `2026-09-01T10:00:00Z`, `2026-09-01 10:00` … — a date we can put a picker on. */
+export const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
 const HAS_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
 const IMAGE_LIKE = /\.(png|jpe?g|gif|webp|avif|svg)$/i;
 const TEXT_KEYS = new Set(["description", "summary", "excerpt", "abstract", "intro", "lede"]);
@@ -197,6 +200,3 @@ export function emptyValue(def: FieldDef): unknown {
   }
 }
 
-function clone<T>(value: T): T {
-  return value === undefined ? value : JSON.parse(JSON.stringify(value));
-}
