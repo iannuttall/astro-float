@@ -7,6 +7,12 @@ import { h } from "../dom";
  * parsed on blur and whenever the tab is left; valid YAML replaces the same
  * draft the Fields view edits, invalid YAML keeps the text (and the last valid
  * draft), shows the error under the editor and puts a red dot on the tab.
+ *
+ * Long lines soft-wrap. The line numbers come from a mirror: a <pre> with the
+ * same text, font, width and padding sits under the (transparent) textarea, one
+ * block per logical line, and each block draws its number in the gutter at the
+ * start of its first visual row. Same text, same box → same wrapping, so the
+ * numbers stay put on resize and the mirror also gives the textarea its height.
  */
 export interface YamlHost {
   draft(): Frontmatter;
@@ -25,10 +31,10 @@ export interface YamlView {
 }
 
 export function createYamlView(host: YamlHost): YamlView {
-  const gutter = h("pre", { class: "code-gutter", "aria-hidden": "true" });
-  const ta = h("textarea", { class: "code code-yaml", spellcheck: false, autocapitalize: "off", autocorrect: "off", wrap: "off", "aria-label": "Frontmatter as YAML" }) as HTMLTextAreaElement;
+  const mirror = h("pre", { class: "code-mirror", "aria-hidden": "true" });
+  const ta = h("textarea", { class: "code code-yaml", spellcheck: false, autocapitalize: "off", autocorrect: "off", "aria-label": "Frontmatter as YAML" }) as HTMLTextAreaElement;
   const error = h("div", { class: "code-error" });
-  const el = h("div", { class: "code-view" }, h("div", { class: "code-box" }, gutter, ta), error);
+  const el = h("div", { class: "code-view" }, h("div", { class: "code-box code-box-mirrored" }, mirror, ta), error);
 
   let lastText = "";
   let errored = false;
@@ -40,19 +46,19 @@ export function createYamlView(host: YamlHost): YamlView {
       host.onErrorChange(errored);
     }
   };
-  const numbers = () => {
-    const n = Math.max(1, ta.value.split("\n").length);
-    gutter.textContent = Array.from({ length: n }, (_, i) => String(i + 1)).join("\n");
-    gutter.scrollTop = ta.scrollTop;
+  /** One block per logical line; an empty line still needs a row's worth of height. */
+  const paintMirror = () => {
+    const lines = ta.value.split("\n");
+    mirror.textContent = "";
+    for (const line of lines) mirror.appendChild(h("span", { class: "code-line" }, line === "" ? " " : line));
   };
-  ta.addEventListener("input", numbers);
-  ta.addEventListener("scroll", () => (gutter.scrollTop = ta.scrollTop));
+  ta.addEventListener("input", paintMirror);
   ta.addEventListener("blur", () => commit());
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Tab") {
       e.preventDefault();
       ta.setRangeText("  ", ta.selectionStart, ta.selectionEnd, "end");
-      numbers();
+      paintMirror();
     }
   });
 
@@ -85,7 +91,7 @@ export function createYamlView(host: YamlHost): YamlView {
     if (text === lastText && ta.value === text) return;
     lastText = text;
     if (ta.value !== text) ta.value = text;
-    numbers();
+    paintMirror();
   };
 
   return {

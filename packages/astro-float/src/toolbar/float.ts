@@ -822,7 +822,7 @@ class Float {
       text: "",
       tone: "",
       dot,
-      showSave: dirty && !busy && !this.prefs.autosave && this.status !== "conflict" && this.status !== "error",
+      showSave: dirty && !busy && this.status !== "conflict" && this.status !== "error",
       showDiscard: dirty && !busy,
       actions: [],
     };
@@ -847,8 +847,8 @@ class Float {
         view.text = "Saved";
         break;
       default:
-        if (dirty) view.text = this.prefs.autosave ? "Unsaved · autosave on" : "Unsaved changes";
-        else view.text = this.doc ? (this.savedAt ? `Saved ${formatTime(this.savedAt)}` : "Up to date") : "";
+        if (dirty) view.text = "Unsaved changes";
+        else view.text = this.doc ? (this.savedAt ? `${this.prefs.autosave ? "Autosaved" : "Saved"} ${formatTime(this.savedAt)}` : "Up to date") : "";
     }
     this.panel.renderStatus(view);
   }
