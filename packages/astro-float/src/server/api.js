@@ -8,6 +8,7 @@ import {
   saveMedia,
   writeEntry,
 } from "./content.js";
+import { readCollectionSchema } from "./schema.js";
 
 export const API_BASE = "/__float/api";
 
@@ -20,6 +21,7 @@ const LOOPBACK_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
  * @param {import('vite').ViteDevServer} server
  * @param {{
  *   root: string,
+ *   server: import('vite').ViteDevServer,
  *   contentDir: string,
  *   collections: Record<string, { dir?: string, route?: string }>,
  *   allowRemote: boolean,
@@ -38,6 +40,13 @@ export function attachFloatApi(server, ctx) {
 
       if (method === "GET" && url.pathname === "/collections") {
         return json(res, 200, { collections: await discoverCollections(ctx) });
+      }
+
+      if (method === "GET" && url.pathname === "/schema") {
+        const { collection: name } = requireParams(url, ["collection"]);
+        const collection = (await discoverCollections(ctx)).find((c) => c.name === name);
+        if (!collection) throw httpError(404, `unknown collection "${name}"`);
+        return json(res, 200, await readCollectionSchema(ctx, collection));
       }
 
       if (method === "GET" && url.pathname === "/entry") {

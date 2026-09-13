@@ -39,6 +39,8 @@ export interface EntryDoc {
   lead: string;
   blocks: SourceBlock[];
   hash: string;
+  /** The collection's schema (`source: "zod"` from content.config.ts, `"inferred"` from values); null only if it couldn't be read. */
+  schema: CollectionSchema | null;
 }
 
 export interface SaveResult {
@@ -95,7 +97,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 export const api = {
   collections: () => request<{ collections: Collection[] }>("/collections").then((r) => r.collections),
 
-  /** Field definitions for a collection, derived from its Zod schema (404 until the server learns to). */
+  /** Field definitions for a collection, derived from its Zod schema (see `toolbar/schema.ts`). */
   schema: (collection: string) => request<CollectionSchema>(`/schema?collection=${encodeURIComponent(collection)}`),
 
   entry: (collection: string, id: string) =>

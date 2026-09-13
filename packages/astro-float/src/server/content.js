@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { splitBlocks } from "./blocks.js";
+import { readCollectionSchema, templateFromSchema } from "./schema.js";
 
 export const ENTRY_EXTS = new Set([".md", ".mdx", ".markdown"]);
 export const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg"]);
@@ -176,6 +177,8 @@ export async function readEntry(ctx, collectionName, id) {
     body,
     ...splitBlocks(body, { mdx: isMdx(abs) }),
     hash: hashOf(raw),
+    // Field definitions for the panel: from the Zod schema (via Astro's generated JSON Schema) or inferred from values.
+    schema: await readCollectionSchema(ctx, collection),
   };
 }
 
@@ -198,13 +201,14 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
 }
 
 /**
- * Build a sensible frontmatter skeleton for a new entry by looking at what the
- * collection's existing entries use. Zod schemas in content.config.ts are not
- * consulted (yet) — this is inference, not validation.
+ * Build a frontmatter skeleton for a new entry. The collection's schema (when
+ * Astro has written one) comes first: defaults and required fields in schema
+ * order. Anything the existing entries use on top of that is inferred from
+ * their values, so a collection without a schema still gets a sensible start.
  */
 export async function inferFrontmatterTemplate(ctx, collection) {
   /** @type {Record<string, unknown>} */
-  const template = {};
+  const template = templateFromSchema(await readCollectionSchema(ctx, collection));
   const today = new Date().toISOString().slice(0, 10);
   for (const e of collection.entries.slice(0, 8)) {
     try {

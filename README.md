@@ -56,7 +56,7 @@ A flush column on the right edge — full height, no card, no gap. Cool neutral 
 
 - **Header** — the entry, status, **Discard** / **Save**, and a **hide** button. Hiding tucks the sidebar away while editing carries on; a small tab at the edge brings it back and carries the status dot / Save in the meantime. Only the pencil turns Edit off.
 - **Fields** — the whole frontmatter as a form, in file order. Fields that are also on the page (title, description, date in the demo) say so and stay in sync both ways. Controls inferred from values: text, long text, number, date (calendar), tags, boolean, JSON. `slug` is shown read-only, never edited. Add / remove fields. Nothing here is a trap: any field that differs from disk gets a **↺** to put it back; a removed field stays listed with **Restore** until you save; an emptied number is never written — the last real value is kept (with a note) until you enter a valid one (a date can't be emptied: the calendar only ever yields a real day).
-- **Collection** — entries in the selected collection (dropdown if several), current one marked; **New entry** asks for a title only and shows the derived path; **New collection** creates `src/content/<name>/`, registers it in `content.config.ts`, seeds a first entry and opens it.
+- **Collection** — entries in the selected collection (dropdown if several), current one marked; **New entry** asks for a title only and shows the derived path (its frontmatter starts from the collection's schema — defaults and required fields in schema order — topped up from what sibling entries use); **New collection** creates `src/content/<name>/`, registers it in `content.config.ts`, seeds a first entry and opens it.
 - **Settings** — autosave, a cheat-sheet, the file path.
 
 <p>
@@ -136,7 +136,8 @@ A collection also needs pages. The demo ships generic `src/pages/[collection]/in
 - **Source view.** The body's rendered container is hidden and a textarea with the current Markdown takes its place. Leaving it (or saving) writes that text and swaps in Astro's fresh render. Saves are serialized, so *Rendered* during an in-flight autosave waits for it rather than dead-clicking; a failed save keeps the source view with the error and a Discard; a saved-but-not-refreshed page falls back to the DOM it had, with a message. The page-side overlays (region control, bubble, island bar) survive the swap — they're dev chrome, not page content.
 - **Icons.** One set: Lucide paths at 1.75 stroke, round caps, 14–15px, in `toolbar/icons.ts`. Sidebar, bubble, region control and island bar all draw from it.
 - **HTML→Markdown** (`src/toolbar/html-to-md.ts`) covers what remark-rehype + Shiki emit: ATX headings, paragraphs, tight/loose/nested lists, task lists, links + titles, images (Vite `/@fs/…` and Astro `/_image?href=…` URLs mapped back to `./relative`), inline code, fenced code with language, blockquotes, rules, GFM tables with alignment, strong / em / strike, hard breaks. Unknown elements pass through as raw HTML.
-- **API.** `astro:server:setup` mounts `/__float/api/*`: collections, read/write entry, create entry, create collection, upload media. Localhost-only (host + socket address), same-origin, custom header on mutations, paths confined to the collection dir, image extension allowlist. Saves carry the file hash as loaded; a 409 gives you Reload / Overwrite.
+- **Schema.** `GET /__float/api/schema?collection=<name>` describes the collection's fields (`src/toolbar/schema.ts`: key, humanized label, type, description, required, default, enum options, nested fields, array item, reference target, min/max). Source `zod`: `astro sync` (run by `astro dev` at start-up and on every config change) writes a JSON Schema per collection to `.astro/collections/<name>.schema.json`; `src/server/schema.js` reads that and maps it — `z.coerce.date()` → date, `z.enum()` → enum, `z.array(z.string())` → tags, nested `z.object()` → object, other arrays → array, `.optional()` / `.default()` / `.describe()` / `.nullable()` / `.min()` / `.max()` carried through. Two helpers don't survive the JSON round trip — `image()` comes out as a plain string and `reference("blog")` loses its target — so the config is also loaded through Vite (`ssrLoadModule`, as Astro does) and the Zod shapes are probed: a stub `image()` marks its fields, and running Astro's `reference()` transform on a probe id answers with the collection name. If the module can't be loaded, a literal source scan for `key: image()` / `key: reference("name")` fills the same gap. Source `inferred`: no schema, types guessed from the entries' values.
+- **API.** `astro:server:setup` mounts `/__float/api/*`: collections, schema, read/write entry (the read carries the schema too), create entry, create collection, upload media. Localhost-only (host + socket address), same-origin, custom header on mutations, paths confined to the collection dir, image extension allowlist. Saves carry the file hash as loaded; a 409 gives you Reload / Overwrite.
 - **No reload on save.** Astro's content layer full-reloads after a content change. `sync-gate.js` swallows that reload for a few seconds after a Float write and uses it as the "synced" signal, so save/create responses return once the store has the new content. IDE edits still reload as normal.
 
 ## Known round-trip limits (v0)
@@ -154,7 +155,7 @@ Only blocks you edit are re-serialized, so these only bite inside a paragraph yo
 ## Intentionally out of scope for v0
 
 - **Component picker** — browse the project's components and insert one from the sidebar. Islands are the groundwork; the catalog/insert UI is the next pass.
-- Zod schema awareness for Fields (types are inferred from values); the starter schema for new collections is fixed
+- Schema-driven validation before save (the sidebar flags required/unknown/mismatched fields but never blocks a write — Astro reports the error); the starter schema for new collections is fixed
 - Renaming slugs, deleting entries or collections, git operations
 - JSON/YAML data collections, remote loaders, live-loader / `<ClientRouter />` pages
 - Auth, multi-user, anything outside `astro dev`
@@ -167,16 +168,19 @@ packages/astro-float/   the integration (what you'd publish to npm)
   src/server/api.js       /__float/api/* endpoints (localhost-only JSON)
   src/server/blocks.js    Markdown/MDX → top-level source blocks (mdast, with offsets, islands flagged)
   src/server/collections.js  create a collection: dir, content.config.ts wiring, seed entry
+  src/server/schema.js    field definitions: Astro's .astro/collections/*.schema.json + image()/reference() probed from the loaded config, or inferred from values
   src/server/content.js   frontmatter parse/serialize, collection discovery, entries, uploads
   src/server/sync-gate.js swallow Astro's post-save reload, signal "content synced"
   src/toolbar/app.ts      defineToolbarApp(): the Edit toggle
   src/toolbar/float.ts    edit-mode lifecycle, the sidebar, source view, soft navigation
   src/toolbar/editor.ts   on-page contenteditable controller, block alignment, islands, page styles
+  src/toolbar/schema.ts   the shared FieldDef / CollectionSchema contract (what /schema returns)
   src/toolbar/fields.ts   on-page frontmatter fields (title, description, …)
   src/toolbar/overlays.ts region control (copy / source) and the selection bubble
   src/toolbar/html-to-md.ts  HTML → Markdown for edited blocks
   src/toolbar/styles.ts   sidebar styles (Astro-toolbar palette); mobile sheet
-demo/                   a minimal Astro 5 blog (+ one .mdx post) + generic [collection] routes
+demo/                   a minimal Astro 5 blog (+ one .mdx post), a `notes` collection whose schema
+                        uses z.enum / z.number / .optional / .describe / image() / reference("blog"), + generic [collection] routes
 docs/                   screenshots (docs/mobile/ for the phone set)
 ```
 
