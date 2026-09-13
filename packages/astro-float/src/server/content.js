@@ -209,7 +209,6 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
   const saved = parseDocument(next);
   const result = { file: entry.file, body: saved.body, ...splitBlocks(saved.body, { mdx: isMdx(abs) }) };
   if (next === current) return { ...result, hash: hashOf(current), changed: false };
-  ctx.gate?.ownWrite?.(abs);
   await fs.writeFile(abs, next, "utf8");
   return { ...result, hash: hashOf(next), changed: true };
 }
@@ -291,7 +290,6 @@ export async function createEntry(ctx, { collection: collectionName, slug, title
   const { issues } = await validateDocument(ctx, collection.name, document, { entryDir: path.dirname(abs) });
   if (issues.length) throw validationError(issues);
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  ctx.gate?.ownWrite?.(abs);
   await fs.writeFile(abs, document, { encoding: "utf8", flag: "wx" });
 
   return {

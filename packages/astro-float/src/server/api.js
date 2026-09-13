@@ -62,6 +62,13 @@ export function attachFloatApi(server, ctx) {
 
     try {
       guard(req, ctx);
+      ctx.gate.touch();
+
+      if (method === "POST" && url.pathname === "/session") {
+        const payload = await readJson(req, 4096);
+        ctx.gate.session(payload.editing === true);
+        return json(res, 200, { editing: ctx.gate.isEditing() });
+      }
 
       if (method === "GET" && url.pathname === "/collections") {
         return json(res, 200, { collections: await discoverCollections(ctx) });
