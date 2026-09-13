@@ -1,4 +1,5 @@
 import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
+import { isMediaFile, mediaMarkdown } from "./embeds";
 import { h } from "./dom";
 import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
 import { DatePicker } from "./datepicker";
@@ -859,29 +860,29 @@ class Float {
     this.panel.renderStatus(view);
   }
 
-  // ---- images (drop / paste on the prose only) ----------------------------------------
+  // ---- images and video (drop / paste on the prose only) ------------------------------
 
   private placeImage(item: MediaItem, range: Range | null) {
     if (this.sourceArea) {
       const area = this.sourceArea;
-      const snippet = `\n![${altFrom(item.name)}](${item.src})\n`;
+      const snippet = `\n${mediaMarkdown(item)}\n`;
       area.setRangeText(snippet, area.selectionStart, area.selectionEnd, "end");
       this.sourceDraft = area.value;
       this.touched();
     } else if (this.page.bound && !this.bodyReadOnly) {
-      this.page.insertImage(item.url, altFrom(item.name), range);
+      this.page.insertMedia(item, range);
     } else if (!this.bodyReadOnly) {
       const sep = this.draftBody === "" || this.draftBody.endsWith("\n\n") ? "" : this.draftBody.endsWith("\n") ? "\n" : "\n\n";
-      this.draftBody = `${this.draftBody}${sep}![${altFrom(item.name)}](${item.src})\n`;
+      this.draftBody = `${this.draftBody}${sep}${mediaMarkdown(item)}\n`;
       this.touched();
     }
   }
 
   private async uploadAll(files: File[], range: Range | null) {
     if (!this.doc) return;
-    const images = files.filter((f) => f.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|svg)$/i.test(f.name));
+    const images = files.filter(isMediaFile);
     if (!images.length) {
-      this.setStatus("error", "Only images can be dropped here");
+      this.setStatus("error", "Only images and videos can be dropped here");
       return;
     }
     this.setStatus("saving");

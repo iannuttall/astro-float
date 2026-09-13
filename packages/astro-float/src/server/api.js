@@ -4,6 +4,7 @@ import {
   discoverCollections,
   httpError,
   listMedia,
+  mediaKindOf,
   readEntry,
   saveMedia,
   writeEntry,
@@ -26,6 +27,8 @@ const LOOPBACK_ADDRS = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
  *   collections: Record<string, { dir?: string, route?: string }>,
  *   allowRemote: boolean,
  *   maxUploadBytes: number,
+ *   maxVideoBytes: number,
+ *   publicDir?: string,
  *   gate: ReturnType<import('./sync-gate.js').createSyncGate>,
  *   logger: import('astro').AstroIntegrationLogger,
  * }} ctx
@@ -95,11 +98,13 @@ export function attachFloatApi(server, ctx) {
 
       if (method === "POST" && url.pathname === "/media") {
         const { collection, id, name } = requireParams(url, ["collection", "id", "name"]);
-        const buffer = await readRaw(req, ctx.maxUploadBytes);
+        const kind = mediaKindOf(name);
+        if (!kind) throw httpError(415, `unsupported media type "${name}"`);
+        const buffer = await readRaw(req, kind === "video" ? ctx.maxVideoBytes : ctx.maxUploadBytes);
         if (!buffer.length) throw httpError(400, "empty upload");
         ctx.gate.quiet();
         const saved = await saveMedia(ctx, collection, id, name, buffer);
-        ctx.logger.info(`saved image ${saved.file}`);
+        ctx.logger.info(`saved ${kind} ${saved.file}`);
         return json(res, 201, saved);
       }
 

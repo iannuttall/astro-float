@@ -7,6 +7,15 @@ import { readCollectionSchema, templateFromSchema } from "./schema.js";
 
 export const ENTRY_EXTS = new Set([".md", ".mdx", ".markdown"]);
 export const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg"]);
+export const VIDEO_EXTS = new Set([".mp4", ".webm", ".mov", ".m4v"]);
+
+/** "image" | "video" | null for a file name. */
+export function mediaKindOf(filename) {
+  const ext = path.extname(String(filename ?? "")).toLowerCase();
+  if (IMAGE_EXTS.has(ext)) return "image";
+  if (VIDEO_EXTS.has(ext)) return "video";
+  return null;
+}
 
 const FRONTMATTER_RE = /^(?:\uFEFF)?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
@@ -294,14 +303,43 @@ export async function listMedia(ctx, collectionName, id) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Save a dropped / pasted file for an entry.
+ *
+ * Images go next to the entry and are referenced as `./photo.png` — Astro's
+ * Markdown pipeline resolves and optimises those. Videos can't live there:
+ * Astro only collects Markdown *image* nodes, so a raw `<video src="./clip.mp4">`
+ * would 404. They go under `public/media/<collection>/<id>/` and are referenced
+ * by their public URL, which works in dev and in the build with no config.
+ */
 export async function saveMedia(ctx, collectionName, id, filename, buffer) {
-  const { abs, entry, collectionDir } = await resolveEntry(ctx, collectionName, id);
+  const { abs, entry, collection, collectionDir } = await resolveEntry(ctx, collectionName, id);
   const ext = path.extname(filename).toLowerCase();
-  if (!IMAGE_EXTS.has(ext)) throw httpError(415, `unsupported image type "${ext || filename}"`);
+  const kind = mediaKindOf(filename);
+  if (!kind) throw httpError(415, `unsupported media type "${ext || filename}"`);
 
-  const base = slugify(path.basename(filename, ext)) || "image";
-  const dir = mediaDirFor(abs, entry);
-  if (!isInside(collectionDir, dir) && dir !== collectionDir) throw httpError(400, "bad media path");
+  const base = slugify(path.basename(filename, ext)) || kind;
+  let dir;
+  let describe;
+  if (kind === "video") {
+    const publicDir = path.resolve(ctx.root, ctx.publicDir ?? "public");
+    const mediaRoot = path.join(publicDir, "media");
+    dir = path.join(mediaRoot, collection.name, ...entry.id.split("/"));
+    if (!isInside(mediaRoot, dir)) throw httpError(400, "bad media path");
+    // `src` is the public URL that belongs in the Markdown; `url` previews the
+    // file right away (Vite's public-file list only picks the write up a beat later).
+    describe = (file) => ({
+      src: "/" + path.relative(publicDir, file).split(path.sep).map(encodeURIComponent).join("/"),
+      url: "/@fs" + file.split(path.sep).join("/"),
+    });
+  } else {
+    dir = mediaDirFor(abs, entry);
+    if (!isInside(collectionDir, dir) && dir !== collectionDir) throw httpError(400, "bad media path");
+    describe = (file) => ({
+      src: "./" + path.relative(path.dirname(abs), file).split(path.sep).join("/"),
+      url: "/@fs" + file.split(path.sep).join("/"),
+    });
+  }
   await fs.mkdir(dir, { recursive: true });
 
   let candidate = `${base}${ext}`;
@@ -312,8 +350,8 @@ export async function saveMedia(ctx, collectionName, id, filename, buffer) {
 
   return {
     name: candidate,
-    src: "./" + path.relative(path.dirname(abs), file).split(path.sep).join("/"),
-    url: "/@fs" + file.split(path.sep).join("/"),
+    kind,
+    ...describe(file),
     file: path.relative(ctx.root, file).split(path.sep).join("/"),
   };
 }
