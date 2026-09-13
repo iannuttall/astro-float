@@ -82,6 +82,7 @@ export class Pill {
 
   // status
   private dot: HTMLElement;
+  private word: HTMLElement;
   private headActions: HTMLElement;
   private saveButton: HTMLButtonElement;
   private discardButton: HTMLButtonElement;
@@ -93,6 +94,7 @@ export class Pill {
     private host: PillHost,
   ) {
     this.dot = h("span", { class: "pill-dot", "data-state": "idle" });
+    this.word = h("span", { class: "pill-word", "aria-hidden": "true" }, "Saved");
     this.saveButton = h(
       "button",
       { class: "btn btn-sm btn-primary", type: "button", hidden: true, "data-tip": "Save · ⌘S", onClick: () => void this.host.save() },
@@ -134,8 +136,10 @@ export class Pill {
         onMousedown: keepPageSelection,
         onClick: () => (this.isOpen ? this.close() : this.open()),
       },
+      this.word,
       this.dot,
     ) as HTMLButtonElement;
+    this.pillEl.dataset.state = this.dot.dataset.state ?? "idle";
 
     // ---- the popover
     this.yamlToggle = h(
@@ -381,6 +385,8 @@ export class Pill {
     if (key === this.lastKey) return;
     this.lastKey = key;
     this.dot.dataset.state = view.dot;
+    // Green says "Saved" next to the dot, growing leftwards from the pill's fixed right edge; grey and orange stay dot-only.
+    if (this.pillEl) this.pillEl.dataset.state = view.dot;
     const tip = view.dot === "dirty" ? "Unsaved changes · ⌘S to save" : view.text || (this.host.doc() ? "Up to date" : "Float");
     if (this.pillEl) {
       this.pillEl.setAttribute("data-tip", tip);

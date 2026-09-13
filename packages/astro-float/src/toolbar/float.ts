@@ -26,7 +26,10 @@ export interface FloatHost {
 }
 
 const PREFS_KEY = "astro-float:prefs";
-const AUTOSAVE_DELAY = 800;
+/** Autosave writes 2s after the last keystroke; every keystroke restarts the clock, so it never fires mid-typing. */
+const AUTOSAVE_DELAY = 2000;
+/** How long the pill stays green (and says "Saved") after a successful write. */
+const SAVED_FOR = 4000;
 
 export function mountFloat(canvas: ShadowRoot, host: FloatHost): FloatHandle {
   const float = new Float(canvas, host);
@@ -839,7 +842,7 @@ class Float {
         window.clearTimeout(this.savedTimer);
         this.savedTimer = window.setTimeout(() => {
           if (this.status === "saved") this.setStatus("idle");
-        }, 2000);
+        }, SAVED_FOR);
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) this.setStatus("conflict");
