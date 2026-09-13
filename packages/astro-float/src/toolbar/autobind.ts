@@ -84,6 +84,12 @@ function isChrome(el: Element) {
   return (el.tagName === "HEADER" || el.tagName === "FOOTER") && !el.parentElement?.closest("main, article");
 }
 
+/** Inside dev tooling, site chrome or an interactive element: never a field. */
+export function offLimits(el: Element) {
+  for (let node: Element | null = el; node && node !== document.body; node = node.parentElement) if (isChrome(node)) return true;
+  return !!el.closest(NO_FIELD_SELECTOR);
+}
+
 /** Every element of the page that is not chrome, in document order. */
 function* walk(root: Element): Generator<HTMLElement> {
   for (const child of Array.from(root.children)) {
@@ -192,6 +198,116 @@ export function unmarkAuto(kind?: "body" | "field") {
   for (const el of Array.from(document.querySelectorAll<HTMLElement>(selector))) {
     el.removeAttribute(el.getAttribute(AUTO_ATTR) === "body" ? "data-float-body" : "data-float-field");
     el.removeAttribute(AUTO_ATTR);
+  }
+}
+
+// ---- selector memory --------------------------------------------------------------
+
+const MEMORY_PREFIX = "astro-float:bindings:";
+const MEMORY_DEPTH = 6;
+const MEMORY_STRIKES = 2;
+
+/**
+ * A selector that should find `el` again on a sibling page of the same
+ * layout: its id, else a data attribute, else tag + classes up from `el` to
+ * the nearest article / main (at most 6 levels). Null unless it is unique.
+ */
+export function stableSelector(el: HTMLElement): string | null {
+  const unique = (sel: string) => {
+    try {
+      const hits = document.querySelectorAll(sel);
+      return hits.length === 1 && hits[0] === el;
+    } catch {
+      return false;
+    }
+  };
+  const tag = el.tagName.toLowerCase();
+  if (el.id && unique(`#${CSS.escape(el.id)}`)) return `#${CSS.escape(el.id)}`;
+  for (const attr of Array.from(el.attributes)) {
+    if (!attr.name.startsWith("data-") || /^data-(astro|float)-/.test(attr.name)) continue;
+    const sel = `${tag}[${attr.name}="${attr.value.replace(/["\\]/g, "\\$&")}"]`;
+    if (unique(sel)) return sel;
+  }
+  const parts: string[] = [];
+  for (let node: HTMLElement | null = el, depth = 0; node && depth < MEMORY_DEPTH; node = node.parentElement, depth++) {
+    const root = node.matches("article, main, body");
+    let part = node.tagName.toLowerCase();
+    if (!root) {
+      part += Array.from(node.classList)
+        .filter((c) => !/^(astro|float)-/.test(c))
+        .map((c) => `.${CSS.escape(c)}`)
+        .join("");
+      const parent = node.parentElement;
+      if (parent) {
+        const sameTag = Array.from(parent.children).filter((s) => s.tagName === node!.tagName);
+        const twins = sameTag.filter((s) => s.className === node!.className);
+        if (twins.length > 1) part += `:nth-of-type(${sameTag.indexOf(node) + 1})`;
+      }
+    }
+    parts.unshift(part);
+    if (root) break;
+  }
+  const sel = parts.join(" > ");
+  return unique(sel) ? sel : null;
+}
+
+interface Remembered {
+  selector: string;
+  fails: number;
+}
+
+/**
+ * Where a collection's fields sat on the pages we have seen, keyed by field,
+ * in localStorage. On a later page of the same collection whose value is
+ * empty (or doesn't match any text), the remembered element is the field.
+ * An entry that fails twice in a row is forgotten.
+ */
+export class BindingMemory {
+  private map: Record<string, Remembered>;
+  private storageKey: string;
+
+  constructor(collection: string) {
+    this.storageKey = MEMORY_PREFIX + collection;
+    try {
+      this.map = JSON.parse(localStorage.getItem(this.storageKey) ?? "{}") ?? {};
+    } catch {
+      this.map = {};
+    }
+  }
+
+  get(key: string): string | null {
+    return this.map[key]?.selector ?? null;
+  }
+
+  /** A field bound by text: note where it was. */
+  remember(key: string, el: HTMLElement) {
+    const selector = stableSelector(el);
+    if (!selector) return;
+    if (this.map[key]?.selector !== selector || this.map[key].fails) this.write({ ...this.map, [key]: { selector, fails: 0 } });
+  }
+
+  hit(key: string) {
+    const entry = this.map[key];
+    if (entry?.fails) this.write({ ...this.map, [key]: { ...entry, fails: 0 } });
+  }
+
+  miss(key: string) {
+    const entry = this.map[key];
+    if (!entry) return;
+    const next = { ...this.map };
+    if (entry.fails + 1 >= MEMORY_STRIKES) delete next[key];
+    else next[key] = { ...entry, fails: entry.fails + 1 };
+    this.write(next);
+  }
+
+  private write(next: Record<string, Remembered>) {
+    this.map = next;
+    try {
+      if (Object.keys(next).length) localStorage.setItem(this.storageKey, JSON.stringify(next));
+      else localStorage.removeItem(this.storageKey);
+    } catch {
+      /* storage full or blocked: memory is a convenience */
+    }
   }
 }
 

@@ -1,4 +1,5 @@
 import { defineToolbarApp } from "astro/toolbar";
+import { api } from "./api";
 import { mountFloat, type FloatHandle } from "./float";
 
 const EDIT_KEY = "astro-float:edit";
@@ -10,6 +11,21 @@ const EDIT_KEY = "astro-float:edit";
  */
 let float: FloatHandle | null = null;
 
+/**
+ * The server-side edit session: while it's on, an outside change to the entry
+ * file doesn't reload the page (see `api.session`). Any API call refreshes its
+ * 60 s TTL; this timer covers a long pause with a dirty draft.
+ */
+let keepAlive: number | null = null;
+function setSession(editing: boolean) {
+  if (keepAlive !== null) {
+    window.clearInterval(keepAlive);
+    keepAlive = null;
+  }
+  void api.session(editing).catch(() => {});
+  if (editing) keepAlive = window.setInterval(() => void api.session(true).catch(() => {}), 30_000);
+}
+
 export default defineToolbarApp({
   init(canvas, app) {
     float = mountFloat(canvas, {
@@ -19,6 +35,7 @@ export default defineToolbarApp({
     app.onToggled(({ state }) => {
       if (state) sessionStorage.setItem(EDIT_KEY, "1");
       else sessionStorage.removeItem(EDIT_KEY);
+      setSession(state);
       void float?.setEditing(state);
     });
 

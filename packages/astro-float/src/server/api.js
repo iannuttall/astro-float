@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { createCollection } from "./collections.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "./content.js";
 import { createBlockRenderer } from "./render.js";
 import { readCollectionSchema } from "./schema.js";
+import { validateDocument } from "./validate.js";
 
 export const API_BASE = "/__float/api";
 
@@ -60,6 +62,13 @@ export function attachFloatApi(server, ctx) {
 
     try {
       guard(req, ctx);
+      ctx.gate.touch();
+
+      if (method === "POST" && url.pathname === "/session") {
+        const payload = await readJson(req, 4096);
+        ctx.gate.session(payload.editing === true);
+        return json(res, 200, { editing: ctx.gate.isEditing() });
+      }
 
       if (method === "GET" && url.pathname === "/collections") {
         return json(res, 200, { collections: await discoverCollections(ctx) });
@@ -70,6 +79,32 @@ export function attachFloatApi(server, ctx) {
         const collection = (await discoverCollections(ctx)).find((c) => c.name === name);
         if (!collection) throw httpError(404, `unknown collection "${name}"`);
         return json(res, 200, await readCollectionSchema(ctx, collection));
+      }
+
+      if (method === "GET" && url.pathname === "/diagnose") {
+        const { collection: name } = requireParams(url, ["collection"]);
+        const id = url.searchParams.get("id");
+        const collection = (await discoverCollections(ctx)).find((c) => c.name === name);
+        if (!collection) throw httpError(404, `unknown collection "${name}"`);
+        const entries = id ? collection.entries.filter((e) => e.id === id) : collection.entries;
+        if (id && !entries.length) throw httpError(404, `no entry "${id}" in "${name}"`);
+        const reports = [];
+        let schema = "inferred";
+        let strict = false;
+        for (const entry of entries) {
+          const abs = path.resolve(ctx.root, entry.file);
+          const report = await validateDocument(ctx, name, await fs.readFile(abs, "utf8"), { entryDir: path.dirname(abs) });
+          schema = report.schema;
+          strict = report.strict;
+          reports.push({ id: entry.id, file: entry.file, issues: report.issues });
+        }
+        if (!entries.length) {
+          const empty = await validateDocument(ctx, name, "---\n---\n");
+          schema = empty.schema;
+          strict = empty.strict;
+        }
+        if (id) return json(res, 200, { schema, strict, issues: reports[0].issues });
+        return json(res, 200, { schema, strict, entries: reports });
       }
 
       if (method === "GET" && url.pathname === "/entry") {
@@ -141,7 +176,9 @@ export function attachFloatApi(server, ctx) {
     } catch (err) {
       const status = typeof err?.status === "number" ? err.status : 500;
       if (status >= 500) ctx.logger.error(err?.stack ?? String(err));
-      return json(res, status, { error: err?.message ?? "unknown error" });
+      const body = { error: err?.message ?? "unknown error" };
+      if (Array.isArray(err?.issues)) body.issues = err.issues;
+      return json(res, status, body);
     }
   });
 }

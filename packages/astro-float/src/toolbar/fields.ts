@@ -1,6 +1,6 @@
-import { FieldIndex, chipPrefix, matchChips, normalizeText as normalize, unmarkAuto } from "./autobind";
+import { BindingMemory, FieldIndex, chipPrefix, matchChips, normalizeText as normalize, offLimits, unmarkAuto } from "./autobind";
 import { DatePicker } from "./datepicker";
-import type { CollectionSchema, FieldDef } from "./schema";
+import { humanize, type CollectionSchema, type FieldDef } from "./schema";
 
 /**
  * Frontmatter fields rendered on the page become editable in place. An
@@ -25,6 +25,10 @@ import type { CollectionSchema, FieldDef } from "./schema";
  *   checked against the schema (min / max / integer) before it reaches the draft.
  * - Enums (schema options) bind like strings but open a small menu of the
  *   options instead of taking a caret.
+ * - A string whose value is empty has no text to match. Where the same field
+ *   sat on another page of the collection is remembered (see `BindingMemory`);
+ *   that element is bound when it is there and empty (or prints the value),
+ *   and shows a muted placeholder until something is typed.
  *
  * Booleans, images, objects and references stay panel-only.
  */
@@ -47,7 +51,8 @@ type Binding =
   | { kind: "date"; el: HTMLElement; format: (iso: string) => string; last: string; suffix: string }
   | { kind: "tags"; el: HTMLElement; chips: Chip[]; template: HTMLElement; prefix: string; adder: HTMLElement | null };
 
-const PLACEHOLDERS: Record<string, string> = { title: "Untitled", description: "Add a description…", pubDate: "Add a date…" };
+/** Placeholders that read better than "Add a <label>…". */
+const PLACEHOLDERS: Record<string, string> = { title: "Untitled", pubDate: "Add a date…" };
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 /** `2026-09-01`, `2026-09-01T10:00:00Z`, `2026-09-01 10:00` … — a date we can put a picker on. */
 export const DATE_LIKE = /^\d{4}-\d{2}-\d{2}(?:[T ].*)?$/;
@@ -59,6 +64,7 @@ export class FieldBindings {
   private attached = false;
   private listeners: Array<() => void> = [];
   private schema: CollectionSchema | null = null;
+  private memory: BindingMemory | null = null;
   private menu: HTMLElement | null = null;
 
   constructor(private hooks: FieldBindingHooks) {}
@@ -68,9 +74,13 @@ export class FieldBindings {
    * values are auto-bound to the smallest matching element (or chip run)
    * outside `body` (the rendered body region).
    */
-  bind(frontmatter: Record<string, unknown>, { body, schema }: { body?: Element | null; schema?: CollectionSchema | null } = {}) {
+  bind(
+    frontmatter: Record<string, unknown>,
+    { body, schema, collection }: { body?: Element | null; schema?: CollectionSchema | null; collection?: string | null } = {},
+  ) {
     this.unbind();
     this.schema = schema ?? null;
+    this.memory = collection ? new BindingMemory(collection) : null;
     unmarkAuto("field");
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-float-field]"))) {
       const key = el.dataset.floatField;
@@ -136,7 +146,62 @@ export class FieldBindings {
       if (!el) continue;
       index.take(el, key);
       this.els.set(key, this.stringBinding(key, el));
+      this.memory?.remember(key, el);
     }
+    this.recallBind(frontmatter, body, index);
+  }
+
+  /**
+   * Fields with nothing to match (empty, or text that matched nowhere): the
+   * element the same field sat in on another page of this collection, if it
+   * is here, outside the body, unbound, and empty or printing the value. An
+   * element printing something else is never taken; two misses forget it.
+   */
+  private recallBind(frontmatter: Record<string, unknown>, body: Element | null | undefined, index: FieldIndex | null) {
+    const memory = this.memory;
+    if (!memory) return;
+    const keys = new Set([...Object.keys(frontmatter), ...(this.schema?.fields.map((f) => f.key) ?? [])]);
+    for (const key of keys) {
+      if (this.els.has(key) || key === "slug") continue;
+      const selector = memory.get(key);
+      if (!selector) continue;
+      const value = frontmatter[key];
+      const type = this.def(key)?.type;
+      if (value !== undefined && value !== null && typeof value !== "string") continue;
+      if (typeof value === "string" && DATE_LIKE.test(value)) continue;
+      if (type && !["string", "text", "enum"].includes(type)) continue;
+      let el: HTMLElement | null = null;
+      try {
+        el = document.querySelector<HTMLElement>(selector);
+      } catch {
+        /* a selector this browser can't parse */
+      }
+      const taken = (node: Element) => Array.from(this.els.values()).some((b) => b.el === node || b.el.contains(node) || node.contains(b.el));
+      const ok =
+        el &&
+        !offLimits(el) &&
+        !(body && (body === el || body.contains(el))) &&
+        !el.hasAttribute("data-float-field") &&
+        !el.hasAttribute("data-float-body") &&
+        !taken(el) &&
+        !el.querySelector(":scope > :not(b, i, em, strong, span, br, small, mark, s, u, sub, sup, abbr, wbr)");
+      const text = ok ? normalize(el!.textContent ?? "") : "";
+      if (!ok || (text !== "" && text !== normalize(typeof value === "string" ? value : ""))) {
+        memory.miss(key);
+        continue;
+      }
+      index ??= new FieldIndex([body, ...Array.from(this.els.values(), (b) => b.el)]);
+      index.take(el!, key);
+      this.els.set(key, this.stringBinding(key, el!));
+      memory.hit(key);
+    }
+  }
+
+  /** "Untitled" for the title, else "Add a <label>…" from the schema label (or the humanized key). */
+  private placeholder(key: string) {
+    if (PLACEHOLDERS[key]) return PLACEHOLDERS[key];
+    const label = this.def(key)?.label ?? humanize(key);
+    return `Add a ${label.charAt(0).toLowerCase()}${label.slice(1)}…`;
   }
 
   private def(key: string): FieldDef | null {
@@ -175,7 +240,7 @@ export class FieldBindings {
     const { el } = binding;
     el.setAttribute("data-float-editing-field", "");
     el.setAttribute("data-float-date", "");
-    el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
+    el.setAttribute("data-float-placeholder", this.placeholder(key));
     el.setAttribute("role", "button");
     el.setAttribute("aria-haspopup", "dialog");
     el.setAttribute("data-tip", "Change the date");
@@ -234,7 +299,7 @@ export class FieldBindings {
     el.contentEditable = "plaintext-only";
     if (el.contentEditable !== "plaintext-only") el.contentEditable = "true";
     el.setAttribute("data-float-editing-field", "");
-    el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
+    el.setAttribute("data-float-placeholder", this.placeholder(key));
     const spellcheck = el.getAttribute("spellcheck");
     el.spellcheck = !number;
 
@@ -297,7 +362,7 @@ export class FieldBindings {
     const { el } = binding;
     el.setAttribute("data-float-editing-field", "");
     el.setAttribute("data-float-enum", "");
-    el.setAttribute("data-float-placeholder", PLACEHOLDERS[key] ?? `Add ${key}…`);
+    el.setAttribute("data-float-placeholder", this.placeholder(key));
     el.setAttribute("role", "button");
     el.setAttribute("aria-haspopup", "menu");
     el.setAttribute("data-tip", `Change ${key}`);
@@ -577,6 +642,7 @@ export class FieldBindings {
     this.detach();
     this.els.clear();
     this.schema = null;
+    this.memory = null;
   }
 
   has(key: string) {

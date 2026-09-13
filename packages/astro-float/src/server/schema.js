@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { humanize, inferField, TEXT_KEYS, TEXT_MAX } from "../shared/infer.js";
+import { importFromAstro } from "./astro-deps.js";
 import { parseDocument } from "./content.js";
 
 // The inference rules live in `shared/infer.js` so the toolbar applies the same ones.
@@ -264,29 +265,72 @@ async function collectHints(ctx, collectionName) {
  * Returns null when the module can't be loaded, so the caller can fall back.
  */
 async function probeConfig(ctx, collectionName) {
+  const loaded = await loadZodSchema(ctx, collectionName);
+  if (!loaded.loaded) return null;
+  const hints = new Map();
+  if (loaded.schema) walkZod(loaded.schema, "", hints);
+  return hints;
+}
+
+/**
+ * The collection's Zod schema object, from `content.config.ts` loaded through
+ * Vite. Shared by the hint probe above and by save-time validation
+ * (`validate.js`): a function schema is called once with a stand-in `image()`
+ * (a real `z.string()` from the project's astro, so `safeParse` runs on it).
+ *
+ * - `loaded: false` — no config file, or Vite couldn't load it (warned once).
+ * - `hasSchema: false` — the collection defines no `schema:`.
+ * - `strict` — the top-level object was declared `.strict()`.
+ *
+ * Results are memoised per loaded module, so a config change (Vite gives a
+ * new module object) invalidates them.
+ *
+ * @param {SchemaCtx} ctx
+ * @param {string} collectionName
+ * @returns {Promise<{ loaded: boolean, hasSchema: boolean, schema: any | null, strict: boolean }>}
+ */
+export async function loadZodSchema(ctx, collectionName) {
+  const none = { loaded: false, hasSchema: false, schema: null, strict: false };
   const server = ctx.server;
-  if (!server) return null;
+  if (!server) return none;
   const configFile = await findConfigFile(ctx.root);
-  if (!configFile) return null;
+  if (!configFile) return none;
   let mod;
   try {
     mod = await loadServerModule(server, "/" + path.relative(ctx.root, configFile).split(path.sep).join("/"));
   } catch (err) {
-    ctx.logger?.warn(`couldn't load ${path.basename(configFile)} to look for image()/reference() (${err?.message ?? err}); scanning the source instead`);
-    return null;
+    warnOnce(ctx, `couldn't load ${path.basename(configFile)} (${err?.message ?? err}); saves aren't validated and image()/reference() are found by scanning the source`);
+    return none;
   }
+  let perModule = schemaCache.get(mod);
+  if (!perModule) {
+    perModule = new Map();
+    schemaCache.set(mod, perModule);
+  }
+  if (perModule.has(collectionName)) return perModule.get(collectionName);
+
   const config = mod?.collections?.[collectionName];
-  if (!config || typeof config !== "object") return new Map();
-  let schema = config.schema;
-  try {
-    if (typeof schema === "function") schema = schema({ image: () => imageStub() });
-  } catch (err) {
-    ctx.logger?.warn(`${collectionName}: schema() threw while probing for image()/reference() (${err?.message ?? err})`);
-    return null;
+  let result;
+  if (!config || typeof config !== "object" || config.schema == null) {
+    result = { loaded: true, hasSchema: false, schema: null, strict: false };
+  } else {
+    let schema = config.schema;
+    try {
+      if (typeof schema === "function") schema = schema({ image: await imageStubFactory(ctx) });
+    } catch (err) {
+      ctx.logger?.warn(`${collectionName}: schema() threw (${err?.message ?? err})`);
+      schema = null;
+    }
+    const object = schema && typeof schema === "object" ? unwrapZod(schema) : null;
+    result = {
+      loaded: true,
+      hasSchema: true,
+      schema: schema && typeof schema === "object" ? schema : null,
+      strict: isStrictObject(object),
+    };
   }
-  const hints = new Map();
-  if (schema && typeof schema === "object") walkZod(schema, "", hints);
-  return hints;
+  perModule.set(collectionName, result);
+  return result;
 }
 
 /**
@@ -304,14 +348,47 @@ function loadServerModule(server, url) {
   return Promise.reject(new Error("this Vite server has neither an SSR module runner nor ssrLoadModule"));
 }
 
+/** `.strict()` on the top-level object: zod 3 marks `unknownKeys`, zod 4 sets the catchall to `never`. */
+function isStrictObject(object) {
+  const node = zodNode(object);
+  if (!node) return false;
+  if (node.v4) return node.type === "object" && zodNode(node.def.catchall)?.type === "never";
+  return node.type === "ZodObject" && node.def.unknownKeys === "strict";
+}
+
+/** @type {WeakMap<object, Map<string, any>>} */
+const schemaCache = new WeakMap();
+const warned = new WeakSet();
+function warnOnce(ctx, message) {
+  const key = ctx.server ?? ctx;
+  if (warned.has(key)) return;
+  warned.add(key);
+  ctx.logger?.warn(message);
+}
+
 /**
- * A stand-in for `image()`: a Zod-shaped object that answers every chaining
- * call (`.optional()`, `.describe()`, `.refine()`, …) with a wrapper the walker
- * can peel, and carries a marker at the bottom.
+ * A stand-in for `image()`: a real `z.string()` (from the project's astro) that
+ * rejects an empty path, carrying a marker the hint walker recognises. Astro's
+ * own `image()` also resolves the file; `validate.js` does that part with the
+ * entry's directory in hand. Without `astro/zod` at hand the stub is a
+ * Zod-shaped object that only serves the walker.
  */
-function imageStub() {
-  const marker = { _floatImage: true, _def: { typeName: "ZodString" } };
-  return chainable(marker, marker);
+async function imageStubFactory(ctx) {
+  let z = null;
+  try {
+    z = (await importFromAstro(ctx.root, "astro/zod")).z;
+  } catch {
+    /* astro/zod not resolvable: hints only */
+  }
+  return () => {
+    if (z) {
+      const s = z.string().min(1, "Image path can't be empty");
+      s._floatImage = true;
+      return s;
+    }
+    const marker = { _floatImage: true, _def: { typeName: "ZodString" } };
+    return chainable(marker, marker);
+  };
 }
 
 function chainable(node, marker) {
@@ -320,6 +397,12 @@ function chainable(node, marker) {
     node[method] = method === "array" ? () => chainable({ _def: { typeName: "ZodArray", type: node } }, marker) : wrap;
   }
   return node;
+}
+
+/** Field paths that hold an `image()` in this collection's schema (top level and nested, `[]` for array items). */
+export async function imageFieldPaths(ctx, collectionName) {
+  const hints = await collectHints(ctx, collectionName);
+  return Array.from(hints).filter(([, h]) => h.image).map(([p]) => p);
 }
 
 /**

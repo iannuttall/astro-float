@@ -16,6 +16,7 @@ for i in {1..60}; do
 done
 echo "server up after ${i}s"; grep -m1 -E "astro +v[0-9.]+" $LOG .astro/dev.log 2>/dev/null
 SHOT_DIR=$OUT node $HERE/compat-test.mjs http://127.0.0.1:$PORT $LABEL
+if [ "${DOCTOR:-0}" = 1 ]; then echo "--- doctor ---"; node $ROOT/packages/astro-float/src/cli.js doctor --url http://127.0.0.1:$PORT 2>&1 | head -40; fi
 echo "--- server log (errors/warnings) ---"
 cat $LOG .astro/dev.log 2>/dev/null | grep -inE "error|warn|cannot|failed|unsupported" | grep -v "x-astro-float" | head -20
 PID=$(lsof -tiTCP:$PORT -sTCP:LISTEN); [ -n "$PID" ] && kill $PID

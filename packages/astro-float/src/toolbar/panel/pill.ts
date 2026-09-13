@@ -1,8 +1,8 @@
-import type { Collection, EntryDoc, Frontmatter } from "../api";
+import type { Collection, EntryDoc, Frontmatter, ValidationIssue } from "../api";
 import { DatePicker } from "../datepicker";
 import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
-import type { CollectionSchema } from "../schema";
+import { humanize, type CollectionSchema } from "../schema";
 import { refreshTooltip } from "../tooltip";
 import { renderCollectionFooter, type FootState } from "./collection";
 import { renderForm } from "./form";
@@ -27,6 +27,8 @@ export interface PillPrefs {
 
 export interface StatusView {
   text: string;
+  /** What the pill's tooltip says when it isn't the plain text (a stale draft, a validation error). */
+  tip?: string;
   tone: "" | "warn" | "err";
   dot: "idle" | "dirty" | "saving" | "saved" | "warning" | "error" | "conflict";
   showSave: boolean;
@@ -49,6 +51,8 @@ export interface PillHost {
   /** The field is edited on the page itself (bound by attribute or found by text): the popover leaves it out. */
   onPage(key: string): boolean;
   body(): { bound: boolean; mapped: boolean; readOnly: boolean; text: string };
+  /** What the last save's validation rejected, until the values change. */
+  issues(): ValidationIssue[];
 
   setField(key: string, value: unknown): void;
   removeField(key: string): void;
@@ -318,8 +322,22 @@ export class Pill {
       this.syncs,
     );
     const hasRows = !!form.querySelector(".row");
-    replaceChildren(this.fieldsHost, note, hasRows ? form : null);
-    this.fieldsHost.hidden = this.yamlMode || (!note && !hasRows);
+    // Validation messages sit under their field; the body's, or a field that isn't in the form, at the top.
+    const loose: string[] = [];
+    for (const issue of this.host.issues()) {
+      const key = issueKey(issue);
+      const row = key ? form.querySelector<HTMLElement>(`.row[data-key="${CSS.escape(key)}"]`) : null;
+      if (row) row.appendChild(h("div", { class: "row-error" }, issue.message));
+      else loose.push(key ? `${this.labelFor(key)}: ${issue.message}` : issue.message);
+    }
+    const errors = loose.length ? h("div", { class: "form-errors" }, loose.map((m) => h("p", { class: "form-error-line" }, m))) : null;
+    replaceChildren(this.fieldsHost, note, errors, hasRows ? form : null);
+    this.fieldsHost.hidden = this.yamlMode || (!note && !hasRows && !errors);
+  }
+
+  private labelFor(key: string) {
+    if (key === "body") return "Body";
+    return this.host.schema()?.fields.find((f) => f.key === key)?.label ?? humanize(key);
   }
 
   /** One field changed outside the form (typed on the page, set in place): mirror it, and let the YAML text follow. */
@@ -387,7 +405,7 @@ export class Pill {
     this.dot.dataset.state = view.dot;
     // Green says "Saved" next to the dot, growing leftwards from the pill's fixed right edge; grey and orange stay dot-only.
     if (this.pillEl) this.pillEl.dataset.state = view.dot;
-    const tip = view.dot === "dirty" ? "Unsaved changes · ⌘S to save" : view.text || (this.host.doc() ? "Up to date" : "Float");
+    const tip = view.tip ?? (view.dot === "dirty" ? "Unsaved changes · ⌘S to save" : view.text || (this.host.doc() ? "Up to date" : "Float"));
     if (this.pillEl) {
       this.pillEl.setAttribute("data-tip", tip);
       this.pillEl.setAttribute("aria-label", tip);
@@ -402,6 +420,12 @@ export class Pill {
       this.saveButton,
     );
   }
+}
+
+/** The field an issue is about: the first segment of its path ("body" for the body). */
+export function issueKey(issue: ValidationIssue): string | null {
+  const first = Array.isArray(issue.path) ? issue.path[0] : String(issue.path ?? "").split(".")[0];
+  return first === undefined || first === "" ? null : String(first);
 }
 
 /** A click on the pill must not move the caret or drop the page's selection. */

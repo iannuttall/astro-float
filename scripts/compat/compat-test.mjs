@@ -111,11 +111,15 @@ try {
     const res = await fetch("/__float/api/entry", { method: "PUT", headers: { "content-type": "application/json", "x-astro-float": "1" }, body: JSON.stringify({ collection: "blog", id: "hello-float", frontmatter: { ...doc.frontmatter, pubDate: "not-a-date" }, body: doc.body, baseHash: doc.hash }) });
     const j = await res.json();
     const ms = Date.now() - t;
-    // put it back
-    await fetch("/__float/api/entry", { method: "PUT", headers: { "content-type": "application/json", "x-astro-float": "1" }, body: JSON.stringify({ collection: "blog", id: "hello-float", frontmatter: doc.frontmatter, body: doc.body, baseHash: j.hash, force: true }) });
-    return { status: res.status, synced: j.synced, ms };
+    // put it back (a 422 never touched the file)
+    if (res.status === 200) await fetch("/__float/api/entry", { method: "PUT", headers: { "content-type": "application/json", "x-astro-float": "1" }, body: JSON.stringify({ collection: "blog", id: "hello-float", frontmatter: doc.frontmatter, body: doc.body, baseHash: j.hash, force: true }) });
+    return { status: res.status, synced: j.synced, issues: j.issues, ms };
   });
-  check("rejected save answers synced:false before the timeout (content-layer error seen)", rejected.status === 200 && rejected.synced === false && rejected.ms < 2200, JSON.stringify(rejected));
+  // With the Zod pre-validation the save is refused (422, issue on pubDate); without it Astro's
+  // content-layer error must be seen before the timeout and answer synced:false.
+  const refused = rejected.status === 422 && Array.isArray(rejected.issues) && rejected.issues.some((i) => String(i.path).includes("pubDate"));
+  const seen = rejected.status === 200 && rejected.synced === false && rejected.ms < 2200;
+  check("invalid save is refused (422 with issues) or answers synced:false before the timeout", refused || seen, JSON.stringify(rejected).slice(0, 200));
   await sleep(1500);
   // Astro 5 also pushes the content error to Vite's overlay; clear it so it doesn't swallow the clicks below.
   await page.evaluate(() => document.querySelectorAll("vite-error-overlay").forEach((el) => el.remove()));

@@ -1,4 +1,4 @@
-import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
+import { api, ApiError, onFileChanged, type Collection, type EntryDoc, type FileChange, type Frontmatter, type MediaItem, type ValidationIssue } from "./api";
 import { isMediaFile, mediaMarkdown } from "./embeds";
 import { h } from "./dom";
 import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
@@ -9,7 +9,8 @@ import { RegionControl } from "./overlays";
 import { detectEntry, swapPage, type DetectedEntry } from "./page";
 import { Pill, type PillPrefs, type StatusView } from "./panel/pill";
 import { clone, describe, resetViewportZoom } from "./panel/util";
-import { schemaFor, type CollectionSchema } from "./schema";
+import { SourceEditor } from "./source";
+import { humanize, schemaFor, type CollectionSchema } from "./schema";
 import { STYLES } from "./styles";
 import { attachTooltips, detachTooltips } from "./tooltip";
 
@@ -73,10 +74,10 @@ class Float {
    * swaps in Astro's fresh render.
    */
   private sourceArea: HTMLTextAreaElement | null = null;
+  private sourceEditor: SourceEditor | null = null;
   private sourceDraft = "";
   private sourceBusy = false;
   private sourceError: string | null = null;
-  private wiredAreas = new WeakSet<HTMLTextAreaElement>();
   private savePromise: Promise<void> | null = null;
   /** The panel follows the site's colour scheme: watch the page for changes while editing. */
   private themeObserver: MutationObserver | null = null;
@@ -84,6 +85,13 @@ class Float {
 
   private status: Status = "idle";
   private statusMessage = "";
+  /** What the last save's validation rejected (a 422), cleared field by field as values change. */
+  private issues: ValidationIssue[] = [];
+  /** The file changed on disk while the draft was dirty: the user picks Reload or Keep mine. */
+  private staleOnDisk = false;
+  /** Keep mine: the next save overwrites whatever is on disk. */
+  private keepMine = false;
+  private unsubscribeFiles: (() => void) | null = null;
   private savedAt: number | null = null;
   private saving = false;
   private navigating = false;
@@ -102,12 +110,16 @@ class Float {
     canvas.appendChild(this.root);
 
     this.page = new PageEditor({
-      onChange: () => this.touched(),
+      onChange: () => {
+        this.clearIssues("body");
+        this.touched();
+      },
       onFiles: (files, range) => void this.uploadAll(files, range),
     });
     this.fields = new FieldBindings({
       onChange: (key, value) => {
         this.draftFrontmatter[key] = value;
+        this.clearIssues(key);
         this.panel.syncField(key);
         this.touched();
       },
@@ -131,6 +143,7 @@ class Float {
       setListCollection: (name) => (this.listCollection = name),
       onPage: (key) => this.fields.has(key),
       body: () => ({ bound: this.page.bound, mapped: this.page.mapped, readOnly: this.bodyReadOnly, text: this.currentBody() }),
+      issues: () => this.issues,
       setField: (key, value) => this.setField(key, value),
       removeField: (key) => this.removeField(key),
       revertField: (key) => this.revertField(key),
@@ -197,9 +210,14 @@ class Float {
         bodyReadOnly: this.bodyReadOnly,
         bodyDiff: this.page.debugDiff(),
         onPageFields: this.fields.boundKeys(),
+        issues: this.issues,
+        staleOnDisk: this.staleOnDisk,
+        keepMine: this.keepMine,
         schema: this.schema,
         entry: this.doc ? `${this.doc.collection}/${this.doc.id}` : null,
       }),
+      /** Tests: what the dev server would send when a file changes on disk. */
+      simulateFileChange: (change: FileChange) => this.onFileChanged(change),
     };
   }
 
@@ -212,6 +230,7 @@ class Float {
       ensurePageStyle();
       attachTooltips(document);
       attachTooltips(this.canvas);
+      this.unsubscribeFiles ??= onFileChanged((change) => this.onFileChanged(change));
       this.watchTheme();
       if (this.loadedFor !== location.href) {
         await this.loadPage(); // renders the pill once it knows the entry
@@ -230,6 +249,8 @@ class Float {
       this.loadedFor = null;
       this.region.dispose();
       this.releaseFocus();
+      this.unsubscribeFiles?.();
+      this.unsubscribeFiles = null;
       detachTooltips(this.canvas);
       detachTooltips(document);
       removePageStyle();
@@ -274,7 +295,7 @@ class Float {
 
   /** The body region: the prose container, or the in-page source textarea standing in for it. */
   private bodyRegion(): HTMLElement | null {
-    if (this.sourceArea) return this.sourceArea;
+    if (this.sourceEditor) return this.sourceEditor.el;
     return this.page.bound && !this.bodyReadOnly ? this.page.container : null;
   }
 
@@ -324,7 +345,7 @@ class Float {
 
   // ---- source mode (raw Markdown, in the page) -------------------------------------------
 
-  /** The corner control's Source / Rendered: swap the prose for a Markdown textarea in the same spot (and back). */
+  /** The corner control's Source / Rendered: swap the prose for its Markdown in the same spot (and back). */
   private async toggleSourceMode() {
     if (this.sourceBusy) return;
     if (this.sourceArea) {
@@ -342,80 +363,44 @@ class Float {
     const anchorBlock = anchorNode ? (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement) : null;
     const anchorTop = anchorBlock ? closestTopLevel(anchorBlock, container)?.getBoundingClientRect().top ?? null : null;
     const scrollY = window.scrollY;
-    const rect = container.getBoundingClientRect();
 
-    const area = document.createElement("textarea");
-    area.className = "astro-float-source";
-    area.spellcheck = false;
-    area.setAttribute("aria-label", "Markdown source");
-    // Same height as the prose it replaces, so nothing below moves and the page keeps its scroll position.
-    area.style.height = `${Math.max(240, rect.height)}px`;
-    this.enterSource(area);
+    const editor = this.enterSource(container);
+    if (!editor) return;
     window.scrollTo(0, scrollY);
-    area.focus({ preventScroll: true });
-    // Open on the block he was looking at, at the height it had on the page.
+    editor.focus();
+    // Open on the block he was looking at, at the height it had on the page: the source line that starts
+    // that block goes where the block's top was, so the swap reads as the prose turning into its Markdown.
+    // The page stays put (the wash and the corner control don't move); only a caret line that would be
+    // off-screen brings the page along, and then only to where the block was.
     if (where) {
-      area.setSelectionRange(where.offset, where.offset);
-      const cs = getComputedStyle(area);
-      const lineHeight = parseFloat(cs.lineHeight) || 21.6;
-      const padTop = parseFloat(cs.paddingTop) || 0;
-      const line = area.value.slice(0, where.offset).split("\n").length - 1;
-      const areaTop = area.getBoundingClientRect().top;
-      const wantedY = anchorTop ?? areaTop + padTop;
-      area.scrollTop = Math.max(0, padTop + line * lineHeight - (wantedY - areaTop));
-      // The textarea couldn't scroll far enough to line up? Only then nudge the page, and only enough to keep the line in view.
-      const lineY = areaTop + padTop + line * lineHeight - area.scrollTop;
-      if (lineY < 72 || lineY > window.innerHeight - 72) window.scrollBy(0, lineY - Math.min(wantedY, window.innerHeight - 120));
-    } else {
-      window.scrollTo(0, scrollY);
+      editor.setSelection(where.offset);
+      const lineY = editor.lineTop(where.offset);
+      if (lineY < 72 || lineY > window.innerHeight - 72) window.scrollBy(0, lineY - Math.min(anchorTop ?? 120, window.innerHeight - 120));
     }
-    this.region.show(area, this.bodyRegionActions());
+    this.region.show(editor.el, this.bodyRegionActions());
   }
 
-  /** Make `area` the body's editor, standing in for the prose. */
-  private enterSource(area: HTMLTextAreaElement) {
-    if (!this.doc || this.bodyReadOnly || this.sourceArea) return;
+  /** Put the source editor in the prose's place. */
+  private enterSource(container: HTMLElement): SourceEditor | null {
+    if (!this.doc || this.bodyReadOnly || this.sourceArea) return null;
     this.sourceDraft = this.currentBody();
     this.sourceError = null;
-    this.wireSourceArea(area);
-    area.value = this.sourceDraft;
+    const editor = new SourceEditor(container, this.sourceDraft, {
+      onInput: (text) => {
+        if (this.sourceEditor !== editor) return;
+        this.sourceDraft = text;
+        this.clearIssues("body");
+        this.touched();
+      },
+    });
     this.page.detach();
-    const container = this.page.container;
-    if (container) {
-      container.style.display = "none";
-      container.after(area);
-    }
-    this.sourceArea = area;
+    container.style.display = "none";
+    container.after(editor.el);
+    this.sourceEditor = editor;
+    this.sourceArea = editor.area;
     this.region.hide();
     this.renderStatus();
-  }
-
-  private wireSourceArea(area: HTMLTextAreaElement) {
-    if (this.wiredAreas.has(area)) return;
-    this.wiredAreas.add(area);
-    area.addEventListener("input", () => {
-      if (this.sourceArea !== area) return;
-      this.sourceDraft = area.value;
-      this.touched();
-    });
-    area.addEventListener("keyup", (e) => {
-      if (e.key === "Escape") e.stopPropagation();
-    });
-    area.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        area.blur();
-      }
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const s = area.selectionStart;
-        area.setRangeText("  ", s, area.selectionEnd, "end");
-        if (this.sourceArea === area) {
-          this.sourceDraft = area.value;
-          this.touched();
-        }
-      }
-    });
+    return editor;
   }
 
   /**
@@ -431,7 +416,7 @@ class Float {
     this.region.refresh();
     try {
       // Remember where he is in the text so the rendered page opens on the same block.
-      const place = this.sourcePlace(this.sourceArea);
+      const place = this.sourcePlace();
       if (this.savePromise) await this.savePromise; // an autosave already in flight
       if (this.isDirty()) {
         await this.save();
@@ -452,23 +437,21 @@ class Float {
     }
   }
 
-  /** Caret offset in the source textarea plus the viewport height of its line. */
-  private sourcePlace(area: HTMLTextAreaElement): { offset: number; viewportY: number } | null {
-    if (!area.isConnected) return null;
-    const offset = area.selectionStart;
-    const cs = getComputedStyle(area);
-    const lineHeight = parseFloat(cs.lineHeight) || 21.6;
-    const padTop = parseFloat(cs.paddingTop) || 0;
-    const line = area.value.slice(0, offset).split("\n").length - 1;
-    const y = area.getBoundingClientRect().top + padTop + line * lineHeight - area.scrollTop;
+  /** Caret offset in the source plus the viewport height of its line. */
+  private sourcePlace(): { offset: number; viewportY: number } | null {
+    const editor = this.sourceEditor;
+    if (!editor || !editor.el.isConnected) return null;
+    const offset = editor.area.selectionStart;
+    const y = editor.lineTop(offset);
     return { offset, viewportY: Math.max(72, Math.min(y, window.innerHeight - 72)) };
   }
 
   private exitSourceMode(restoreView: boolean) {
     if (!this.sourceArea) return;
-    const area = this.sourceArea;
+    const editor = this.sourceEditor;
     this.sourceArea = null;
-    area.remove();
+    this.sourceEditor = null;
+    editor?.dispose();
     if (this.page.container) {
       this.page.container.style.display = "";
       if (restoreView && this.editing && !this.bodyReadOnly) this.page.attach();
@@ -518,6 +501,9 @@ class Float {
     this.region.hide();
     this.doc = null;
     this.schema = null;
+    this.issues = [];
+    this.staleOnDisk = false;
+    this.keepMine = false;
     this.detected = null;
     this.draftFrontmatter = {};
     this.draftBody = "";
@@ -562,7 +548,7 @@ class Float {
       container = findBody(this.doc.blocks);
       if (container) markBody(container);
     }
-    this.fields.bind(this.doc.frontmatter, { body: container, schema: this.schema });
+    this.fields.bind(this.doc.frontmatter, { body: container, schema: this.schema, collection: this.doc.collection });
     if (container) {
       this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
       // MDX we can't line up with the source would be written back as HTML — never do that.
@@ -621,8 +607,28 @@ class Float {
     void this.navigate(url.href);
   };
 
+  /**
+   * The dev server saw this entry's file change outside Float. A clean draft
+   * just follows it; a dirty one is kept and the pill asks: Reload, or keep mine.
+   */
+  private onFileChanged(change: FileChange) {
+    if (!this.editing || !this.doc) return;
+    const mine = (change.collection === this.doc.collection && change.id === this.doc.id) || (!!change.file && change.file === this.doc.file);
+    if (!mine) return;
+    // Our own save comes back as an event too; the hash says so. Nothing to do.
+    if (change.hash && change.hash === this.doc.hash) return;
+    if (!this.isDirty()) {
+      void this.reloadFromDisk();
+      return;
+    }
+    this.staleOnDisk = true;
+    this.renderStatus();
+  }
+
   private async reloadFromDisk() {
     if (!this.detected) return;
+    this.staleOnDisk = false;
+    this.keepMine = false;
     this.setStatus("refreshing");
     try {
       await swapPage();
@@ -662,8 +668,9 @@ class Float {
   }
 
   private touched() {
-    // A warning (Astro rejected the last write) stays until the next save says otherwise.
-    if (this.status === "saved" || (this.status === "error" && !this.bodyReadOnly)) this.status = "idle";
+    // A warning (Astro rejected the last write) stays until the next save says otherwise, and so does a
+    // validation error while any of its issues are still standing.
+    if (this.status === "saved" || (this.status === "error" && !this.bodyReadOnly && !this.issues.length)) this.status = "idle";
     this.renderStatus();
     if (this.prefs.autosave) this.scheduleAutosave();
   }
@@ -684,7 +691,27 @@ class Float {
     return this.schema?.source === "zod" && this.schema.fields.some((f) => f.key === key);
   }
 
+  /** A value changed: whatever validation said about it no longer applies. */
+  private clearIssues(key?: string) {
+    if (!this.issues.length) return;
+    const before = this.issues.length;
+    this.issues = key === undefined ? [] : this.issues.filter((i) => issueKeyOf(i) !== key);
+    if (this.issues.length === before) return;
+    if (!this.issues.length && this.status === "error") this.status = "idle";
+    this.statusMessage = this.issues.length ? this.issueSummary() : "";
+    this.panel.renderFields();
+  }
+
+  private issueSummary() {
+    const first = this.issues[0];
+    if (!first) return "";
+    const key = issueKeyOf(first);
+    const label = key === "body" ? "Body" : key ? (this.schema?.fields.find((f) => f.key === key)?.label ?? humanize(key)) : "";
+    return label ? `${label}: ${first.message}` : first.message;
+  }
+
   private setField(key: string, value: unknown) {
+    this.clearIssues(key);
     const isNew = !(key in this.draftFrontmatter);
     if (isNew && this.schemaKnows(key)) {
       // A schema field being set for the first time goes in at its schema position, not at the end.
@@ -711,6 +738,7 @@ class Float {
 
   private removeField(key: string) {
     if (!(key in this.draftFrontmatter)) return;
+    this.clearIssues(key);
     delete this.draftFrontmatter[key];
     this.touched();
     if (this.schemaKnows(key)) this.panel.syncField(key);
@@ -739,6 +767,7 @@ class Float {
 
   /** The YAML view parsed cleanly: it becomes the draft, and the page's fields follow. */
   private replaceDraft(next: Frontmatter) {
+    this.clearIssues();
     this.draftFrontmatter = clone(next);
     for (const key of this.fields.boundKeys()) this.fields.setValue(key, this.draftFrontmatter[key]);
     this.touched();
@@ -782,6 +811,7 @@ class Float {
 
   private async saveNow(force: boolean) {
     if (!this.doc || this.saving) return;
+    force = force || this.keepMine; // "Keep mine": whatever changed on disk, this draft wins
     this.panel.commitYaml(); // YAML typed but not parsed yet counts: fold it into the draft first
     if (!this.isDirty() && !force) return;
     window.clearTimeout(this.autosaveTimer);
@@ -834,6 +864,9 @@ class Float {
       }
 
       this.savedAt = Date.now();
+      this.issues = [];
+      this.staleOnDisk = false;
+      this.keepMine = false;
       if (result.changed && result.synced === false) {
         // Written, but Astro's content layer didn't pick it up (a schema rejection, most likely).
         this.setStatus("warning", "Saved, but Astro rejected the entry. Check the terminal.");
@@ -846,7 +879,12 @@ class Float {
       }
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) this.setStatus("conflict");
-      else this.setStatus("error", describe(err));
+      else if (err instanceof ApiError && err.status === 422 && err.issues?.length) {
+        // The schema rejected the draft: nothing was written. Say which field, and show it under the row.
+        this.issues = err.issues;
+        this.setStatus("error", this.issueSummary());
+        this.panel.renderFields();
+      } else this.setStatus("error", describe(err));
     } finally {
       this.saving = false;
       if (this.isDirty() && this.prefs.autosave && this.status !== "conflict" && this.status !== "error") {
@@ -903,7 +941,8 @@ class Float {
       case "error":
         view.text = this.statusMessage || "Something went wrong";
         view.tone = "err";
-        if (dirty) view.actions.push({ label: this.bodyReadOnly ? "Save fields" : "Retry", onClick: () => void this.save() });
+        // A validation error needs a change, not a retry: the messages under the rows say what.
+        if (dirty && !this.issues.length) view.actions.push({ label: this.bodyReadOnly ? "Save fields" : "Retry", onClick: () => void this.save() });
         break;
       case "saved":
         view.text = "Saved";
@@ -913,7 +952,23 @@ class Float {
         view.tone = "warn";
         break;
       default:
-        if (dirty) view.text = "Unsaved changes";
+        if (dirty && this.staleOnDisk) {
+          view.text = "Changed on disk";
+          view.tip = "Changed on disk · click to reload or keep";
+          view.tone = "warn";
+          view.showDiscard = false; // Reload covers it, and the header has only so much room
+          view.actions.push(
+            { label: "Reload", onClick: () => void this.reloadFromDisk() },
+            {
+              label: "Keep mine",
+              onClick: () => {
+                this.keepMine = true;
+                this.staleOnDisk = false;
+                this.renderStatus();
+              },
+            },
+          );
+        } else if (dirty) view.text = "Unsaved changes";
         else view.text = this.doc ? (this.savedAt ? `${this.prefs.autosave ? "Autosaved" : "Saved"} ${formatTime(this.savedAt)}` : "Up to date") : "";
     }
     this.panel.renderStatus(view);
@@ -922,12 +977,8 @@ class Float {
   // ---- images and video (drop / paste on the prose only) ------------------------------
 
   private placeImage(item: MediaItem, range: Range | null) {
-    if (this.sourceArea) {
-      const area = this.sourceArea;
-      const snippet = `\n${mediaMarkdown(item)}\n`;
-      area.setRangeText(snippet, area.selectionStart, area.selectionEnd, "end");
-      this.sourceDraft = area.value;
-      this.touched();
+    if (this.sourceEditor) {
+      this.sourceEditor.insertText(`\n${mediaMarkdown(item)}\n`); // goes through the editor's input path
     } else if (this.page.bound && !this.bodyReadOnly) {
       this.page.insertMedia(item, range);
     } else if (!this.bodyReadOnly) {
@@ -1009,6 +1060,12 @@ function luminance(color: string): number | null {
   if (alpha < 0.5) return null;
   const [r, g, b] = [m[1], m[2], m[3]].map((v) => parseFloat(v) / 255);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** The field an issue is about: the first segment of its path ("body" for the body). */
+function issueKeyOf(issue: ValidationIssue): string | null {
+  const first = Array.isArray(issue.path) ? issue.path[0] : String(issue.path ?? "").split(".")[0];
+  return first === undefined || first === "" ? null : String(first);
 }
 
 function loadPrefs(): PillPrefs {

@@ -11,6 +11,9 @@
     }
   },
   "types": "./index.d.ts",
+  "bin": {
+    "astro-float": "./src/cli.js"
+  },
   "files": [
     "src",
     "index.d.ts",
