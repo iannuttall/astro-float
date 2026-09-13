@@ -5,6 +5,8 @@ import astroFloat from "astro-float";
 
 export default defineConfig({
   site: "https://astro-float.example",
+  // Let a Cloudflare quick tunnel reach the dev server (Vite blocks unknown hosts).
+  vite: { server: { allowedHosts: [".trycloudflare.com"] } },
   integrations: [
     mdx(),
     // Dev-only. Zero config: every folder under src/content with Markdown in it
