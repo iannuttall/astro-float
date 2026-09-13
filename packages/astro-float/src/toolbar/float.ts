@@ -2,6 +2,7 @@ import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type M
 import { h, replaceChildren } from "./dom";
 import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
 import { DatePicker } from "./datepicker";
+import { findBody, markBody, unmarkAuto } from "./autobind";
 import { DATE_LIKE, FieldBindings } from "./fields";
 import { icon } from "./icons";
 import { RegionControl } from "./overlays";
@@ -432,6 +433,7 @@ class Float {
     this.exitSourceMode(false);
     this.page.unbind();
     this.fields.unbind();
+    unmarkAuto();
     this.region.hide();
     this.doc = null;
     this.detected = null;
@@ -462,11 +464,15 @@ class Float {
     this.renderSidebar();
   }
 
-  /** Bind the in-place editors to `[data-float-body]` and `[data-float-field]`; attach them if Edit is on. */
+  /** Bind the in-place editors to the body and the fields (attributes first, then auto-detected); attach them if Edit is on. */
   private bindBody() {
     if (!this.doc) return;
-    this.fields.bind(this.doc.frontmatter);
-    const container = PageEditor.find();
+    let container = PageEditor.find();
+    if (!container) {
+      container = findBody(this.doc.blocks);
+      if (container) markBody(container);
+    }
+    this.fields.bind(this.doc.frontmatter, { body: container });
     if (container) {
       this.page.bind(container, { lead: this.doc.lead, blocks: this.doc.blocks }, this.doc.absDir);
       // MDX we can't line up with the source would be written back as HTML — never do that.
@@ -1368,7 +1374,7 @@ class Float {
         ? `${this.doc.file} — MDX blocks unmapped; body read-only, fields editable.`
         : this.page.bound
           ? `Editing ${this.doc.file} in place${this.page.mapped ? "" : " (blocks unmapped — whole body re-serialized on save)"}.`
-          : `${this.doc.file} — no data-float-body on this page; body not editable here.`;
+          : `${this.doc.file} — couldn't find the rendered body on this page (add data-float-body); body not editable here.`;
 
     return h(
       "details",

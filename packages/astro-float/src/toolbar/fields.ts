@@ -1,8 +1,12 @@
+import { FieldIndex, normalizeText as normalize, unmarkAuto } from "./autobind";
 import { DatePicker } from "./datepicker";
 
 /**
- * Frontmatter fields rendered on the page (`<h1 data-float-field="title">`)
- * become editable in place.
+ * Frontmatter fields rendered on the page become editable in place. An
+ * explicit `<h1 data-float-field="title">` is looked at first; every other
+ * string or date value is then matched against the page text (see autobind.ts),
+ * so a page with no attributes at all still gets its title, description and
+ * date bound.
  *
  * - String fields bind when the rendered text matches the frontmatter value
  *   verbatim (title, description). Plain-text caret.
@@ -34,8 +38,14 @@ export class FieldBindings {
 
   constructor(private hooks: FieldBindingHooks) {}
 
-  bind(frontmatter: Record<string, unknown>) {
+  /**
+   * Bind to the page. Explicit `[data-float-field]` elements win; the remaining
+   * string and date values are auto-bound to the smallest matching element
+   * outside `body` (the rendered body region).
+   */
+  bind(frontmatter: Record<string, unknown>, { body }: { body?: Element | null } = {}) {
     this.unbind();
+    unmarkAuto("field");
     for (const el of Array.from(document.querySelectorAll<HTMLElement>("[data-float-field]"))) {
       const key = el.dataset.floatField;
       if (!key || this.els.has(key)) continue;
@@ -49,6 +59,30 @@ export class FieldBindings {
       }
       if (typeof value !== "string" && value !== undefined && value !== null) continue;
       if (text !== normalize(typeof value === "string" ? value : "")) continue;
+      this.els.set(key, { kind: "string", el });
+    }
+    this.autoBind(frontmatter, body);
+  }
+
+  /** Match every unbound non-empty string / date value against the page text. */
+  private autoBind(frontmatter: Record<string, unknown>, body: Element | null | undefined) {
+    let index: FieldIndex | null = null;
+    for (const [key, value] of Object.entries(frontmatter)) {
+      if (this.els.has(key) || typeof value !== "string" || !value.trim() || key === "slug") continue;
+      index ??= new FieldIndex([body, ...Array.from(this.els.values(), (b) => b.el)]);
+      if (DATE_LIKE.test(value)) {
+        const iso = value.slice(0, 10);
+        const el = index.findTime(iso) ?? index.findAny(dateRenderings(iso));
+        if (!el) continue;
+        const format = detectDateFormat(el, iso, normalize(el.textContent ?? ""));
+        if (!format) continue;
+        index.take(el, key);
+        this.els.set(key, { kind: "date", el, format, last: iso, suffix: value.slice(10) });
+        continue;
+      }
+      const el = index.find(value);
+      if (!el) continue;
+      index.take(el, key);
       this.els.set(key, { kind: "string", el });
     }
   }
@@ -221,10 +255,6 @@ export class FieldBindings {
   }
 }
 
-function normalize(text: string) {
-  return text.replace(/\s+/g, " ").trim();
-}
-
 // ---- dates ------------------------------------------------------------------------
 
 const DATE_OPTIONS: Intl.DateTimeFormatOptions[] = [
@@ -249,9 +279,9 @@ function utcDate(iso: string) {
  * attribute (we then know it *is* this date, even if we can't name the format).
  */
 function detectDateFormat(el: HTMLElement, iso: string, text: string): ((iso: string) => string) | null {
-  const locales = unique([el.closest<HTMLElement>("[lang]")?.lang, document.documentElement.lang, navigator.language, "en", "en-US", "en-GB"]);
+  if (text === iso) return (v) => v;
   const date = utcDate(iso);
-  for (const locale of locales) {
+  for (const locale of pageLocales(el)) {
     for (const opts of DATE_OPTIONS) {
       try {
         const fmt = new Intl.DateTimeFormat(locale, { ...opts, timeZone: "UTC" });
@@ -263,10 +293,30 @@ function detectDateFormat(el: HTMLElement, iso: string, text: string): ((iso: st
   }
   const attr = el.getAttribute("datetime");
   if (attr && attr.slice(0, 10) === iso) {
-    const fmt = new Intl.DateTimeFormat(locales[0], { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+    const fmt = new Intl.DateTimeFormat(pageLocales(el)[0], { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
     return (v) => fmt.format(utcDate(v));
   }
   return null;
+}
+
+/** Every way the page might have printed `iso` (the raw value first), for finding an unmarked date element. */
+export function dateRenderings(iso: string): string[] {
+  const out = [iso];
+  const date = utcDate(iso);
+  for (const locale of pageLocales()) {
+    for (const opts of DATE_OPTIONS) {
+      try {
+        out.push(normalize(new Intl.DateTimeFormat(locale, { ...opts, timeZone: "UTC" }).format(date)));
+      } catch {
+        /* unsupported locale/options combination */
+      }
+    }
+  }
+  return unique(out);
+}
+
+function pageLocales(el?: HTMLElement): string[] {
+  return unique([el?.closest<HTMLElement>("[lang]")?.lang, document.documentElement.lang, navigator.language, "en", "en-US", "en-GB"]);
 }
 
 function unique(values: Array<string | undefined>): string[] {

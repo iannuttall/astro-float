@@ -13,23 +13,23 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
 ---
 
 <Base title={`${post.data.title} · Field Notes`} description={post.data.description}>
-  {/* Three attributes are all Float needs:
-      - data-float-entry binds the page to its collection entry (optional; Float
-        can also infer it from the URL)
-      - data-float-body marks the element that wraps the rendered Markdown body;
-        it becomes editable in place in dev
-      - data-float-field="<frontmatter key>" on an element that prints a string
-        field verbatim — or a formatted date — makes that field editable in place too */}
-  <article data-float-entry={`blog:${post.id}`}>
+  {/* No data-float-* attributes are needed: Float finds the entry from the URL,
+      the rendered body by lining it up with the Markdown source, and the
+      title / description / date by their text. They remain optional overrides:
+      - data-float-entry="blog:<id>" pins the page to an entry
+      - data-float-body marks the element that wraps the rendered body
+      - data-float-field="<key>" marks an element that prints a field verbatim
+        (or a formatted date) */}
+  <article>
     <header>
       <div class="meta">
-        <time datetime={post.data.pubDate.toISOString()} data-float-field="pubDate">{fmt.format(post.data.pubDate)}</time>
+        <time datetime={post.data.pubDate.toISOString()}>{fmt.format(post.data.pubDate)}</time>
         {post.data.draft && <span class="badge">Draft</span>}
       </div>
-      <h1 data-float-field="title">{post.data.title}</h1>
-      <p class="lede" data-float-field="description">{post.data.description}</p>
+      <h1>{post.data.title}</h1>
+      <p class="lede">{post.data.description}</p>
     </header>
-    <div class="prose" data-float-body>
+    <div class="prose">
       <Content />
     </div>
     {post.data.tags.length > 0 && (
