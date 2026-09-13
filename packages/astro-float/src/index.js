@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { attachFloatApi } from "./server/api.js";
 import { createSyncGate } from "./server/sync-gate.js";
+import { watchEntries } from "./server/watch.js";
 
 const EDIT_ICON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>`;
 
@@ -64,7 +65,7 @@ export default function astroFloat(options = {}) {
 
         const gate = createSyncGate(server, logger);
 
-        attachFloatApi(server, {
+        const ctx = {
           root,
           // The schema reader loads content.config.ts through Vite to find image() / reference() fields.
           server,
@@ -77,7 +78,10 @@ export default function astroFloat(options = {}) {
           markdown,
           gate,
           logger,
-        });
+        };
+        attachFloatApi(server, ctx);
+        // Outside edits to entry files reach the toolbar as `astro-float:file-changed`.
+        watchEntries(server, ctx);
       },
     },
   };

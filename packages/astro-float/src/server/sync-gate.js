@@ -20,6 +20,8 @@ export function createSyncGate(server, logger) {
   let quietUntil = 0;
   /** @type {Array<(ok: boolean) => void>} */
   let waiters = [];
+  /** Files Float itself just wrote, so the watcher doesn't report them as outside changes. @type {Map<string, number>} */
+  const ownWrites = new Map();
 
   const settle = (ok) => {
     const pending = waiters;
@@ -87,6 +89,18 @@ export function createSyncGate(server, logger) {
     /** Open the quiet window without waiting on anything. */
     quiet() {
       quietUntil = Date.now() + QUIET_WINDOW_MS;
+    },
+
+    /** Record that Float is about to write `file`; the watcher will ignore the change it causes. */
+    ownWrite(file) {
+      ownWrites.set(file, Date.now() + QUIET_WINDOW_MS);
+      for (const [f, until] of ownWrites) if (until < Date.now()) ownWrites.delete(f);
+    },
+
+    /** Was this change caused by a Float write a moment ago? */
+    isOwnWrite(file) {
+      const until = ownWrites.get(file);
+      return typeof until === "number" && until > Date.now();
     },
   };
 }

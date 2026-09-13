@@ -1,4 +1,5 @@
 /** Small helpers shared by the panel's views. */
+import { ApiError } from "../api";
 
 /** Keep a focused control visible inside a scrolling column when the keyboard comes up. */
 export function keepInView(form: HTMLElement) {
@@ -49,6 +50,11 @@ export function slugify(value: string) {
 }
 
 export function describe(err: unknown): string {
+  if (err instanceof ApiError && err.issues?.length) {
+    const first = err.issues[0];
+    const where = first.path.join(".");
+    return where ? `${where}: ${first.message}` : first.message;
+  }
   if (err instanceof Error) return err.message;
   return String(err);
 }

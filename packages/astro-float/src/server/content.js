@@ -4,6 +4,7 @@ import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { splitBlocks } from "./blocks.js";
 import { readCollectionSchema, templateFromSchema } from "./schema.js";
+import { validateDocument, validationError } from "./validate.js";
 
 export const ENTRY_EXTS = new Set([".md", ".mdx", ".markdown"]);
 export const IMAGE_EXTS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".svg"]);
@@ -202,9 +203,13 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
     throw httpError(409, "file changed on disk since it was loaded");
   }
   const next = serializeDocument(frontmatter ?? {}, typeof body === "string" ? body : "");
+  // Refuse what Astro would refuse, before anything touches the disk.
+  const { issues } = await validateDocument(ctx, collection, next, { entryDir: path.dirname(abs) });
+  if (issues.length) throw validationError(issues);
   const saved = parseDocument(next);
   const result = { file: entry.file, body: saved.body, ...splitBlocks(saved.body, { mdx: isMdx(abs) }) };
   if (next === current) return { ...result, hash: hashOf(current), changed: false };
+  ctx.gate?.ownWrite?.(abs);
   await fs.writeFile(abs, next, "utf8");
   return { ...result, hash: hashOf(next), changed: true };
 }
@@ -282,8 +287,12 @@ export async function createEntry(ctx, { collection: collectionName, slug, title
   delete data.slug;
 
   const body = `Start writing…\n`;
+  const document = serializeDocument(data, body);
+  const { issues } = await validateDocument(ctx, collection.name, document, { entryDir: path.dirname(abs) });
+  if (issues.length) throw validationError(issues);
   await fs.mkdir(path.dirname(abs), { recursive: true });
-  await fs.writeFile(abs, serializeDocument(data, body), { encoding: "utf8", flag: "wx" });
+  ctx.gate?.ownWrite?.(abs);
+  await fs.writeFile(abs, document, { encoding: "utf8", flag: "wx" });
 
   return {
     collection: collection.name,

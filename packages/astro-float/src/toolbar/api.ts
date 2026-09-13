@@ -88,6 +88,23 @@ export interface FileChange {
   collection?: string;
   id?: string;
   file?: string;
+/** `{ collection, id, hash }` of an entry file that changed on disk outside Float (see `api.onFileChanged`). */
+export interface FileChanged {
+  collection: string;
+  id: string;
+  hash: string;
+}
+
+/** What the CLI's `doctor` and the popover read: the schema behind a collection and what it thinks of an entry. */
+export interface Diagnosis {
+  schema: "zod" | "inferred" | "none";
+  strict: boolean;
+  issues: ValidationIssue[];
+}
+
+interface ViteHot {
+  on(event: string, cb: (data: unknown) => void): void;
+  off?(event: string, cb: (data: unknown) => void): void;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -164,6 +181,25 @@ export const api = {
       synced: boolean;
       config: { file: string; updated: boolean; created?: boolean; note?: string };
     }>("/collections", { method: "POST", body: JSON.stringify(payload) }),
+
+  /** The schema's verdict on the entry as it is on disk (a 422's `issues`, without saving). */
+  diagnose: (collection: string, id: string) =>
+    request<Diagnosis>(`/diagnose?collection=${encodeURIComponent(collection)}&id=${encodeURIComponent(id)}`),
+
+  /**
+   * Called when an entry file changes on disk outside Float (your editor, git).
+   * Rides Vite's HMR socket, so it needs the dev server's client; returns an
+   * unsubscribe. Does nothing (and returns a no-op) when HMR isn't available.
+   */
+  onFileChanged: (cb: (change: FileChanged) => void): (() => void) => {
+    const hot = (import.meta as ImportMeta & { hot?: ViteHot }).hot;
+    if (!hot) return () => {};
+    const handler = (data: unknown) => {
+      if (data && typeof data === "object" && "collection" in data && "id" in data) cb(data as FileChanged);
+    };
+    hot.on("astro-float:file-changed", handler);
+    return () => hot.off?.("astro-float:file-changed", handler);
+  },
 
   /** Render a draft body block by block (same split as `EntryDoc.blocks`); called while typing in the Markdown tab. */
   render: (payload: { collection: string; id: string; body: string }) =>
