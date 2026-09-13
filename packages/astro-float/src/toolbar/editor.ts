@@ -63,27 +63,66 @@ const PAGE_STYLE = /* css */ `
 [data-float-editing] a { cursor: text; }
 [data-float-editing] img { cursor: default; }
 
-/* In-page source view for the body: a textarea in the prose's place, same wash. */
+/* In-page source view for the body (toolbar/source.ts): a wrapper with the prose box's exact geometry —
+ * same wash, same corner-control position — holding a highlighted mirror under a transparent textarea. */
 .astro-float-source {
+  position: relative;
+  z-index: 0;
   display: block;
-  width: 100%;
-  min-height: 240px;
-  border: 1px solid color-mix(in srgb, currentColor 12%, transparent);
-  border-radius: 6px;
-  padding: 14px 18px;
-  margin: 0 0 18px;
   color: inherit;
-  font: 13.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  tab-size: 2;
-  resize: vertical;
-  white-space: pre-wrap;
-  outline: none;
-  caret-color: currentColor;
+}
+.astro-float-source::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -14px -18px;
+  border-radius: 6px;
   background-color: transparent;
+  pointer-events: none;
   transition: background-color 120ms ease;
 }
-.astro-float-source:hover { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
-.astro-float-source:focus { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
+.astro-float-source:hover::after, .astro-float-source[data-float-hover]::after { background-color: color-mix(in srgb, currentColor 4.5%, transparent); }
+.astro-float-source:focus-within::after { background-color: color-mix(in srgb, currentColor 2.5%, transparent); }
+.astro-float-src-mirror, .astro-float-src-area {
+  display: block;
+  margin: 0;
+  border: 0;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font: inherit;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: manual;
+  text-align: left;
+}
+.astro-float-src-mirror { position: relative; color: inherit; pointer-events: none; user-select: none; -webkit-user-select: none; overflow: visible; }
+.astro-float-src-area {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  background: transparent;
+  color: transparent;
+  caret-color: currentColor;
+  resize: none;
+  outline: none;
+  overflow: hidden;
+  -webkit-text-fill-color: transparent;
+}
+.astro-float-src-area::selection { background: color-mix(in srgb, currentColor 16%, transparent); }
+.astro-float-src-mirror .ln { display: block; }
+.astro-float-src-mirror .md-mark, .astro-float-src-mirror .md-hash, .astro-float-src-mirror .md-hr, .astro-float-src-mirror .md-url { color: color-mix(in srgb, currentColor 38%, transparent); }
+/* Bold without moving a glyph: a stroke, not a heavier face, so the caret in the textarea still lands right. */
+.astro-float-src-mirror .md-h, .astro-float-src-mirror .md-strong { -webkit-text-stroke: 0.5px currentColor; }
+.astro-float-src-mirror .md-hash { display: inline-block; width: 0; direction: rtl; white-space: pre; transform: translateX(-6px); -webkit-text-stroke: 0; }
+.astro-float-src-mirror .md-em { font-style: italic; }
+.astro-float-src-mirror .md-link { text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 30%, transparent); text-underline-offset: 3px; }
+.astro-float-src-mirror .md-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; background: color-mix(in srgb, currentColor 6%, transparent); border-radius: 3px; }
+.astro-float-src-mirror .md-codeline { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.92em; background: color-mix(in srgb, currentColor 5%, transparent); }
+.astro-float-src-mirror .md-quote { position: relative; color: color-mix(in srgb, currentColor 70%, transparent); }
+.astro-float-src-mirror .md-quote::before { content: ""; position: absolute; left: -12px; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: color-mix(in srgb, currentColor 22%, transparent); }
 
 /* Body control: copy / source inside the top-right corner of the body's wash. Part of the wash —
  * no pill, no shadow, no border. Two icon-only buttons that never change size or place; the

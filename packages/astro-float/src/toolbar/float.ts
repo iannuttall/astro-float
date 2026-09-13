@@ -9,6 +9,7 @@ import { RegionControl } from "./overlays";
 import { detectEntry, swapPage, type DetectedEntry } from "./page";
 import { Pill, type PillPrefs, type StatusView } from "./panel/pill";
 import { clone, describe, resetViewportZoom } from "./panel/util";
+import { SourceEditor } from "./source";
 import { humanize, schemaFor, type CollectionSchema } from "./schema";
 import { STYLES } from "./styles";
 import { attachTooltips, detachTooltips } from "./tooltip";
@@ -73,10 +74,10 @@ class Float {
    * swaps in Astro's fresh render.
    */
   private sourceArea: HTMLTextAreaElement | null = null;
+  private sourceEditor: SourceEditor | null = null;
   private sourceDraft = "";
   private sourceBusy = false;
   private sourceError: string | null = null;
-  private wiredAreas = new WeakSet<HTMLTextAreaElement>();
   private savePromise: Promise<void> | null = null;
   /** The panel follows the site's colour scheme: watch the page for changes while editing. */
   private themeObserver: MutationObserver | null = null;
@@ -294,7 +295,7 @@ class Float {
 
   /** The body region: the prose container, or the in-page source textarea standing in for it. */
   private bodyRegion(): HTMLElement | null {
-    if (this.sourceArea) return this.sourceArea;
+    if (this.sourceEditor) return this.sourceEditor.el;
     return this.page.bound && !this.bodyReadOnly ? this.page.container : null;
   }
 
@@ -344,7 +345,7 @@ class Float {
 
   // ---- source mode (raw Markdown, in the page) -------------------------------------------
 
-  /** The corner control's Source / Rendered: swap the prose for a Markdown textarea in the same spot (and back). */
+  /** The corner control's Source / Rendered: swap the prose for its Markdown in the same spot (and back). */
   private async toggleSourceMode() {
     if (this.sourceBusy) return;
     if (this.sourceArea) {
@@ -362,81 +363,44 @@ class Float {
     const anchorBlock = anchorNode ? (anchorNode instanceof Element ? anchorNode : anchorNode.parentElement) : null;
     const anchorTop = anchorBlock ? closestTopLevel(anchorBlock, container)?.getBoundingClientRect().top ?? null : null;
     const scrollY = window.scrollY;
-    const rect = container.getBoundingClientRect();
 
-    const area = document.createElement("textarea");
-    area.className = "astro-float-source";
-    area.spellcheck = false;
-    area.setAttribute("aria-label", "Markdown source");
-    // Same height as the prose it replaces, so nothing below moves and the page keeps its scroll position.
-    area.style.height = `${Math.max(240, rect.height)}px`;
-    this.enterSource(area);
+    const editor = this.enterSource(container);
+    if (!editor) return;
     window.scrollTo(0, scrollY);
-    area.focus({ preventScroll: true });
-    // Open on the block he was looking at, at the height it had on the page.
+    editor.focus();
+    // Open on the block he was looking at, at the height it had on the page: the source line that starts
+    // that block goes where the block's top was, so the swap reads as the prose turning into its Markdown.
+    // The page stays put (the wash and the corner control don't move); only a caret line that would be
+    // off-screen brings the page along, and then only to where the block was.
     if (where) {
-      area.setSelectionRange(where.offset, where.offset);
-      const cs = getComputedStyle(area);
-      const lineHeight = parseFloat(cs.lineHeight) || 21.6;
-      const padTop = parseFloat(cs.paddingTop) || 0;
-      const line = area.value.slice(0, where.offset).split("\n").length - 1;
-      const areaTop = area.getBoundingClientRect().top;
-      const wantedY = anchorTop ?? areaTop + padTop;
-      area.scrollTop = Math.max(0, padTop + line * lineHeight - (wantedY - areaTop));
-      // The textarea couldn't scroll far enough to line up? Only then nudge the page, and only enough to keep the line in view.
-      const lineY = areaTop + padTop + line * lineHeight - area.scrollTop;
-      if (lineY < 72 || lineY > window.innerHeight - 72) window.scrollBy(0, lineY - Math.min(wantedY, window.innerHeight - 120));
-    } else {
-      window.scrollTo(0, scrollY);
+      editor.setSelection(where.offset);
+      const lineY = editor.lineTop(where.offset);
+      if (lineY < 72 || lineY > window.innerHeight - 72) window.scrollBy(0, lineY - Math.min(anchorTop ?? 120, window.innerHeight - 120));
     }
-    this.region.show(area, this.bodyRegionActions());
+    this.region.show(editor.el, this.bodyRegionActions());
   }
 
-  /** Make `area` the body's editor, standing in for the prose. */
-  private enterSource(area: HTMLTextAreaElement) {
-    if (!this.doc || this.bodyReadOnly || this.sourceArea) return;
+  /** Put the source editor in the prose's place. */
+  private enterSource(container: HTMLElement): SourceEditor | null {
+    if (!this.doc || this.bodyReadOnly || this.sourceArea) return null;
     this.sourceDraft = this.currentBody();
     this.sourceError = null;
-    this.wireSourceArea(area);
-    area.value = this.sourceDraft;
+    const editor = new SourceEditor(container, this.sourceDraft, {
+      onInput: (text) => {
+        if (this.sourceEditor !== editor) return;
+        this.sourceDraft = text;
+        this.clearIssues("body");
+        this.touched();
+      },
+    });
     this.page.detach();
-    const container = this.page.container;
-    if (container) {
-      container.style.display = "none";
-      container.after(area);
-    }
-    this.sourceArea = area;
+    container.style.display = "none";
+    container.after(editor.el);
+    this.sourceEditor = editor;
+    this.sourceArea = editor.area;
     this.region.hide();
     this.renderStatus();
-  }
-
-  private wireSourceArea(area: HTMLTextAreaElement) {
-    if (this.wiredAreas.has(area)) return;
-    this.wiredAreas.add(area);
-    area.addEventListener("input", () => {
-      if (this.sourceArea !== area) return;
-      this.sourceDraft = area.value;
-      this.clearIssues("body");
-      this.touched();
-    });
-    area.addEventListener("keyup", (e) => {
-      if (e.key === "Escape") e.stopPropagation();
-    });
-    area.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        area.blur();
-      }
-      if (e.key === "Tab") {
-        e.preventDefault();
-        const s = area.selectionStart;
-        area.setRangeText("  ", s, area.selectionEnd, "end");
-        if (this.sourceArea === area) {
-          this.sourceDraft = area.value;
-          this.touched();
-        }
-      }
-    });
+    return editor;
   }
 
   /**
@@ -452,7 +416,7 @@ class Float {
     this.region.refresh();
     try {
       // Remember where he is in the text so the rendered page opens on the same block.
-      const place = this.sourcePlace(this.sourceArea);
+      const place = this.sourcePlace();
       if (this.savePromise) await this.savePromise; // an autosave already in flight
       if (this.isDirty()) {
         await this.save();
@@ -473,23 +437,21 @@ class Float {
     }
   }
 
-  /** Caret offset in the source textarea plus the viewport height of its line. */
-  private sourcePlace(area: HTMLTextAreaElement): { offset: number; viewportY: number } | null {
-    if (!area.isConnected) return null;
-    const offset = area.selectionStart;
-    const cs = getComputedStyle(area);
-    const lineHeight = parseFloat(cs.lineHeight) || 21.6;
-    const padTop = parseFloat(cs.paddingTop) || 0;
-    const line = area.value.slice(0, offset).split("\n").length - 1;
-    const y = area.getBoundingClientRect().top + padTop + line * lineHeight - area.scrollTop;
+  /** Caret offset in the source plus the viewport height of its line. */
+  private sourcePlace(): { offset: number; viewportY: number } | null {
+    const editor = this.sourceEditor;
+    if (!editor || !editor.el.isConnected) return null;
+    const offset = editor.area.selectionStart;
+    const y = editor.lineTop(offset);
     return { offset, viewportY: Math.max(72, Math.min(y, window.innerHeight - 72)) };
   }
 
   private exitSourceMode(restoreView: boolean) {
     if (!this.sourceArea) return;
-    const area = this.sourceArea;
+    const editor = this.sourceEditor;
     this.sourceArea = null;
-    area.remove();
+    this.sourceEditor = null;
+    editor?.dispose();
     if (this.page.container) {
       this.page.container.style.display = "";
       if (restoreView && this.editing && !this.bodyReadOnly) this.page.attach();
@@ -653,6 +615,8 @@ class Float {
     if (!this.editing || !this.doc) return;
     const mine = (change.collection === this.doc.collection && change.id === this.doc.id) || (!!change.file && change.file === this.doc.file);
     if (!mine) return;
+    // Our own save comes back as an event too; the hash says so. Nothing to do.
+    if (change.hash && change.hash === this.doc.hash) return;
     if (!this.isDirty()) {
       void this.reloadFromDisk();
       return;
@@ -1013,12 +977,8 @@ class Float {
   // ---- images and video (drop / paste on the prose only) ------------------------------
 
   private placeImage(item: MediaItem, range: Range | null) {
-    if (this.sourceArea) {
-      const area = this.sourceArea;
-      const snippet = `\n${mediaMarkdown(item)}\n`;
-      area.setRangeText(snippet, area.selectionStart, area.selectionEnd, "end");
-      this.sourceDraft = area.value;
-      this.touched();
+    if (this.sourceEditor) {
+      this.sourceEditor.insertText(`\n${mediaMarkdown(item)}\n`); // goes through the editor's input path
     } else if (this.page.bound && !this.bodyReadOnly) {
       this.page.insertMedia(item, range);
     } else if (!this.bodyReadOnly) {
