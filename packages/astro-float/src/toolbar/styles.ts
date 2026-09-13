@@ -277,18 +277,8 @@ export const STYLES = /* css */ `
 .field-revert[hidden] { display: none; }
 .field-revert:hover { background: var(--bg-hover); }
 .field-note { font-size: 11px; line-height: 1.45; color: var(--warn); }
-.field-note[data-tone="err"] { color: var(--err); }
 .field-note:empty { display: none; }
 .field-removed .field-key { text-decoration: line-through; color: var(--fg-faint); }
-/* What the schema says about a field: required / default / not in schema. Quiet unless it's a problem. */
-.field-meta[data-tone="warn"] { color: var(--warn); }
-.field-meta[data-tone="err"] { color: var(--err); }
-.field-desc { font-size: 11px; line-height: 1.45; color: var(--fg-faint); }
-/* A schema field the file doesn't have yet: the key in the faint tone and a quiet Add. */
-.field-missing .field-key { color: var(--fg-faint); }
-.field-missing .field-head { min-height: 24px; }
-.field-add-btn { margin-left: auto; color: var(--fg-faint); }
-.field-missing:hover .field-add-btn { color: var(--fg); }
 .field[data-kind="boolean"] .field-head { min-height: 24px; }
 .field[data-kind="boolean"] .toggle-row { width: auto; }
 .field-add { display: flex; gap: 6px; padding: 12px 16px 0; margin-top: 2px; }

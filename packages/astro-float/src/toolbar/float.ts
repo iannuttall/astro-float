@@ -1,4 +1,4 @@
-import { api, ApiError, type Collection, type EntryDoc, type FieldKind, type Frontmatter, type MediaItem, type SchemaField } from "./api";
+import { api, ApiError, type Collection, type EntryDoc, type Frontmatter, type MediaItem } from "./api";
 import { h, replaceChildren } from "./dom";
 import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
 import { DatePicker } from "./datepicker";
@@ -185,7 +185,6 @@ class Float {
         bodyReadOnly: this.bodyReadOnly,
         bodyDiff: this.page.debugDiff(),
         onPageFields: this.fields.keys(),
-        schema: this.doc?.schema?.fields.map((f) => f.key) ?? null,
         entry: this.doc ? `${this.doc.collection}/${this.doc.id}` : null,
       }),
     };
@@ -867,117 +866,49 @@ class Float {
     }
     section.hidden = false;
 
-    const doc = this.doc;
-    const schema = doc.schema;
     const rows: HTMLElement[] = [];
-    const seen = new Set<string>();
-
-    const staticRow = (key: string, value: unknown) =>
-      h("div", { class: "field" }, h("div", { class: "field-head" }, h("span", { class: "field-key" }, key), h("span", { class: "field-meta" }, "read-only")), h("div", { class: "field-static mono" }, String(value)));
+    for (const [key, value] of Object.entries(this.draftFrontmatter)) {
+      if (READ_ONLY_KEYS.has(key)) {
+        rows.push(h("div", { class: "field" }, h("div", { class: "field-head" }, h("span", { class: "field-key" }, key), h("span", { class: "field-meta" }, "read-only")), h("div", { class: "field-static mono" }, String(value))));
+        continue;
+      }
+      rows.push(this.renderField(key, value));
+    }
     // Fields removed since the last save stay listed so the removal can be undone before it's written.
-    const removedRow = (key: string, field?: SchemaField) =>
-      h(
-        "div",
-        { class: "field field-removed" },
+    for (const key of Object.keys(this.doc.frontmatter)) {
+      if (key in this.draftFrontmatter) continue;
+      rows.push(
         h(
           "div",
-          { class: "field-head" },
-          h("span", { class: "field-key" }, key),
-          field?.required ? h("span", { class: "field-meta", "data-tone": "warn", title: "The schema requires this field" }, "required") : null,
-          h("span", { class: "field-meta" }, "removed on save"),
-          h("button", { class: "btn btn-sm btn-ghost", type: "button", onClick: () => this.revertField(key) }, icon("undo", 13), "Restore"),
+          { class: "field field-removed" },
+          h(
+            "div",
+            { class: "field-head" },
+            h("span", { class: "field-key" }, key),
+            h("span", { class: "field-meta" }, "removed on save"),
+            h("button", { class: "btn btn-sm btn-ghost", type: "button", onClick: () => this.revertField(key) }, icon("undo", 13), "Restore"),
+          ),
         ),
       );
-
-    // Schema first, in schema order: present fields get their control, absent ones an "Add" row.
-    if (schema) {
-      for (const field of schema.fields) {
-        const { key } = field;
-        seen.add(key);
-        if (READ_ONLY_KEYS.has(key)) {
-          if (key in this.draftFrontmatter) rows.push(staticRow(key, this.draftFrontmatter[key]));
-          continue;
-        }
-        if (key in this.draftFrontmatter) rows.push(this.renderField(key, this.draftFrontmatter[key], field));
-        else if (key in doc.frontmatter) rows.push(removedRow(key, field));
-        else rows.push(this.renderMissingField(field));
-      }
-    }
-    // Then whatever else the file has, in file order.
-    for (const [key, value] of Object.entries(this.draftFrontmatter)) {
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (READ_ONLY_KEYS.has(key)) rows.push(staticRow(key, value));
-      else rows.push(this.renderField(key, value));
-    }
-    for (const key of Object.keys(doc.frontmatter)) {
-      if (seen.has(key)) continue;
-      rows.push(removedRow(key));
     }
 
-    const newKey = h("input", { class: "input", placeholder: "New field", "aria-label": "New field name", list: schema ? "float-schema-keys" : null }) as HTMLInputElement;
+    const newKey = h("input", { class: "input", placeholder: "New field", "aria-label": "New field name" }) as HTMLInputElement;
     const add = () => {
       const key = newKey.value.trim();
       if (!key || key in this.draftFrontmatter || READ_ONLY_KEYS.has(key)) return;
-      const field = this.schemaField(key);
-      this.draftFrontmatter[key] = field ? emptyValueFor(field) : "";
+      this.draftFrontmatter[key] = "";
       this.touched();
       this.renderFieldsSection();
     };
     newKey.addEventListener("keydown", (e) => {
       if (e.key === "Enter") add();
     });
-    // Offer the schema's absent keys as completions.
-    const suggestions = schema
-      ? h("datalist", { id: "float-schema-keys" }, schema.fields.filter((f) => !(f.key in this.draftFrontmatter) && !READ_ONLY_KEYS.has(f.key)).map((f) => h("option", { value: f.key })))
-      : null;
-
-    const heading = schema
-      ? h(
-          "div",
-          { class: "sb-heading sb-heading-row" },
-          h("span", null, "Fields"),
-          h("div", { class: "sb-heading-aside" }, h("span", { class: "collection-name", title: `Controls come from the ${doc.collection} schema in content.config.ts (${schema.file})` }, "schema")),
-        )
-      : h("h3", { class: "sb-heading" }, "Fields");
 
     replaceChildren(
       section,
-      heading,
+      h("h3", { class: "sb-heading" }, "Fields"),
       rows.length ? h("div", { class: "fields" }, rows) : h("p", { class: "empty" }, "No frontmatter yet."),
-      h("div", { class: "field-add" }, newKey, suggestions, h("button", { class: "btn btn-icon", type: "button", "aria-label": "Add field", title: "Add field", onClick: add }, icon("plus", 14))),
-    );
-  }
-
-  private schemaField(key: string): SchemaField | undefined {
-    return this.doc?.schema?.fields.find((f) => f.key === key);
-  }
-
-  /** A schema field the file doesn't have: one click adds it (with its default, or an empty value of the right shape). */
-  private renderMissingField(field: SchemaField): HTMLElement {
-    const { key } = field;
-    const add = () => {
-      this.draftFrontmatter[key] = emptyValueFor(field);
-      this.touched();
-      this.renderFieldsSection();
-      // Put the caret in the control that just appeared.
-      const control = this.fieldsSection?.querySelector<HTMLElement>(`.field[data-key="${CSS.escape(key)}"] :is(input, textarea, select, button.date-field)`);
-      control?.focus({ preventScroll: true });
-    };
-    const meta = field.required
-      ? h("span", { class: "field-meta", "data-tone": "warn", title: "The schema requires this field; Astro won't load the entry without it" }, "required")
-      : h("span", { class: "field-meta", title: "Optional in the schema" }, "default" in field ? `default ${shortValue(field.default)}` : "optional");
-    return h(
-      "div",
-      { class: "field field-missing", "data-kind": field.kind, "data-key": key },
-      h(
-        "div",
-        { class: "field-head" },
-        h("span", { class: "field-key", title: describeField(field) }, key),
-        meta,
-        h("button", { class: "btn btn-sm btn-ghost field-add-btn", type: "button", title: `Add ${key}`, onClick: add }, icon("plus", 13), "Add"),
-      ),
-      field.description ? h("div", { class: "field-desc" }, field.description) : null,
+      h("div", { class: "field-add" }, newKey, h("button", { class: "btn btn-icon", type: "button", "aria-label": "Add field", title: "Add field", onClick: add }, icon("plus", 14))),
     );
   }
 
@@ -1005,43 +936,20 @@ class Float {
     return JSON.stringify(this.draftFrontmatter[key]) !== JSON.stringify(this.doc.frontmatter[key]);
   }
 
-  /**
-   * One frontmatter field. With a schema the control comes from it (a select
-   * for `z.enum`, a calendar for `z.coerce.date()`, …) and the row says what the
-   * schema wants — required, default, description. When the file's value
-   * doesn't fit the schema the control is inferred from the value instead and
-   * the row says so, so nothing is silently coerced.
-   */
-  private renderField(key: string, value: unknown, schemaField?: SchemaField): HTMLElement {
-    const inferred = fieldKind(value);
-    const fits = schemaField ? valueFits(schemaField, value) : false;
-    // A short string in a `z.string()` still gets a textarea once it grows long.
-    const kind: FieldKind = schemaField && fits ? (schemaField.kind === "string" && inferred === "text" ? "text" : schemaField.kind) : inferred;
+  private renderField(key: string, value: unknown): HTMLElement {
+    const kind = fieldKind(value);
     const original = this.doc?.frontmatter[key];
     const onPage = this.fields.has(key);
-    const strict = !!this.doc?.schema?.strict;
     const revert = h(
       "button",
       { class: "field-revert", type: "button", "aria-label": `Revert ${key}`, title: "Back to the saved value", hidden: !this.fieldChanged(key), onClick: () => this.revertField(key) },
       icon("undo", 12),
     ) as HTMLButtonElement;
     const hint = h("div", { class: "field-note" });
-    const note = (text: string, tone: "warn" | "err" = "warn") => {
-      hint.textContent = text;
-      hint.dataset.tone = tone;
-    };
-    // Required by the schema and empty: say so (the file still saves; Astro is what would complain).
-    const check = (v: unknown) => {
-      if (!schemaField?.required || kind === "number" || kind === "json" || kind === "boolean") return;
-      const empty = v == null || v === "" || (Array.isArray(v) && v.length === 0);
-      if (empty) note("Required by the schema — Astro won't load the entry while this is empty.");
-      else if (hint.dataset.tone === "warn") hint.textContent = "";
-    };
     const set = (next: unknown) => {
       this.draftFrontmatter[key] = next;
       this.fields.setValue(key, next);
       revert.hidden = !this.fieldChanged(key);
-      check(next);
       this.touched();
     };
     // The page can change this field too (title typed on the page): mirror it here unless this control has the caret.
@@ -1049,9 +957,7 @@ class Float {
       this.fieldSyncs.set(key, () => {
         revert.hidden = !this.fieldChanged(key);
         apply(this.draftFrontmatter[key]);
-        check(this.draftFrontmatter[key]);
       });
-    const placeholder = schemaField && typeof schemaField.default === "string" && schemaField.default ? schemaField.default : undefined;
 
     let control: HTMLElement;
     switch (kind) {
@@ -1076,84 +982,25 @@ class Float {
         break;
       }
       case "number": {
-        const input = h("input", {
-          class: "input",
-          type: "number",
-          step: schemaField?.integer ? "1" : "any",
-          min: schemaField?.min ?? null,
-          max: schemaField?.max ?? null,
-          value: String(value),
-          placeholder: schemaField && typeof schemaField.default === "number" ? String(schemaField.default) : null,
-        }) as HTMLInputElement;
-        // Out of the schema's range (or not whole when it wants an integer): written as typed, but say so.
-        const range = (n: number) => {
-          const problems: string[] = [];
-          if (schemaField?.integer && !Number.isInteger(n)) problems.push("a whole number");
-          if (typeof schemaField?.min === "number" && n < schemaField.min) problems.push(`at least ${schemaField.min}`);
-          if (typeof schemaField?.max === "number" && n > schemaField.max) problems.push(`at most ${schemaField.max}`);
-          if (problems.length) note(`The schema wants ${problems.join(", ")}.`);
-          else hint.textContent = "";
-        };
+        const input = h("input", { class: "input", type: "number", step: "any", value: String(value) }) as HTMLInputElement;
         input.addEventListener("input", () => {
           if (input.value === "") {
             input.dataset.invalid = "";
-            note(`Empty — keeping ${String(original ?? value)} until you enter a number.`);
+            hint.textContent = `Empty — keeping ${String(original ?? value)} until you enter a number.`;
             return;
           }
           const n = Number(input.value);
           if (Number.isNaN(n)) return;
           delete input.dataset.invalid;
-          range(n);
+          hint.textContent = "";
           set(n);
         });
-        if (typeof value === "number") range(value);
         control = input;
-        break;
-      }
-      case "reference": {
-        // `reference("blog")`: pick an entry of that collection. The id is what's stored, the title is what's shown.
-        const target = this.collections.find((c) => c.name === schemaField?.collection);
-        if (!target) {
-          const input = h("input", { class: "input", type: "text", value: value == null ? "" : String(value), placeholder: "entry id", spellcheck: false }) as HTMLInputElement;
-          input.addEventListener("input", () => set(input.value));
-          mirror((v) => {
-            if (this.canvas.activeElement === input) return;
-            const text = typeof v === "string" ? v : "";
-            if (input.value !== text) input.value = text;
-          });
-          control = input;
-          break;
-        }
-        const current = typeof value === "string" ? value : "";
-        const listed = target.entries.some((e) => e.id === current);
-        const select = h(
-          "select",
-          { class: "select", "aria-label": key, title: current ? `${target.name}/${current}` : `An entry of ${target.name}` },
-          !schemaField?.required || !current ? h("option", { value: "", selected: !current }, "—") : null,
-          current && !listed ? h("option", { value: UNLISTED, selected: true }, `${current} (no such entry)`) : null,
-          target.entries.map((e) => h("option", { value: e.id, selected: e.id === current, title: e.id }, e.title)),
-        ) as HTMLSelectElement;
-        select.addEventListener("change", () => {
-          if (select.value === UNLISTED) return;
-          select.title = select.value ? `${target.name}/${select.value}` : `An entry of ${target.name}`;
-          set(select.value === "" ? (schemaField?.nullable ? null : undefined) : select.value);
-          if (select.value === "" && !schemaField?.nullable) {
-            // An optional reference with nothing picked is left out of the file rather than written as "".
-            delete this.draftFrontmatter[key];
-            revert.hidden = !this.fieldChanged(key);
-          }
-        });
-        if (current && !listed) note(`No "${current}" in ${target.name}.`);
-        mirror((v) => {
-          if (typeof v === "string" && target.entries.some((e) => e.id === v)) select.value = v;
-          else if (v == null) select.value = "";
-        });
-        control = select;
         break;
       }
       case "date": {
         // A real picker, shared with the date on the page. The stored shape is kept: date part swapped, any time suffix preserved.
-        const suffix = typeof value === "string" ? value.slice(10) : "";
+        const suffix = String(value).slice(10);
         const label = h("span", { class: "date-field-label" }) as HTMLElement;
         const button = h(
           "button",
@@ -1184,46 +1031,17 @@ class Float {
         break;
       }
       case "tags": {
-        const list = Array.isArray(value) ? (value as unknown[]) : [];
-        const input = h("input", { class: "input", value: list.join(", "), placeholder: "comma, separated" }) as HTMLInputElement;
-        const numbers = schemaField?.items === "number" || (!schemaField && list.length > 0 && list.every((v) => typeof v === "number"));
+        const input = h("input", { class: "input", value: (value as unknown[]).join(", "), placeholder: "comma, separated" }) as HTMLInputElement;
+        const allNumbers = (value as unknown[]).length > 0 && (value as unknown[]).every((v) => typeof v === "number");
         input.addEventListener("input", () => {
           const parts = input.value.split(",").map((s) => s.trim()).filter(Boolean);
-          set(numbers ? parts.map(Number).filter((n) => !Number.isNaN(n)) : parts);
+          set(allNumbers ? parts.map(Number).filter((n) => !Number.isNaN(n)) : parts);
         });
         control = input;
         break;
       }
-      case "enum": {
-        // `z.enum([...])`: a select. A value the schema doesn't list stays selectable (and flagged) rather than being swapped out from under you.
-        const values = schemaField?.values ?? [];
-        const listed = values.some((v) => v === value);
-        const select = h(
-          "select",
-          { class: "select", "aria-label": key },
-          schemaField?.nullable || value == null ? h("option", { value: "", selected: value == null }, "—") : null,
-          !listed && value != null ? h("option", { value: UNLISTED, selected: true }, `${String(value)} (not in schema)`) : null,
-          values.map((v) => h("option", { value: String(v), selected: v === value }, String(v))),
-        ) as HTMLSelectElement;
-        select.addEventListener("change", () => {
-          if (select.value === UNLISTED) return;
-          if (select.value === "") {
-            set(null);
-            return;
-          }
-          const next = values.find((v) => String(v) === select.value);
-          if (next !== undefined) set(next);
-        });
-        if (!listed && value != null) note(`"${String(value)}" isn't one of the schema's values (${values.map(String).join(", ")}).`);
-        mirror((v) => {
-          const next = values.find((x) => x === v);
-          if (next !== undefined) select.value = String(next);
-        });
-        control = select;
-        break;
-      }
       case "text": {
-        const ta = h("textarea", { class: "textarea", rows: 3, value: String(value), placeholder }) as HTMLTextAreaElement;
+        const ta = h("textarea", { class: "textarea", rows: 3, value: String(value) }) as HTMLTextAreaElement;
         ta.addEventListener("input", () => set(ta.value));
         mirror((v) => {
           if (this.canvas.activeElement === ta) return;
@@ -1242,14 +1060,14 @@ class Float {
             hint.textContent = "";
           } catch {
             ta.dataset.invalid = "";
-            note("Not valid JSON yet — keeping the last valid value.");
+            hint.textContent = "Not valid JSON yet — keeping the last valid value.";
           }
         });
         control = ta;
         break;
       }
       default: {
-        const input = h("input", { class: "input", type: "text", value: value == null ? "" : String(value), placeholder }) as HTMLInputElement;
+        const input = h("input", { class: "input", type: "text", value: value == null ? "" : String(value) }) as HTMLInputElement;
         input.addEventListener("input", () => set(input.value));
         mirror((v) => {
           if (this.canvas.activeElement === input) return;
@@ -1260,52 +1078,32 @@ class Float {
       }
     }
 
-    // What the row says about the schema: required / not in schema / value doesn't fit.
-    const metas: HTMLElement[] = [];
-    if (schemaField) {
-      if (!fits) note(`The schema expects ${describeKind(schemaField)}; this value is edited as ${inferred === "string" ? "text" : inferred}.`);
-      if (schemaField.required) metas.push(h("span", { class: "field-meta", title: "The schema requires this field" }, "required"));
-    } else if (this.doc?.schema) {
-      metas.push(
-        h(
-          "span",
-          { class: "field-meta", "data-tone": strict ? "warn" : null, title: strict ? "content.config.ts doesn't list this key and the schema rejects unknown keys — Astro won't load the entry" : "content.config.ts doesn't list this key" },
-          "not in schema",
-        ),
-      );
-    }
-    check(value);
-
     return h(
       "div",
-      { class: "field", "data-kind": kind, "data-key": key, "data-on-page": onPage ? "" : null },
+      { class: "field", "data-kind": kind, "data-on-page": onPage ? "" : null },
       h(
         "div",
         { class: "field-head" },
-        h("span", { class: "field-key", title: [key, kind, schemaField ? describeField(schemaField) : null, onPage ? "also editable on the page" : null].filter(Boolean).join(" · ") }, key),
+        h("span", { class: "field-key", title: onPage ? `${key} · ${kind} · also editable on the page` : `${key} · ${kind}` }, key),
         revert,
-        metas,
         onPage ? h("span", { class: "field-meta", title: "Also editable on the page" }, "on page") : null,
         kind === "boolean" ? control : null,
-        schemaField?.required
-          ? null
-          : h(
-              "button",
-              {
-                class: "field-remove",
-                type: "button",
-                "aria-label": `Remove ${key}`,
-                title: "Remove field (undo before saving with Restore)",
-                onClick: () => {
-                  delete this.draftFrontmatter[key];
-                  this.touched();
-                  this.renderFieldsSection();
-                },
-              },
-              icon("close", 12),
-            ),
+        h(
+          "button",
+          {
+            class: "field-remove",
+            type: "button",
+            "aria-label": `Remove ${key}`,
+            title: "Remove field (undo before saving with Restore)",
+            onClick: () => {
+              delete this.draftFrontmatter[key];
+              this.touched();
+              this.renderFieldsSection();
+            },
+          },
+          icon("close", 12),
+        ),
       ),
-      schemaField?.description ? h("div", { class: "field-desc" }, schemaField.description) : null,
       kind === "boolean" ? null : control,
       hint,
     );
@@ -1599,8 +1397,7 @@ class Float {
 
 // ---- helpers ------------------------------------------------------------------------
 
-/** Select value standing in for a frontmatter value the schema's enum doesn't list. */
-const UNLISTED = "__float_unlisted__";
+type FieldKind = "string" | "text" | "boolean" | "number" | "date" | "tags" | "json";
 
 function fieldKind(value: unknown): FieldKind {
   if (typeof value === "boolean") return "boolean";
@@ -1613,88 +1410,6 @@ function fieldKind(value: unknown): FieldKind {
   if (Array.isArray(value) && value.every((v) => typeof v === "string" || typeof v === "number")) return "tags";
   if (value == null) return "string";
   return "json";
-}
-
-/** Can the schema's control edit this value as-is? (`null` only counts when the schema allows it.) */
-function valueFits(field: SchemaField, value: unknown): boolean {
-  if (value == null) return !!field.nullable || field.kind === "string" || field.kind === "text" || field.kind === "enum" || field.kind === "reference";
-  switch (field.kind) {
-    case "string":
-    case "text":
-    case "reference":
-      return typeof value === "string";
-    case "number":
-      return typeof value === "number";
-    case "boolean":
-      return typeof value === "boolean";
-    case "date":
-      return typeof value === "string" && DATE_LIKE.test(value);
-    case "tags":
-      return Array.isArray(value) && value.every((v) => (field.items === "number" ? typeof v === "number" : typeof v === "string"));
-    case "enum":
-      return typeof value === "string" || typeof value === "number";
-    case "json":
-      return true;
-  }
-}
-
-/** The value a schema field starts with when added from the sidebar: its default, else empty in the right shape. */
-function emptyValueFor(field: SchemaField): unknown {
-  if ("default" in field) return clone(field.default);
-  switch (field.kind) {
-    case "boolean":
-      return false;
-    case "number":
-      return 0;
-    case "date":
-      return new Date().toISOString().slice(0, 10);
-    case "tags":
-      return [];
-    case "enum":
-      return field.values?.[0] ?? "";
-    case "reference":
-      return "";
-    case "json":
-      return {};
-    default:
-      return "";
-  }
-}
-
-/** "a date", "one of draft, live", "a list of strings" — for notes and tooltips. */
-function describeKind(field: SchemaField): string {
-  switch (field.kind) {
-    case "enum":
-      return `one of ${(field.values ?? []).map(String).join(", ")}`;
-    case "tags":
-      return field.items === "number" ? "a list of numbers" : "a list of strings";
-    case "date":
-      return "a date";
-    case "reference":
-      return field.collection ? `an entry of ${field.collection}` : "an entry id";
-    case "number": {
-      const bounds = [typeof field.min === "number" ? `at least ${field.min}` : null, typeof field.max === "number" ? `at most ${field.max}` : null].filter(Boolean);
-      return `${field.integer ? "a whole number" : "a number"}${bounds.length ? ` (${bounds.join(", ")})` : ""}`;
-    }
-    case "boolean":
-      return "true or false";
-    case "json":
-      return "an object";
-    default:
-      return "a string";
-  }
-}
-
-function describeField(field: SchemaField): string {
-  const parts = [field.required ? "required" : "optional", describeKind(field)];
-  if ("default" in field) parts.push(`default ${shortValue(field.default)}`);
-  if (field.description) parts.push(field.description);
-  return parts.join(" · ");
-}
-
-function shortValue(value: unknown): string {
-  const text = typeof value === "string" ? (value === "" ? '""' : value) : JSON.stringify(value);
-  return text.length > 24 ? `${text.slice(0, 23)}…` : text;
 }
 
 /** The block a Markdown offset falls in, from the server's block list (lead + blocks joined by blank lines). */
