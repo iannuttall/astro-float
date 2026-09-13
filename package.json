@@ -6,10 +6,16 @@
     "dev": "pnpm --filter demo dev",
     "build": "pnpm --filter demo build",
     "preview": "pnpm --filter demo preview",
-    "check": "pnpm --filter demo check"
+    "check": "pnpm --filter demo check",
+    "test": "pnpm --filter astro-float test",
+    "test:e2e": "playwright test",
+    "test:e2e:setup": "playwright install chromium"
   },
   "packageManager": "pnpm@10.33.3",
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
   }
 }

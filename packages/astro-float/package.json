@@ -34,5 +34,14 @@
     "micromark-extension-gfm": "^3.0.0",
     "micromark-extension-mdxjs": "^3.0.0",
     "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@astrojs/markdown-remark": "6.3.11",
+    "jsdom": "^30.0.1",
+    "vitest": "^5.0.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
   }
 }
