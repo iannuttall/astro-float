@@ -52,7 +52,7 @@ export function slugify(value: string) {
 export function describe(err: unknown): string {
   if (err instanceof ApiError && err.issues?.length) {
     const first = err.issues[0];
-    const where = first.path.join(".");
+    const where = Array.isArray(first.path) ? first.path.join(".") : String(first.path ?? "");
     return where ? `${where}: ${first.message}` : first.message;
   }
   if (err instanceof Error) return err.message;
