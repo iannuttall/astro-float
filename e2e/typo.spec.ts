@@ -1,22 +1,22 @@
 import { changedLines, originalEntry, readEntry } from "./content";
-import { expect, test } from "./float";
+import { expect, test } from "./lee";
 
-const ENTRY = "blog/hello-float/index.md";
+const ENTRY = "blog/hello-lee/index.md";
 
-test("fixing a typo and pressing ⌘S changes exactly one line on disk", async ({ float }) => {
-  await float.open("/blog/hello-float/");
-  const p = float.body.locator("p").first();
+test("fixing a typo and pressing ⌘S changes exactly one line on disk", async ({ lee }) => {
+  await lee.open("/blog/hello-lee/");
+  const p = lee.body.locator("p").first();
   await expect(p).toContainText("Nothing about it is special");
 
-  await float.selectWord(p, "special");
-  await float.page.keyboard.type("ordinary");
+  await lee.selectWord(p, "special");
+  await lee.page.keyboard.type("ordinary");
   await expect(p).toContainText("Nothing about it is ordinary");
-  await expect.poll(() => float.state()).toMatchObject({ bodyDirty: true, frontmatterDirty: false });
-  await expect(float.pill).toHaveAttribute("data-state", "dirty");
+  await expect.poll(() => lee.state()).toMatchObject({ bodyDirty: true, frontmatterDirty: false });
+  await expect(lee.pill).toHaveAttribute("data-state", "dirty");
 
-  const res = await float.save();
+  const res = await lee.save();
   expect(res.status()).toBe(200);
-  await float.expectSaved();
+  await lee.expectSaved();
 
   const before = originalEntry(ENTRY);
   const after = readEntry(ENTRY);
