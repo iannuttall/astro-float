@@ -61,6 +61,7 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
   .prose li { margin: 4px 0; }
   .prose a { text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
   .prose blockquote { margin: 0 0 18px; padding: 2px 0 2px 18px; border-left: 2px solid var(--line); color: var(--muted); }
+  .prose blockquote > :last-child { margin-bottom: 0; }
   .prose pre { background: #14161b; color: #e7e9ee; padding: 16px 18px; border-radius: 8px; overflow: auto; font-size: 13.5px; line-height: 1.6; }
   .prose :not(pre) > code { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
   .prose img { max-width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); display: block; margin: 24px 0; }
