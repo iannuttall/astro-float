@@ -26,8 +26,8 @@ export interface FormHost {
   changed(key: string): boolean;
 }
 
-/** Frontmatter keys that never get an input: Astro derives the id from the slug, so it's shown, not edited. */
-export const READ_ONLY_KEYS = new Set(["slug"]);
+/** Frontmatter keys that never get an input: they name the entry's address, which the Address row changes (by moving the file), not the form. */
+export const READ_ONLY_KEYS = new Set(["slug", "id"]);
 
 export function renderForm(host: FormHost, syncs: Map<string, () => void>): HTMLElement {
   const doc = host.doc();
@@ -58,7 +58,7 @@ export function renderForm(host: FormHost, syncs: Map<string, () => void>): HTML
         h(
           "div",
           { class: "row", "data-inline": "" },
-          h("div", { class: "row-head" }, h("div", { class: "row-text" }, h("span", { class: "row-label" }, key), h("span", { class: "row-help" }, "URL segment, from the file name")), h("div", { class: "row-side" }, h("span", { class: "row-static mono" }, String(value)))),
+          h("div", { class: "row-head" }, h("div", { class: "row-text" }, h("span", { class: "row-label" }, key), h("span", { class: "row-help" }, key === "slug" ? "Sets the address instead of the file name" : "Set by the file name; change it in Address")), h("div", { class: "row-side" }, h("span", { class: "row-static mono" }, String(value)))),
         ),
       );
       continue;

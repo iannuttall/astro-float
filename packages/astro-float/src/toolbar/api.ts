@@ -53,6 +53,17 @@ export interface SaveResult {
   blocks: SourceBlock[];
 }
 
+/** What a rename came back with: the entry's new id, file and page (and hash, when links in the text had to follow). */
+export interface RenameResult {
+  collection: string;
+  id: string;
+  file: string;
+  route: string;
+  hash: string;
+  changed: boolean;
+  synced: boolean;
+}
+
 /** One top-level block of a body, rendered by Astro's Markdown pipeline. Islands come back with `html: ""`. */
 export interface RenderedBlock {
   type: string;
@@ -171,6 +182,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  /** Change the last segment of an entry's id: the folder or file moves (with its media); 409 when the address is taken. */
+  rename: (payload: { collection: string; id: string; slug: string; baseHash: string }) =>
+    request<RenameResult>("/rename", { method: "POST", body: JSON.stringify(payload) }),
 
   createCollection: (payload: { name: string; title: string }) =>
     request<{

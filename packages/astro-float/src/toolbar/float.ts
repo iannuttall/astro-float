@@ -6,7 +6,7 @@ import { DatePicker } from "./datepicker";
 import { findBody, markBody, unmarkAuto } from "./autobind";
 import { FieldBindings } from "./fields";
 import { RegionControl } from "./overlays";
-import { detectEntry, swapPage, type DetectedEntry } from "./page";
+import { detectEntry, routeFor, swapPage, type DetectedEntry } from "./page";
 import { Pill, type PillPrefs, type StatusView } from "./panel/pill";
 import { clone, describe, resetViewportZoom } from "./panel/util";
 import { SourceEditor } from "./source";
@@ -152,6 +152,7 @@ class Float {
       markDirty: () => this.touched(),
       save: (force) => this.save(force),
       discard: () => this.discardChanges(),
+      rename: (slug) => this.rename(slug),
       navigate: (href, opts) => this.navigate(href, opts),
       notify: (message) => this.setStatus("error", message),
     });
@@ -593,6 +594,36 @@ class Float {
     }
   }
 
+  /**
+   * Change the entry's address (the last segment of its id). Pending edits
+   * are saved first — they'd be lost with the old file otherwise — then the
+   * server moves the file or folder, and the page follows to the new route
+   * (the learned pattern with the id swapped). Rejects with the reason
+   * ("taken", a bad slug) for the Address row to show; nothing else moves.
+   */
+  private async rename(slug: string) {
+    if (!this.doc) return;
+    if (this.isDirty()) {
+      await this.save();
+      if (this.isDirty()) throw new Error(this.statusMessage || "Couldn't save the pending edits first");
+    }
+    const doc = this.doc;
+    window.clearTimeout(this.autosaveTimer);
+    this.setStatus("saving");
+    let renamed;
+    try {
+      renamed = await api.rename({ collection: doc.collection, id: doc.id, slug, baseHash: doc.hash });
+    } catch (err) {
+      this.setStatus("idle");
+      throw err;
+    }
+    const collection = this.collections.find((c) => c.name === doc.collection) ?? { name: doc.collection, dir: "", entries: [] };
+    const { href } = routeFor(collection, renamed.id);
+    // The sync signal says the store has the entry; the route can still take a beat to answer.
+    await waitForPage(href, renamed.synced ? 3000 : 8000);
+    await this.navigate(href);
+  }
+
   private onDocumentClick = (e: MouseEvent) => {
     if (!this.editing) return;
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
@@ -1019,6 +1050,20 @@ function blockIndexAt(offset: number, lead: string, blocks: Array<{ src: string;
     if (offset < pos) return i;
   }
   return Math.max(0, blocks.length - 1);
+}
+
+/** Poll a page until the dev server answers it with HTML (a just-moved entry's route), or the time runs out. */
+async function waitForPage(href: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(href, { headers: { accept: "text/html" }, cache: "no-store" });
+      if (res.ok) return;
+    } catch {
+      /* server busy */
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
 }
 
 /** First top-level block of the body whose box reaches into the viewport. */

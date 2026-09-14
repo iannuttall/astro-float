@@ -177,6 +177,20 @@ export const STYLES = /* css */ `
 .pop-section:last-child { border-bottom: 0; }
 .pop-yaml { display: flex; flex-direction: column; min-height: 200px; }
 .pop-settings .row { border-bottom: 0; }
+
+/* ---- the Address row: the id, quiet; a pencil on hover; an input in the same spot while editing ---- */
+.pop-address .row { border-bottom: 0; }
+.address-row .row-side { max-width: 72%; }
+.address { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 6px; margin-right: -6px; border-radius: var(--radius-sm); color: var(--fg-muted); transition: background 120ms ease, color 120ms ease; }
+.address svg { color: var(--fg-faint); opacity: 0; transition: opacity 120ms ease; }
+.address:hover, .address:focus-visible { background: var(--bg-hover); color: var(--fg); }
+.address:hover svg, .address:focus-visible svg { opacity: 1; }
+.address-prefix { white-space: nowrap; }
+.address-input { width: auto; min-width: 120px; min-height: 26px; padding: 3px 8px; font-size: 12px; }
+.address-below { display: flex; flex-direction: column; gap: 3px; }
+.address-below:empty { display: none; }
+.address-path { font-size: 11px; word-break: break-all; }
+.address-note { font-size: 12px; line-height: 1.45; color: var(--fg-muted); }
 .empty { padding: 10px 14px; color: var(--fg-muted); font-size: 12px; line-height: 1.55; margin: 0; }
 .empty code { font-family: var(--mono); font-size: 11px; background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
 

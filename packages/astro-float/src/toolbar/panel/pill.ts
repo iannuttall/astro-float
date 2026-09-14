@@ -4,6 +4,7 @@ import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
 import { humanize, type CollectionSchema } from "../schema";
 import { refreshTooltip } from "../tooltip";
+import { renderAddressRow } from "./address";
 import { renderCollectionFooter, type FootState } from "./collection";
 import { renderForm } from "./form";
 import { resetViewportZoom } from "./util";
@@ -64,6 +65,8 @@ export interface PillHost {
 
   save(force?: boolean): Promise<void>;
   discard(): void;
+  /** Move the entry to a new address (its last id segment) and follow it; rejects with the reason when it can't. */
+  rename(slug: string): Promise<void>;
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
 }
@@ -159,6 +162,9 @@ export class Pill {
       this.yamlToggle,
     );
 
+    // The address comes first: it's where the entry lives, not one of its fields.
+    const address = doc ? h("section", { class: "pop-section pop-address" }, renderAddressRow({ doc: () => host.doc(), draft: () => host.draft(), rename: (slug) => host.rename(slug) })) : null;
+
     this.fieldsHost = h("section", { class: "pop-section pop-fields" });
     this.yaml = createYamlView({
       draft: () => host.draft(),
@@ -201,7 +207,7 @@ export class Pill {
     );
 
     this.footHost = h("section", { class: "pop-section pop-entries" });
-    const body = h("div", { class: "pop-body" }, this.fieldsHost, this.yamlHost, settings, this.footHost);
+    const body = h("div", { class: "pop-body" }, address, this.fieldsHost, this.yamlHost, settings, this.footHost);
     this.pop = h("div", { class: "popover", role: "dialog", "aria-label": "Entry", hidden: true }, head, body);
     this.pop.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
@@ -277,7 +283,10 @@ export class Pill {
   };
 
   private onDocumentKeydown = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && !DatePicker.isOpenFor(document.body)) {
+    if (e.key !== "Escape") return;
+    // A control that handles Escape itself (the Address input puts the id back) keeps the popover open.
+    if (e.composedPath().some((n) => n instanceof HTMLElement && n.dataset.escape === "self")) return;
+    if (!DatePicker.isOpenFor(document.body)) {
       e.stopPropagation();
       this.close();
     }

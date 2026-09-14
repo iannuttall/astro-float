@@ -59,6 +59,7 @@ Edit on opens nothing. The page becomes editable, and a small **pill** sits at t
 
 Click the pill and a **popover** opens above it — never over Save, never touching the selection on the page — for what can't be edited in place:
 
+- **Address** — the entry's id (`hello-float`), quiet and monospace, with a pencil on hover. Click it and the last segment becomes an input in the same spot, the file path it would give underneath: Enter applies, Esc puts it back. A folder entry (`hello-float/index.md`) renames its folder, so the images next to it move with it; a flat entry (`reading-list.md`) renames the file (and the `reading-list/` folder its uploads went to, links rewritten); videos under `public/media/<collection>/<id>/` move too. Pending edits are saved first, then the page follows to the new URL and the entries list updates. If the post is published (`draft` false or absent) and you've typed a new address, one line under the row says that changing it breaks existing links unless you add a redirect — no dialog. "Taken" or a bad character shows under the row too. Entries whose id comes from a frontmatter `slug` show the address but can't rename here.
 - **Fields** — only the fields that aren't bound on the page (on the demo blog: tags and draft; title, description and date are edited where they sit). If everything is bound, this section isn't there. One row per field: a humanized label (`pubDate` → "Pub date"), a line of help, and the right control for the field's type — text, long text, number, toggle, date and date-time (the same calendar), a segmented control or a select for enums, tag chips, image (thumbnail, **Upload**, **Choose** from the images next to the entry), a nested group for objects, a list with add / remove / reorder for arrays, a select of that collection's entries for references, JSON for anything else. Types come from the collection's Zod schema when the dev server can read it, otherwise they're inferred from the values. Any field that differs from disk gets a **↺** to put it back; with an inferred schema you can add and remove fields, and a removed field stays listed with **Restore** until you save; an emptied number is never written. **Discard** sits in the popover's header while there's something to discard.
 - **YAML** — a toggle at the top swaps the form for the raw frontmatter, all of it, monospace with line numbers and soft wrap. Typing counts at once: the text is parsed a beat after you stop (and before any save), so ⌘S and autosave see it. An error is flagged on the toggle, the last valid frontmatter stays in force, and if you then edit a field elsewhere the broken text is dropped for a fresh render — a typo here never undoes an edit there.
 - **Autosave** — one switch. When it's on the pill reads "Autosaved 2:14 PM" after each write.
@@ -162,7 +163,7 @@ Only blocks you edit are re-serialized, so these only bite inside a paragraph yo
 
 - **Component picker** — browse the project's components and insert one from the pill's popover. Islands are the groundwork; the catalog/insert UI is the next pass.
 - Schema-driven validation before save (the popover flags required/unknown/mismatched fields but never blocks a write — Astro reports the error); the starter schema for new collections is fixed
-- Renaming slugs, deleting entries or collections, git operations
+- Deleting entries or collections, git operations (renaming an entry's address is in; renaming a middle segment of a nested id isn't)
 - JSON/YAML data collections, remote loaders, live-loader / `<ClientRouter />` pages
 - Auth, multi-user, anything outside `astro dev`
 
@@ -177,11 +178,13 @@ packages/astro-float/   the integration (what you'd publish to npm)
   src/server/schema.js    field definitions: Astro's .astro/collections/*.schema.json + image()/reference() probed from the loaded config, or inferred from values
   src/server/render.js    live render: draft body → per-block HTML through the project's Astro Markdown pipeline
   src/shared/infer.js     value → field inference (humanize, inferField), shared by the server and the toolbar
-  src/server/content.js   frontmatter parse/serialize, collection discovery, entries, uploads
+  src/server/content.js   frontmatter parse/serialize, collection discovery, entries, uploads, rename
+  src/server/assets.js    prune moved / deleted images from Astro's .astro/content-assets.mjs so pages don't 500
   src/server/sync-gate.js swallow Astro's post-save reload, signal "content synced"
+  src/shared/slug.js      the address rule (lowercase, digits, single dashes), shared by the server and the toolbar
   src/toolbar/app.ts      defineToolbarApp(): the Edit toggle
   src/toolbar/float.ts    edit-mode lifecycle, the draft, saving, source mode, soft navigation
-  src/toolbar/panel/      the pill and its popover: Fields form + controls, YAML view, entries
+  src/toolbar/panel/      the pill and its popover: Address row, Fields form + controls, YAML view, entries
   src/toolbar/schema.ts   field definitions (CollectionSchema / FieldDef), help text, empty values; inference re-exported from src/shared/infer.js
   src/toolbar/editor.ts   on-page contenteditable controller, block alignment, islands, page styles
   src/toolbar/fields.ts   on-page frontmatter fields (title, description, …)
@@ -189,7 +192,7 @@ packages/astro-float/   the integration (what you'd publish to npm)
   src/toolbar/html-to-md.ts  HTML → Markdown for edited blocks
   src/toolbar/embeds.ts   accepted media files, their Markdown, and URL → embed blocks
   src/toolbar/styles.ts   pill / popover styles (light, dark to match the site)
-demo/                   a minimal Astro 5 blog (+ one .mdx post), a `notes` collection whose schema
+demo/                   a minimal Astro 5 blog (+ one .mdx post), a `notes` collection (one folder entry, one flat file) whose schema
                         uses z.enum / z.number / .optional / .describe / image() / reference("blog"), + generic [collection] routes
 docs/                   screenshots
 scripts/compat/         Astro-version compat check: `scripts/compat/switch.sh 7.3.2 8.0.1 && scripts/compat/run.sh 4367 astro7` (see its README)
@@ -199,6 +202,6 @@ scripts/compat/         Astro-version compat check: `scripts/compat/switch.sh 7.
 
 - Astro prints `[glob-loader] Duplicate id … found` after every content save. That's Astro's own watcher log for changed files, not a Float bug.
 - Astro's audit app strips `data-astro-source-*` attributes shortly after load; Float strips them first so component-rendered blocks don't look edited.
-- If you delete an image that a post referenced, Astro's `.astro/` asset cache can 500 the page until you restart `astro dev`.
+- Astro's image import map (`.astro/content-assets.mjs`) only grows, so an image that goes missing — a post renamed or an image deleted outside Float — 500s every page until `astro dev` restarts. Float prunes the map after its own moves and whenever Astro rewrites it, so a rename or a stray delete recovers on the next request.
 - Tested against Astro 5.18 / Vite 6, Astro 6.4 / Vite 7 and Astro 7.3 / Vite 8 with Chrome (desktop + iPhone emulation). Real iOS Safari's `contenteditable`, selection and keyboard behaviour are untested here; HTML5 drag of islands doesn't exist on touch (use ▲/▼); the selection bubble relies on `selectionchange`, which mobile long-press selection also fires.
 - Prefs (autosave) live in `localStorage` under `astro-float:prefs`.
