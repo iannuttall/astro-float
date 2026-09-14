@@ -55,6 +55,7 @@ export class RegionControl {
   private actions: RegionActions | null = null;
   private hideTimer: number | undefined;
   private visible = false;
+  private resizes: ResizeObserver | null = null;
 
   show(target: HTMLElement, actions: RegionActions) {
     window.clearTimeout(this.hideTimer);
@@ -63,7 +64,17 @@ export class RegionControl {
     this.actions = actions;
     target.addEventListener("pointerenter", this.paint);
     target.addEventListener("pointerleave", this.paint);
+    // The body moves without a scroll or a resize when something above it changes height (a description
+    // typed onto a second line, a late image or font), and that grows one of its ancestors: watch them all.
+    this.resizes ??= typeof ResizeObserver === "function" ? new ResizeObserver(() => this.reposition()) : null;
+    this.resizes?.disconnect();
+    for (let el: Element | null = target; el; el = el.parentElement) this.resizes?.observe(el);
     this.render();
+  }
+
+  /** The target this control is showing for (null when hidden). */
+  get shownFor(): HTMLElement | null {
+    return this.visible ? this.target : null;
   }
 
   /** The pointer is on the control, which sits outside the body element: keep the body's wash on. */
@@ -84,6 +95,7 @@ export class RegionControl {
     t.removeAttribute("data-float-hover");
     t.removeEventListener("pointerenter", this.paint);
     t.removeEventListener("pointerleave", this.paint);
+    this.resizes?.disconnect();
   }
 
   /**
@@ -224,6 +236,8 @@ export class RegionControl {
     el.setAttribute("data-show", "");
     this.paint();
     this.reposition();
+    // Once more after layout has settled (a page just swapped in, a field just took its placeholder).
+    requestAnimationFrame(this.reposition);
   }
 }
 
@@ -391,10 +405,13 @@ export class SelectionBubble {
     const r = range.getBoundingClientRect();
     const w = el.offsetWidth;
     const hgt = el.offsetHeight;
-    const left = Math.max(8, Math.min(r.left + r.width / 2 - w / 2, window.innerWidth - w - 8));
+    const centre = r.left + r.width / 2;
+    const left = Math.max(8, Math.min(centre - w / 2, window.innerWidth - w - 8));
     const above = r.top - hgt - 8;
     const top = above >= 4 ? above : r.bottom + 8;
     el.toggleAttribute("data-below", above < 4);
     Object.assign(el.style, { left: `${left}px`, top: `${top}px` });
+    // The arrow stays under the selection's centre even when the bubble was held inside the viewport.
+    el.style.setProperty("--arrow-x", `${Math.round(Math.max(12, Math.min(centre - left, w - 12)))}px`);
   }
 }

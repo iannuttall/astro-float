@@ -41,7 +41,7 @@ export function splitBlocks(body, { mdx = false } = {}) {
     return splitBlocks(body, { mdx: false });
   }
 
-  const rendering = tree.children.filter((node) => rendersToDom(node));
+  const rendering = mergeWrappers(tree.children.filter((node) => rendersToDom(node)), body);
   const blocks = [];
 
   for (let i = 0; i < rendering.length; i++) {
@@ -61,6 +61,51 @@ export function splitBlocks(body, { mdx = false } = {}) {
 
   const lead = rendering.length ? body.slice(0, rendering[0].position.start.offset).trim() : body.trim();
   return { lead, blocks };
+}
+
+/** A raw-HTML block that is nothing but one opening tag (`<div style="…">`) / one closing tag (`</div>`). */
+const OPEN_TAG = /^<([A-Za-z][\w-]*)(?:\s[^<>]*)?>$/;
+const CLOSE_TAG = /^<\/([A-Za-z][\w-]*)\s*>$/;
+const VOID_TAGS = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+
+/**
+ * `<div style="…">`, a blank line, Markdown, a blank line, `</div>`: CommonMark
+ * parses that as two HTML blocks around ordinary blocks, but it renders as one
+ * element wrapping them (rehype-raw re-parses the tags around the inner
+ * content). Fold the run into a single raw-HTML block so it lines up with the
+ * one DOM node. Float writes images with a size or alignment this way: the
+ * `![alt](./x.png)` inside keeps Astro's asset processing, the wrapper carries
+ * the presentation.
+ */
+function mergeWrappers(nodes, body) {
+  const out = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const open = node.type === "html" ? node.value.trim().match(OPEN_TAG) : null;
+    const tag = open && !VOID_TAGS.has(open[1].toLowerCase()) && !/\/\s*>$/.test(node.value.trim()) ? open[1].toLowerCase() : null;
+    let close = -1;
+    if (tag) {
+      let depth = 0;
+      for (let j = i + 1; j < nodes.length && close < 0; j++) {
+        if (nodes[j].type !== "html") continue;
+        const value = nodes[j].value.trim();
+        if (value.match(OPEN_TAG)?.[1]?.toLowerCase() === tag && !/\/\s*>$/.test(value)) depth++;
+        else if (value.match(CLOSE_TAG)?.[1]?.toLowerCase() === tag) {
+          if (depth === 0) close = j;
+          else depth--;
+        }
+      }
+    }
+    if (close < 0) {
+      out.push(node);
+      continue;
+    }
+    const start = node.position.start;
+    const end = nodes[close].position.end;
+    out.push({ type: "html", value: body.slice(start.offset, end.offset), position: { start, end } });
+    i = close;
+  }
+  return out;
 }
 
 /** The text a block renders to: text and inline code, minus images, raw HTML and JSX tags. */

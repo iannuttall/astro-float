@@ -321,6 +321,21 @@ class Float {
     if (this.editing && this.inBody(e.target) && !this.inBody(e.relatedTarget) && !this.sourceArea) this.region.scheduleHide();
   };
 
+  /**
+   * The body was swapped for a fresh render (a save, a reload from disk): the corner control went
+   * with the old DOM. Put it on the new body when the pointer or the caret is still there, else hide it.
+   */
+  private syncRegion() {
+    const region = this.bodyRegion();
+    const stale = this.region.shownFor;
+    if (stale && stale === region) return;
+    if (region && this.editing && (region.matches(":hover") || region.contains(document.activeElement) || !!this.sourceArea)) {
+      this.region.show(region, this.bodyRegionActions());
+    } else {
+      this.region.hide();
+    }
+  }
+
   private bodyRegionActions() {
     return {
       copy: () => this.currentBody(),
@@ -585,6 +600,7 @@ class Float {
       window.scrollTo(0, 0);
       await this.loadPage();
       if (focusBody) this.page.focusStart();
+      this.syncRegion();
     } catch (err) {
       console.warn("[astro-float] soft navigation failed, falling back to a full load", err);
       location.assign(url.href);
@@ -636,6 +652,7 @@ class Float {
       /* keep current DOM */
     }
     await this.loadPage();
+    this.syncRegion();
   }
 
   // ---- state helpers ----------------------------------------------------------
@@ -850,6 +867,7 @@ class Float {
           this.exitSourceMode(false);
           window.scrollTo(0, scrollY);
           this.bindBody();
+          this.syncRegion();
         } catch (err) {
           // Saved fine, page didn't re-render: fall back to the DOM we have and say so.
           console.warn("[astro-float] page refresh failed", err);

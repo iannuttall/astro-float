@@ -61,6 +61,26 @@ describe("splitBlocks on Markdown", () => {
     expect(blocks[1]).toMatchObject({ type: "paragraph", island: false, text: "text" });
   });
 
+  it("folds an opening tag, the Markdown inside and its closing tag into one island block", () => {
+    const body = "Before.\n\n<div style=\"width:50%\">\n\n![pic](./x.png)\n\n</div>\n\n[ref]: https://x.test/\n\nAfter.\n";
+    const { blocks } = splitBlocks(body);
+    expect(blocks.map((b) => [b.type, b.island, b.src])).toEqual([
+      ["paragraph", false, "Before."],
+      ["html", true, '<div style="width:50%">\n\n![pic](./x.png)\n\n</div>'],
+      ["paragraph", false, "After."],
+    ]);
+    expect(blocks[1].trailer).toBe("[ref]: https://x.test/");
+    expect(blocks[1].text).toBe("");
+  });
+
+  it("nests same-named wrappers and leaves unmatched or void tags alone", () => {
+    const nested = "<div>\n\n<div>\n\ninner\n\n</div>\n\n</div>\n\ntail\n";
+    expect(splitBlocks(nested).blocks.map((b) => b.src)).toEqual(["<div>\n\n<div>\n\ninner\n\n</div>\n\n</div>", "tail"]);
+    expect(splitBlocks("<div>\n\nopen only\n").blocks.map((b) => [b.type, b.src])).toEqual([["html", "<div>"], ["paragraph", "open only"]]);
+    expect(splitBlocks("<br>\n\ntext\n\n</br>\n").blocks.length).toBe(3);
+    expect(splitBlocks('<img src="./x.png">\n\ntext\n').blocks.map((b) => b.type)).toEqual(["html", "paragraph"]);
+  });
+
   it("strips trailing whitespace from a block but keeps inner blank lines out of src", () => {
     const { blocks } = splitBlocks("para one   \n\n\n\npara two\n\n\n");
     expect(blocks.map((b) => b.src)).toEqual(["para one", "para two"]);
