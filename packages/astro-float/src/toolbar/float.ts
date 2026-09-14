@@ -963,6 +963,7 @@ class Float {
       this.issues = [];
       this.staleOnDisk = false;
       this.keepMine = false;
+      this.panel.refreshAddress();
       if (result.changed && result.synced === false) {
         // Written, but Astro's content layer didn't pick it up (a schema rejection, most likely).
         this.setStatus("warning", "Saved, but Astro rejected the entry. Check the terminal.");

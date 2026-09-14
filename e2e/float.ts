@@ -61,6 +61,8 @@ export class Float {
   async openPopover() {
     if ((await this.pill.getAttribute("aria-expanded")) !== "true") await this.pill.click();
     await expect(this.popover).toBeVisible();
+    // Let the pop-in animation land, so a box measured next is where it stays.
+    await this.popover.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
   }
 
   async closePopover() {

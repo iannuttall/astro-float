@@ -1,57 +1,126 @@
-import type { EntryDoc, Frontmatter } from "../api";
+import { ApiError, type EntryDoc } from "../api";
 import { slugError } from "../../shared/slug.js";
 import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
+import { hideTooltip, refreshTooltip, showTooltip } from "../tooltip";
 import { describe } from "./util";
 
 /**
- * The Address row at the top of the popover: the entry's id in quiet
- * monospace, with a pencil on hover. Click it and the last segment becomes an
- * input in the same spot, the file path it would give underneath (like New
- * entry). Enter applies — the file or folder moves and the page follows —
- * Esc (or clicking away) puts the id back. What went wrong ("taken", a bad
- * character) shows under the row; nothing pops up.
+ * The Address row at the top of the popover: "Address", and the entry's id in
+ * quiet monospace. Nothing around it moves while it changes: the id turns into
+ * an input with the same box and font, text selected. Enter applies — the file
+ * or folder moves and the page follows — and Esc or leaving the input puts the
+ * id back. A post saved as a draft edits on click. A published one (draft
+ * false or absent) sits behind a small padlock: "Change address", then "Are
+ * you sure? Old links will break", and a second click within a few seconds
+ * opens it; Esc, leaving it or a finished rename lock it again. A taken or bad
+ * address turns the input's hairline red and says why in its tooltip.
  */
 export interface AddressHost {
   doc(): EntryDoc | null;
-  draft(): Frontmatter;
   /** Move the entry to its new address and navigate there; rejects with the reason when it can't. */
   rename(slug: string): Promise<void>;
 }
 
-export const PUBLISHED_NOTE = "Changing the address of a published post breaks existing links unless you add a redirect.";
+export interface AddressRow {
+  el: HTMLElement;
+  /** Draw it again from the saved entry (a save may have made it a draft, or published it); not while it's being changed. */
+  refresh(): void;
+}
 
-export function renderAddressRow(host: AddressHost): HTMLElement | null {
-  const doc = host.doc();
-  if (!doc) return null;
-  const segments = doc.id.split("/");
-  const original = segments[segments.length - 1];
-  const prefix = segments.slice(0, -1).map((s) => `${s}/`).join("");
-  // A frontmatter `slug` names the entry, not the file: the file can move, the address wouldn't.
-  const pinned = typeof doc.frontmatter.slug === "string";
+const ASK = "Change address";
+const SURE = "Are you sure? Old links will break";
+/** How long the padlock waits for its second click. */
+const ARMED_FOR = 4000;
 
+export function renderAddressRow(host: AddressHost): AddressRow | null {
+  if (!host.doc()) return null;
   const side = h("div", { class: "row-side" });
-  const below = h("div", { class: "address-below" });
-  const row = h(
+  const el = h(
     "div",
     { class: "row address-row", "data-inline": "", "data-key": "address" },
     h("div", { class: "row-head" }, h("div", { class: "row-text" }, h("span", { class: "row-label" }, h("span", { class: "row-name" }, "Address"))), side),
-    below,
   );
+  let editing = false;
+  /** Set while the padlock waits for its second click. */
+  let disarm: (() => void) | null = null;
 
   const show = () => {
-    replaceChildren(
-      side,
-      pinned
-        ? h("span", { class: "row-static mono", "data-tip": "Set by the slug field" }, doc.id)
-        : h("button", { class: "address", type: "button", "data-tip": "Change the address", onClick: edit }, h("span", { class: "mono" }, doc.id), icon("pencil", 12)),
-    );
-    replaceChildren(below);
+    const doc = host.doc();
+    if (!doc) return;
+    editing = false;
+    disarm?.();
+    const segments = doc.id.split("/");
+    const last = segments[segments.length - 1];
+    const prefix = segments.length > 1 ? h("span", { class: "mono address-prefix" }, `${segments.slice(0, -1).join("/")}/`) : null;
+    if (typeof doc.frontmatter.slug === "string") {
+      // A frontmatter `slug` names the entry, not the file: the file could move, the address wouldn't.
+      replaceChildren(side, prefix, h("span", { class: "mono address", "data-tip": "Set by the slug field" }, last));
+    } else if (doc.frontmatter.draft === true) {
+      const text: HTMLButtonElement = h("button", { class: "mono address", type: "button", "data-tip": ASK, onClick: () => edit(text, null) }, last);
+      replaceChildren(side, prefix, text);
+    } else {
+      const text = h("span", { class: "mono address" }, last);
+      const lock: HTMLButtonElement = h(
+        "button",
+        {
+          class: "address-lock",
+          type: "button",
+          "aria-label": ASK,
+          "data-tip": ASK,
+          onClick: () => {
+            if (!disarm) return arm(lock);
+            disarm();
+            edit(text, lock);
+          },
+        },
+        icon("lock", 14),
+      );
+      replaceChildren(side, prefix, text, lock);
+    }
   };
 
-  const edit = () => {
+  /** First click on the padlock: it asks, in its own tooltip, and waits a moment for the second. Esc or a click anywhere else stops it asking. */
+  const arm = (lock: HTMLButtonElement) => {
+    const say = (tip: string) => {
+      lock.setAttribute("data-tip", tip);
+      lock.setAttribute("aria-label", tip);
+    };
+    const timer = window.setTimeout(() => disarm?.(), ARMED_FOR);
+    const onPointerDown = (e: PointerEvent) => {
+      if (!e.composedPath().includes(lock)) disarm?.();
+    };
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      disarm?.();
+    };
+    disarm = () => {
+      disarm = null;
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      lock.removeEventListener("keydown", onKeydown);
+      delete lock.dataset.escape;
+      say(ASK);
+      refreshTooltip(lock);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    lock.addEventListener("keydown", onKeydown);
+    // Escape answers the padlock, not the popover.
+    lock.dataset.escape = "self";
+    say(SURE);
+    showTooltip(lock);
+  };
+
+  /** The id becomes an input in its own box; a published post's padlock shows open meanwhile. */
+  const edit = (text: HTMLElement, lock: HTMLButtonElement | null) => {
+    const doc = host.doc();
+    if (!doc || editing) return;
+    editing = true;
+    const original = doc.id.split("/").pop() ?? "";
     const input = h("input", {
-      class: "input mono address-input",
+      class: "mono address address-input",
       value: original,
       spellcheck: false,
       autocapitalize: "off",
@@ -59,52 +128,60 @@ export function renderAddressRow(host: AddressHost): HTMLElement | null {
       "aria-label": "Address",
       // The popover closes on Escape; here Escape means "put the address back" and no more.
       "data-escape": "self",
-    }) as HTMLInputElement;
-    const where = h("div", { class: "muted mono address-path" });
-    const note = h("div", { class: "address-note", hidden: true }, PUBLISHED_NOTE);
-    const error = h("div", { class: "form-error" });
-    const refresh = () => {
-      const slug = input.value;
-      where.textContent = pathFor(doc, slug || "…");
-      const published = host.draft().draft !== true;
-      note.hidden = !(published && slug !== original);
+    });
+    // The box of the text it stands in for, then as wide as what's typed.
+    input.style.width = `${text.getBoundingClientRect().width}px`;
+    const mirror = h("span", { class: "mono address address-mirror", "aria-hidden": "true" });
+    const fit = () => {
+      mirror.textContent = input.value;
+      input.style.width = `${mirror.getBoundingClientRect().width}px`;
     };
+    /** A red hairline and the reason in the input's tooltip, or neither. */
+    const say = (problem: string | null) => {
+      input.toggleAttribute("data-invalid", !!problem);
+      if (problem) {
+        input.setAttribute("data-tip", problem);
+        showTooltip(input);
+      } else if (input.hasAttribute("data-tip")) {
+        input.removeAttribute("data-tip");
+        hideTooltip();
+      }
+    };
+
     let busy = false;
-    let done = false;
     const cancel = () => {
-      if (done || busy) return;
-      done = true;
-      show();
+      if (editing && !busy) show();
     };
     const apply = async () => {
-      if (busy || done) return;
+      if (busy) return;
       const slug = input.value;
       if (slug === original) return cancel();
       const problem = slugError(slug);
-      if (problem) {
-        error.textContent = problem;
-        return;
-      }
+      if (problem) return say(problem);
       busy = true;
-      input.disabled = true;
-      error.textContent = "";
+      // Read-only, not disabled: a disabled input drops the focus, and leaving the input cancels.
+      input.readOnly = true;
       try {
         await host.rename(slug);
-        done = true;
       } catch (err) {
-        error.textContent = describe(err);
-        input.disabled = false;
-        input.focus();
-      } finally {
         busy = false;
+        input.readOnly = false;
+        input.focus();
+        // A 409 is a taken address, unless the file changed on disk since it was loaded.
+        say(err instanceof ApiError && err.status === 409 && !/changed on disk/.test(err.message) ? "Already used" : describe(err));
+        return;
       }
+      busy = false;
+      // The page moved and the popover was drawn again; if it wasn't, show the address as it is now.
+      if (el.isConnected) show();
     };
+
     input.addEventListener("input", () => {
       // Typed as it will be written: lowercase, spaces to dashes, nothing else.
       const clean = input.value.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
       if (clean !== input.value) input.value = clean;
-      error.textContent = "";
-      refresh();
+      say(null);
+      fit();
     });
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
@@ -118,25 +195,22 @@ export function renderAddressRow(host: AddressHost): HTMLElement | null {
     });
     input.addEventListener("blur", () => window.setTimeout(cancel, 0));
 
-    replaceChildren(side, prefix ? h("span", { class: "muted mono address-prefix" }, prefix) : null, input);
-    replaceChildren(below, where, note, error);
-    refresh();
-    input.focus();
+    if (lock) {
+      replaceChildren(lock, icon("unlock", 14));
+      lock.setAttribute("data-tip", "Lock again");
+      lock.setAttribute("aria-label", "Lock again");
+    }
+    text.replaceWith(input);
+    side.appendChild(mirror);
+    input.focus({ preventScroll: true });
     input.select();
   };
 
   show();
-  return row;
-}
-
-/** The file the entry would live in at `slug`: `src/content/blog/<slug>/` for a folder entry, `src/content/notes/<slug>.md` for a flat one. */
-export function pathFor(doc: Pick<EntryDoc, "file" | "folder">, slug: string): string {
-  const parts = doc.file.split("/");
-  const name = parts.pop() ?? "";
-  if (doc.folder) {
-    parts.pop();
-    return `${parts.join("/")}/${slug}/`;
-  }
-  const ext = name.includes(".") ? name.slice(name.lastIndexOf(".")) : "";
-  return `${parts.join("/")}/${slug}${ext}`;
+  return {
+    el,
+    refresh: () => {
+      if (!editing && !disarm) show();
+    },
+  };
 }

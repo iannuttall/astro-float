@@ -4,7 +4,7 @@ import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
 import { humanize, type CollectionSchema } from "../schema";
 import { refreshTooltip } from "../tooltip";
-import { renderAddressRow } from "./address";
+import { renderAddressRow, type AddressRow } from "./address";
 import { renderCollectionFooter, type FootState } from "./collection";
 import { cancelConfirms, nounFor, renderDeleteLine, type DeleteQuestion } from "./confirm";
 import { renderForm } from "./form";
@@ -82,6 +82,7 @@ export class Pill {
   private fieldsHost: HTMLElement | null = null;
   private yamlHost: HTMLElement | null = null;
   private footHost: HTMLElement | null = null;
+  private address: AddressRow | null = null;
   private yaml: YamlView | null = null;
   private yamlMode = false;
   private yamlToggle: HTMLButtonElement | null = null;
@@ -168,7 +169,8 @@ export class Pill {
     );
 
     // The address comes first: it's where the entry lives, not one of its fields.
-    const address = doc ? h("section", { class: "pop-section pop-address" }, renderAddressRow({ doc: () => host.doc(), draft: () => host.draft(), rename: (slug) => host.rename(slug) })) : null;
+    this.address = doc ? renderAddressRow({ doc: () => host.doc(), rename: (slug) => host.rename(slug) }) : null;
+    const address = this.address ? h("section", { class: "pop-section pop-address" }, this.address.el) : null;
 
     this.fieldsHost = h("section", { class: "pop-section pop-fields" });
     this.yaml = createYamlView({
@@ -237,6 +239,7 @@ export class Pill {
     this.fieldsHost = null;
     this.yamlHost = null;
     this.footHost = null;
+    this.address = null;
     this.yaml = null;
     this.yamlToggle = null;
     this.syncs.clear();
@@ -251,6 +254,7 @@ export class Pill {
     this.savedRange = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
     this.pop.hidden = false;
     this.pillEl.setAttribute("aria-expanded", "true");
+    this.address?.refresh();
     if (this.fieldsStale) this.renderFields();
     if (this.footStale) this.renderCollection();
     if (this.yamlMode) this.yaml?.refresh();
@@ -396,6 +400,11 @@ export class Pill {
   /** Parse pending YAML into the draft now (before a save reads it). */
   commitYaml() {
     this.yaml?.commit();
+  }
+
+  /** The entry was written: the Address row locks or opens up if it was just published or made a draft. */
+  refreshAddress() {
+    this.address?.refresh();
   }
 
   renderCollection() {

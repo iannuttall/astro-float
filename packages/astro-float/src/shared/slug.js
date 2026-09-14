@@ -21,7 +21,7 @@ export function isValidSlug(value) {
 export function slugError(value) {
   if (typeof value !== "string" || !value.length) return "Give it an address";
   if (/[A-Z]/.test(value)) return "Lowercase only";
-  if (/[^a-z0-9-]/.test(value)) return "Only letters, numbers and dashes";
+  if (/[^a-z0-9-]/.test(value)) return "Letters, numbers and dashes only";
   if (/^-|-$/.test(value)) return "Can't start or end with a dash";
   if (/--/.test(value)) return "One dash at a time";
   if (value.length > 200) return "Too long";

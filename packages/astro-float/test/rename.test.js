@@ -17,10 +17,10 @@ describe("slug rules", () => {
     expect(slugError("")).toBe("Give it an address");
     expect(slugError(undefined)).toBe("Give it an address");
     expect(slugError("Hello")).toBe("Lowercase only");
-    expect(slugError("hello world")).toBe("Only letters, numbers and dashes");
-    expect(slugError("héllo")).toBe("Only letters, numbers and dashes");
-    expect(slugError("a/b")).toBe("Only letters, numbers and dashes");
-    expect(slugError("../x")).toBe("Only letters, numbers and dashes");
+    expect(slugError("hello world")).toBe("Letters, numbers and dashes only");
+    expect(slugError("héllo")).toBe("Letters, numbers and dashes only");
+    expect(slugError("a/b")).toBe("Letters, numbers and dashes only");
+    expect(slugError("../x")).toBe("Letters, numbers and dashes only");
     expect(slugError("-hello")).toBe("Can't start or end with a dash");
     expect(slugError("hello-")).toBe("Can't start or end with a dash");
     expect(slugError("hello--float")).toBe("One dash at a time");

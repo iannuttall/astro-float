@@ -178,19 +178,18 @@ export const STYLES = /* css */ `
 .pop-yaml { display: flex; flex-direction: column; min-height: 200px; }
 .pop-settings .row { border-bottom: 0; }
 
-/* ---- the Address row: the id, quiet; a pencil on hover; an input in the same spot while editing ---- */
+/* ---- the Address row: the id, quiet; changed in a box of the same size and font, so nothing around it moves ---- */
 .pop-address .row { border-bottom: 0; }
-.address-row .row-side { max-width: 72%; }
-.address { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 6px; margin-right: -6px; border-radius: var(--radius-sm); color: var(--fg-muted); transition: background 120ms ease, color 120ms ease; }
-.address svg { color: var(--fg-faint); opacity: 0; transition: opacity 120ms ease; }
-.address:hover, .address:focus-visible { background: var(--bg-hover); color: var(--fg); }
-.address:hover svg, .address:focus-visible svg { opacity: 1; }
-.address-prefix { white-space: nowrap; }
-.address-input { width: auto; min-width: 120px; min-height: 26px; padding: 3px 8px; font-size: 12px; }
-.address-below { display: flex; flex-direction: column; gap: 3px; }
-.address-below:empty { display: none; }
-.address-path { font-size: 11px; word-break: break-all; }
-.address-note { font-size: 12px; line-height: 1.45; color: var(--fg-muted); }
+.address-row .row-side { max-width: 72%; gap: 2px; margin-right: -6px; }
+.address { display: inline-block; min-width: 0; max-width: 100%; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: none; line-height: 24px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 120ms ease, color 120ms ease; }
+button.address:hover, button.address:focus-visible { background: var(--bg-hover); color: var(--fg); }
+.address-prefix { color: var(--fg-muted); white-space: nowrap; margin-right: -8px; }
+.address-input { min-width: 24px; color: var(--fg); background: var(--bg-hover); box-shadow: inset 0 -1px 0 var(--line-focus); text-overflow: clip; }
+.float .address-input:focus-visible { outline: none; }
+.address-input[data-invalid] { box-shadow: inset 0 0 0 1px var(--err); }
+.address-mirror { position: absolute; top: 0; left: 0; max-width: none; visibility: hidden; pointer-events: none; white-space: pre; }
+.address-lock { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--radius-sm); color: var(--fg-faint); transition: background 120ms ease, color 120ms ease; }
+.address-lock:hover, .address-lock:focus-visible { background: var(--bg-hover); color: var(--fg-muted); }
 .empty { padding: 10px 14px; color: var(--fg-muted); font-size: 12px; line-height: 1.55; margin: 0; }
 .empty code { font-family: var(--mono); font-size: 11px; background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
 
@@ -516,5 +515,7 @@ export const STYLES = /* css */ `
   .card label, .card-note { font-size: 13px; }
   .foot-body { max-height: 28vh; }
   .delete-row, .list > .delete-row { min-height: 44px; }
+  .address { height: 32px; line-height: 32px; font-size: 16px; }
+  .address-lock { width: 32px; height: 32px; }
 }
 `;

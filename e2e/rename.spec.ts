@@ -1,17 +1,41 @@
 import fs from "node:fs";
+import type { Locator } from "@playwright/test";
 import { entryPath, readEntry } from "./content";
 import { expect, test, type Float } from "./float";
 
 // A 1×1 transparent PNG.
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
-/** Open the Address row's input, type a slug, press Enter, and wait for the rename to answer. */
-async function rename(float: Float, slug: string) {
+type Box = { x: number; y: number; width: number; height: number } | null;
+
+/** The same place and size, to the half pixel. */
+function expectSameBox(actual: Box, expected: Box) {
+  expect(actual).not.toBeNull();
+  for (const key of ["x", "y", "width", "height"] as const) expect(actual![key]).toBeCloseTo(expected![key], 0);
+}
+
+/** Open the Address row's input: a click for a draft, two on the padlock for a published post (after an error it is still open). */
+async function openAddress(float: Float): Promise<Locator> {
   await float.openPopover();
   const row = float.popover.locator(".address-row");
   const input = row.locator("input.address-input");
-  if (!(await input.count())) await row.locator("button.address").click(); // else: still editing after an error
+  if (!(await input.count())) {
+    const lock = row.locator("button.address-lock");
+    if (await lock.count()) {
+      await lock.click();
+      await expect(lock).toHaveAttribute("data-tip", "Are you sure? Old links will break");
+      await lock.click();
+    } else {
+      await row.locator("button.address").click();
+    }
+  }
   await expect(input).toBeFocused();
+  return input;
+}
+
+/** Type a slug into the Address row, press Enter, and wait for the rename to answer. */
+async function rename(float: Float, slug: string) {
+  const input = await openAddress(float);
   await input.fill(slug);
   const [res] = await Promise.all([
     float.page.waitForResponse((r) => r.request().method() === "POST" && r.url().includes("/__float/api/rename")),
@@ -20,7 +44,7 @@ async function rename(float: Float, slug: string) {
   return res;
 }
 
-test("a folder entry moves with its image, the page follows, and the rename can be undone", async ({ float }) => {
+test("a published folder entry unlocks in two clicks, moves with its image, and the page follows", async ({ float }) => {
   await float.open("/blog/hello-float/");
 
   // Give the entry an image first, so there is something next to it to move.
@@ -41,28 +65,56 @@ test("a folder entry moves with its image, the page follows, and the rename can 
   await float.expectSaved();
   expect(readEntry("blog/hello-float/index.md")).toContain("![tiny move](./tiny-move.png)");
 
-  // The row shows the id; editing shows the path it would give and the published-post line.
+  // Published: the address sits behind a padlock, and the id itself does nothing.
   await float.openPopover();
   const row = float.popover.locator(".address-row");
-  await expect(row.locator("button.address")).toHaveText("hello-float");
-  await row.locator("button.address").click();
+  const text = row.locator(".address");
+  const lock = row.locator("button.address-lock");
+  await expect(text).toHaveText("hello-float");
+  await expect(lock).toHaveAttribute("data-tip", "Change address");
+  await text.click();
+  await expect(row.locator("input")).toHaveCount(0);
+
+  // The first click asks, in the padlock's own tooltip; a click elsewhere, or four seconds, and it stops asking.
+  await lock.click();
+  await expect(lock).toHaveAttribute("data-tip", "Are you sure? Old links will break");
+  await expect(float.page.locator(".astro-float-tip[data-show]")).toHaveText("Are you sure? Old links will break");
+  await float.popover.locator(".pop-head").click();
+  await expect(lock).toHaveAttribute("data-tip", "Change address");
+  await lock.click();
+  await expect(lock).toHaveAttribute("data-tip", "Are you sure? Old links will break");
+  await expect(lock).toHaveAttribute("data-tip", "Change address", { timeout: 6_000 });
+
+  // The second click opens it: an input in the id's own box, all selected; typing moves nothing around it.
+  const rowBox = await row.boundingBox();
+  const textBox = await text.boundingBox();
+  await lock.click();
+  await lock.click();
   const input = row.locator("input.address-input");
+  await expect(input).toBeFocused();
   await expect(input).toHaveValue("hello-float");
-  await expect(row.locator(".address-note")).toBeHidden();
+  expectSameBox(await input.boundingBox(), textBox);
+  expect(await input.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd])).toEqual([0, "hello-float".length]);
   await input.fill("Hello Moved!");
   await expect(input).toHaveValue("hello-moved");
-  await expect(row.locator(".address-path")).toHaveText("src/content/blog/hello-moved/");
-  await expect(row.locator(".address-note")).toHaveText(/breaks existing links unless you add a redirect/);
+  expectSameBox(await row.boundingBox(), rowBox);
 
-  // Escape puts it back and keeps the popover open.
+  // Escape puts it back, locks it again and keeps the popover open.
   await input.press("Escape");
-  await expect(row.locator("button.address")).toHaveText("hello-float");
+  await expect(text).toHaveText("hello-float");
+  await expect(lock).toHaveAttribute("data-tip", "Change address");
   await expect(float.popover).toBeVisible();
 
-  // Taken: said under the row, nothing moved.
+  // Not allowed, then taken: a red hairline and the reason in the input's tooltip; no line under the row, nothing moved.
+  await (await openAddress(float)).fill("bad-");
+  await input.press("Enter");
+  await expect(input).toHaveAttribute("data-invalid", "");
+  await expect(input).toHaveAttribute("data-tip", "Can't start or end with a dash");
   const taken = await rename(float, "on-hairlines");
   expect(taken.status()).toBe(409);
-  await expect(row.locator(".form-error")).toHaveText('"on-hairlines" is taken');
+  await expect(input).toHaveAttribute("data-tip", "Already used");
+  await expect(input).toHaveAttribute("data-invalid", "");
+  expectSameBox(await row.boundingBox(), rowBox);
   expect(fs.existsSync(entryPath("blog/hello-float/index.md"))).toBe(true);
 
   // Apply: the folder moves, the page is the new URL, the image still renders from the new folder.
@@ -79,10 +131,11 @@ test("a folder entry moves with its image, the page follows, and the rename can 
   expect(fs.existsSync(entryPath("blog/hello-moved/index.md"))).toBe(true);
   expect(fs.existsSync(entryPath("blog/hello-moved/tiny-move.png"))).toBe(true);
 
-  // The popover follows: header, Address row, entries list.
+  // The popover follows, locked again: header, Address row, entries list.
   await float.openPopover();
   await expect(float.popover.locator(".pop-entry")).toHaveText("blog/hello-moved");
-  await expect(float.popover.locator(".address-row button.address")).toHaveText("hello-moved");
+  await expect(float.popover.locator(".address-row .address")).toHaveText("hello-moved");
+  await expect(float.popover.locator(".address-row button.address-lock")).toHaveAttribute("data-tip", "Change address");
   await float.popover.locator(".foot-toggle").click();
   await expect(float.popover.locator('.list-item[aria-current="page"]')).toHaveAttribute("href", "/blog/hello-moved/");
 
@@ -98,13 +151,6 @@ test("a folder entry moves with its image, the page follows, and the rename can 
 
 test("a flat entry renames its file and the page follows", async ({ float }) => {
   await float.open("/notes/reading-list/");
-  await float.openPopover();
-  const row = float.popover.locator(".address-row");
-  await row.locator("button.address").click();
-  const input = row.locator("input.address-input");
-  await input.fill("to-read");
-  await expect(row.locator(".address-path")).toHaveText("src/content/notes/to-read.md");
-
   const res = await rename(float, "to-read");
   expect(res.status()).toBe(200);
   await float.page.waitForURL("**/notes/to-read/");
@@ -128,6 +174,25 @@ test("a flat entry renames its file and the page follows", async ({ float }) => 
   await expect.poll(() => float.state()).toMatchObject({ entry: "notes/reading-list", frontmatterDirty: false });
   expect(readEntry("notes/reading-list.md")).toContain("title: Reading list, moved");
   expect(fs.existsSync(entryPath("notes/to-read.md"))).toBe(false);
+});
+
+test("a draft's address edits on a click, with no padlock", async ({ float }) => {
+  await float.open("/blog/notes-on-autosave/");
+  await float.openPopover();
+  const row = float.popover.locator(".address-row");
+  await expect(row.locator("button.address-lock")).toHaveCount(0);
+  const text = row.locator("button.address");
+  await expect(text).toHaveText("notes-on-autosave");
+  const textBox = await text.boundingBox();
+  await text.click();
+  const input = row.locator("input.address-input");
+  await expect(input).toBeFocused();
+  expectSameBox(await input.boundingBox(), textBox);
+
+  // A click away puts it back.
+  await float.popover.locator(".pop-head").click();
+  await expect(row.locator("button.address")).toHaveText("notes-on-autosave");
+  await expect(row.locator("input")).toHaveCount(0);
 });
 
 test("the form never offers slug or id for editing", async ({ float }) => {
