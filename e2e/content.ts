@@ -37,13 +37,15 @@ export function originalEntry(rel: string) {
   return fs.readFileSync(path.join(process.env.LEE_BACKUP!, "content", rel), "utf8");
 }
 
+const MEDIA = /\.(png|jpe?g|gif|webp|avif|svg|mp4|webm|mov|m4v)$/i;
+
 /**
  * Put the demo content back the way the run found it: rewrite files that
  * differ, delete entries that were added, and ask Astro to finish a content
  * refresh before the next test starts.
  *
- * The sync endpoint prunes deleted images from Astro's additive asset map
- * before it refreshes content, so each test can remove its media at once.
+ * Media a test added is deleted after the dev server stops. Astro's asset map
+ * is additive, so removing an image while the server uses it can break pages.
  */
 export async function restoreContent(base: string) {
   const backup = path.join(process.env.LEE_BACKUP!, "content");
@@ -54,7 +56,8 @@ export async function restoreContent(base: string) {
 
   for (const rel of have) {
     if (want.has(rel)) continue;
-    changes.push(() => fs.rmSync(path.join(CONTENT_DIR, rel), { force: true }));
+    if (MEDIA.test(rel)) deferred.push(path.join(CONTENT_DIR, rel));
+    else changes.push(() => fs.rmSync(path.join(CONTENT_DIR, rel), { force: true }));
   }
   for (const rel of want) {
     const src = path.join(backup, rel);

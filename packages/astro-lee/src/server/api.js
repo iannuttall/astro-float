@@ -242,9 +242,15 @@ export function attachLeeApi(server, ctx) {
       }
 
       if (method === "POST" && url.pathname === "/sync") {
-        await cleanAssetMap(ctx, "before the requested content refresh");
-        await ctx.gate.refresh("the requested content refresh");
-        return json(res, 200, { synced: true });
+        const operation = await ctx.gate.begin("the requested content refresh", { requireChange: false });
+        try {
+          await operation.waitFor({ type: "content-snapshot", contentDir: ctx.contentDir });
+          operation.cancel();
+          return json(res, 200, { synced: true });
+        } catch (err) {
+          operation.cancel();
+          throw err;
+        }
       }
 
       if (method === "GET" && url.pathname === "/media") {

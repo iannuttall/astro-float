@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { importFromAstro } from "./astro-deps.js";
 import { assetImportsForEntry } from "./assets.js";
+import { ENTRY_EXTS } from "./content.js";
 
 const DATA_STORE_FILE = path.join(".astro", "data-store.json");
 const SYNC_CAP_MS = 30_000;
@@ -149,22 +150,6 @@ export function createSyncGate(server, logger, { root, refreshContent } = {}) {
   return {
     begin,
 
-    /** Ask Astro to finish a full content refresh. Used by deterministic test cleanup. */
-    async refresh(label = "the content refresh") {
-      if (typeof refreshContent !== "function") throw httpError(501, "this Astro version does not expose refreshContent");
-      let timer;
-      try {
-        await Promise.race([
-          refreshContent(),
-          new Promise((_, reject) => {
-            timer = setTimeout(() => reject(httpError(504, `Astro did not finish ${label} within 30 seconds`)), SYNC_CAP_MS);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-
     /** Start (`true`) or end (`false`) the toolbar's edit session. */
     session(editing) {
       editingUntil = editing ? Date.now() + SESSION_TTL_MS : 0;
@@ -188,11 +173,22 @@ function cancel(operation) {
 }
 
 async function prepareTarget(root, target) {
-  if (target.type !== "entry") return target;
-  const source = await fs.readFile(path.resolve(root, target.file), "utf8");
+  if (target.type !== "entry" && target.type !== "content-snapshot") return target;
   const xxhash = await importFromAstro(root, "xxhash-wasm");
   const { h64ToString } = await xxhash.default();
-  return { ...target, digest: h64ToString(source) };
+  if (target.type === "entry") {
+    const source = await fs.readFile(path.resolve(root, target.file), "utf8");
+    return { ...target, digest: h64ToString(source) };
+  }
+  if (target.type === "content-snapshot") {
+    const files = new Map();
+    for (const file of await contentFiles(target.contentDir)) {
+      const relative = path.relative(root, file).split(path.sep).join("/");
+      files.set(relative, h64ToString(await fs.readFile(file, "utf8")));
+    }
+    return { ...target, files };
+  }
+  return target;
 }
 
 async function readStore(root) {
@@ -210,6 +206,18 @@ async function readStore(root) {
 }
 
 async function matches(root, store, target) {
+  if (target.type === "content-snapshot") {
+    const stored = new Map();
+    for (const collection of store.values()) {
+      if (!(collection instanceof Map)) continue;
+      for (const entry of collection.values()) {
+        if (typeof entry?.filePath === "string" && typeof entry?.digest === "string") stored.set(entry.filePath, entry.digest);
+      }
+    }
+    if (stored.size !== target.files.size) return false;
+    for (const [file, digest] of target.files) if (stored.get(file) !== digest) return false;
+    return true;
+  }
   const collection = store.get(target.collection);
   if (target.type === "collection-absent") return !(collection instanceof Map);
   const entry = collection instanceof Map ? collection.get(target.id) : undefined;
@@ -220,6 +228,16 @@ async function matches(root, store, target) {
   if (!assets.length) return true;
   const imported = await assetImportsForEntry({ root }, target.file);
   return assets.every((asset) => imported.has(asset));
+}
+
+async function contentFiles(dir) {
+  const out = [];
+  for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...(await contentFiles(file)));
+    else if (ENTRY_EXTS.has(path.extname(entry.name).toLowerCase())) out.push(file);
+  }
+  return out;
 }
 
 /** The distinct objects a full reload may be sent through, in the order Astro uses them. */
