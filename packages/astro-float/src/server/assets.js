@@ -12,13 +12,11 @@ import path from "node:path";
  * file, which puts the stale lines back) it drops the imports whose entry or
  * image no longer exists, and has Vite load the module afresh.
  *
- * Astro writes this map on a 500ms debounce of its own, after the entry store
- * save that Float counts as "synced". A page rendered in between has no import
- * for a just-moved image, and Astro leaves that image as a bare
- * `<img __ASTRO_IMAGE_…>` placeholder. So a move also waits for that write
- * (`waitForAssetImports`) before it answers. And when `.astro` was empty at
- * start-up, Astro renders from a virtual copy of the map that no watcher
- * reloads, so every write is followed by an invalidation.
+ * The sync gate watches this map as well as the data store. An operation with
+ * images finishes only when the map contains every asset that Astro recorded
+ * for the exact entry file. When `.astro` was empty at start-up, Astro renders
+ * from a virtual copy of the map that no watcher reloads, so every write is
+ * followed by an invalidation.
  */
 const ASSETS_FILE = path.join(".astro", "content-assets.mjs");
 const IMPORT_LINE = /^import (\S+) from ("(?:[^"\\]|\\.)*");\n/gm;
@@ -55,14 +53,30 @@ export function pruneAssetImports(ctx) {
  * @returns {Promise<number>}
  */
 export async function countAssetImports(ctx, entryFile, linkedFrom) {
+  const imports = await assetImportsForEntry(ctx, entryFile);
+  if (linkedFrom === undefined) return imports.size;
+  let count = 0;
+  for (const src of imports) if (linkedFrom.includes(src)) count++;
+  return count;
+}
+
+/**
+ * The image source paths currently present in Astro's map for one entry file.
+ * The sync gate compares these with the `assetImports` on Astro's exact store
+ * entry, so a map update for another file cannot finish an operation.
+ * @param {{ root: string }} ctx
+ * @param {string} entryFile
+ * @returns {Promise<Set<string>>}
+ */
+export async function assetImportsForEntry(ctx, entryFile) {
   let text;
   try {
     text = await fs.readFile(assetImportsFile(ctx.root), "utf8");
   } catch {
-    return 0;
+    return new Set();
   }
   const want = path.resolve(ctx.root, entryFile);
-  let count = 0;
+  const imports = new Set();
   for (const m of text.matchAll(IMPORT_LINE)) {
     let id;
     try {
@@ -72,26 +86,9 @@ export async function countAssetImports(ctx, entryFile, linkedFrom) {
     }
     const importer = importerOf(id);
     if (!importer || path.resolve(ctx.root, importer) !== want) continue;
-    if (linkedFrom === undefined || linkedFrom.includes(id.slice(0, id.indexOf("?")))) count++;
+    imports.add(id.slice(0, id.indexOf("?")));
   }
-  return count;
-}
-
-/**
- * Wait until the map imports at least `count` images for `entryFile` (Astro's
- * debounced write after a move), or `timeoutMs` passes. True when it does.
- * @param {{ root: string }} ctx
- * @param {string} entryFile
- * @param {number} count
- * @returns {Promise<boolean>}
- */
-export async function waitForAssetImports(ctx, entryFile, count, timeoutMs = 3000) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if ((await countAssetImports(ctx, entryFile)) >= count) return true;
-    if (Date.now() >= deadline) return false;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
+  return imports;
 }
 
 /**

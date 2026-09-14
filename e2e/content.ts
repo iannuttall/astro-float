@@ -41,8 +41,8 @@ const MEDIA = /\.(png|jpe?g|gif|webp|avif|svg|mp4|webm|mov|m4v)$/i;
 
 /**
  * Put the demo content back the way the run found it: rewrite files that
- * differ, delete entries that were added, and wait for Astro to re-sync so the
- * next test's page renders the restored entry.
+ * differ, delete entries that were added, and ask Astro to finish a content
+ * refresh before the next test starts.
  *
  * Media a test added (a dropped image) is only deleted once the dev server has
  * stopped: Astro's content asset map is additive, and deleting an image it has
@@ -55,7 +55,6 @@ export async function restoreContent(base: string) {
   const have = listFiles(CONTENT_DIR);
   const changes: Array<() => void> = [];
   const deferred: string[] = [];
-  const restoredEntries: string[] = [];
 
   for (const rel of have) {
     if (want.has(rel)) continue;
@@ -66,7 +65,6 @@ export async function restoreContent(base: string) {
     const src = path.join(backup, rel);
     const dst = path.join(CONTENT_DIR, rel);
     if (!fs.existsSync(dst) || !fs.readFileSync(src).equals(fs.readFileSync(dst))) {
-      if (/\.mdx?$/.test(rel)) restoredEntries.push(rel);
       changes.push(() => {
         fs.mkdirSync(path.dirname(dst), { recursive: true });
         fs.copyFileSync(src, dst);
@@ -77,32 +75,8 @@ export async function restoreContent(base: string) {
   if (deferred.length) fs.appendFileSync(deferredFile(), deferred.join("\n") + "\n");
 
   if (!changes.length) return;
-  // Connect before writing: the sync signal must not slip past us.
-  const synced = waitForContentSync(base, 6_000).catch(() => new Promise((r) => setTimeout(r, 1_500)));
   for (const apply of changes) apply();
-  await synced;
-  // The signal says the store changed; make sure the restored entries render again before the next test asks.
-  for (const rel of restoredEntries) await waitForEntryPage(base, rel);
-}
-
-/** Poll an entry's page until it prints the entry's title again (the store re-sync has landed). */
-async function waitForEntryPage(base: string, rel: string) {
-  const m = rel.match(/^([^/]+)\/(.+?)(?:\/index)?\.mdx?$/);
-  if (!m) return;
-  const title = /^---\n(?:.*\n)*?title: (.+)\n/.exec(fs.readFileSync(path.join(CONTENT_DIR, rel), "utf8"))?.[1]?.replace(/^"(.*)"$/, "$1");
-  if (!title) return;
-  const url = `${base}/${m[1]}/${m[2]}/`;
-  const deadline = Date.now() + 8_000;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(url, { headers: { accept: "text/html" } });
-      const html = res.ok ? await res.text() : "";
-      if (html.includes("<h1") && html.includes(title)) return;
-    } catch {
-      /* server busy */
-    }
-    await new Promise((r) => setTimeout(r, 150));
-  }
+  await syncContent(base);
 }
 
 function deferredFile() {
@@ -128,33 +102,13 @@ function pruneEmptyDirs(dir: string) {
   }
 }
 
-/**
- * Astro's content layer asks the browser for a full reload once a changed
- * entry is back in its store. Listening on Vite's HMR socket for that message
- * is the same signal Float's sync gate uses.
- */
-export function waitForContentSync(base: string, timeoutMs: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(base.replace(/^http/, "ws") + "/", "vite-hmr");
-    const timer = setTimeout(() => {
-      ws.close();
-      reject(new Error("no content sync signal"));
-    }, timeoutMs);
-    const done = (err?: Error) => {
-      clearTimeout(timer);
-      ws.close();
-      err ? reject(err) : resolve();
-    };
-    ws.addEventListener("message", (e) => {
-      try {
-        const msg = JSON.parse(String(e.data));
-        if (msg.type === "full-reload") done();
-      } catch {
-        /* not JSON */
-      }
-    });
-    ws.addEventListener("error", () => done(new Error("hmr socket error")));
+/** Ask Float to run and await Astro's public content refresh signal. */
+export async function syncContent(base: string): Promise<void> {
+  const res = await fetch(`${base}/__float/api/sync`, {
+    method: "POST",
+    headers: { "x-astro-float": "1" },
   });
+  if (!res.ok) throw new Error(`content refresh failed: ${res.status} ${await res.text()}`);
 }
 
 /** Lines that differ between two texts of the same length; -1 when the line counts differ. */

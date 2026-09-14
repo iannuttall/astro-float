@@ -40,6 +40,5 @@ test("broken YAML is flagged and never written", async ({ float }) => {
   await expect(float.popover.locator(".pop-toggle")).toHaveAttribute("data-error", "");
   await expect(float.page.locator(`${CANVAS} .code-error`)).not.toBeEmpty();
   await float.page.keyboard.press("ControlOrMeta+s");
-  await float.page.waitForTimeout(500);
   expect(readEntry(ENTRY)).toBe(originalEntry(ENTRY));
 });

@@ -19,8 +19,6 @@ async function pageDom(page: import("@playwright/test").Page) {
 
 test("turning Edit off leaves the page exactly as it was", async ({ float }) => {
   await float.open("/blog/hello-float/", { edit: false });
-  // Astro's own toolbar apps settle right after load.
-  await float.page.waitForTimeout(500);
   const before = await pageDom(float.page);
   expect(before.body).not.toContain("data-float");
 

@@ -14,6 +14,8 @@ export interface FloatState {
   bodyMapped: boolean;
   bodyReadOnly: boolean;
   bodyDiff: string | null;
+  staleOnDisk: boolean;
+  keepMine: boolean;
   onPageFields: string[];
   entry: string | null;
 }

@@ -1,126 +1,168 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { importFromAstro } from "./astro-deps.js";
+import { assetImportsForEntry } from "./assets.js";
+
+const DATA_STORE_FILE = path.join(".astro", "data-store.json");
+const SYNC_CAP_MS = 30_000;
+const SESSION_TTL_MS = 60_000;
+
 /**
- * When Float writes a content file, Astro's content layer re-syncs the entry and
- * then asks the browser to do a full reload. A reload would tear down the editor
- * mid-keystroke, so for a short "quiet window" after each Float save we swallow
- * that reload and let the client re-fetch the page HTML and swap it in place.
+ * Coordinate Float writes with Astro's content layer.
  *
- * The swallowed reload doubles as the "content is synced" signal: the save
- * endpoint waits for it before responding, so the client's follow-up fetch is
- * guaranteed to render the new content.
+ * A Vite `full-reload` does not name the entry or the bytes that Astro loaded.
+ * Each operation instead takes a snapshot of Astro's data store before the
+ * filesystem mutation. It waits for a later store write that contains the
+ * exact file path and Astro digest of the new entry, or no longer contains a
+ * deleted entry. Image entries also wait until Astro's generated image map
+ * contains every asset recorded in that store entry.
  *
- * Edits coming from anywhere else (your editor, git checkout, ...) reload the
- * page as usual — unless an edit session is active. Then the reload would drop
- * whatever the author is typing, so it's swallowed too and the toolbar gets an
- * `astro-float:file-changed` event instead (see `watch.js`). The toolbar opens
- * a session with `POST /session { editing: true }`, every API call refreshes
- * its 60 s TTL, and `{ editing: false }` ends it.
+ * `refreshContent` is Astro's public way to ask all loaders to apply the
+ * current files. Astro 5, 6, and 7 provide it. The store watcher remains the
+ * proof that this entry was applied, so an unrelated refresh cannot satisfy
+ * the operation. The watchers are installed before any operation can write.
  *
  * @param {import('vite').ViteDevServer} server
  * @param {import('astro').AstroIntegrationLogger} logger
+ * @param {{ root: string, refreshContent?: (options?: any) => Promise<void> }} options
  */
-export function createSyncGate(server, logger) {
-  const QUIET_WINDOW_MS = 3000;
-  const SESSION_TTL_MS = 60_000;
-  /** How long after an entry file changes we treat the next full reload as its consequence. */
-  const EXTERNAL_CHANGE_MS = 5000;
-
-  let quietUntil = 0;
+export function createSyncGate(server, logger, { root, refreshContent } = {}) {
+  const dataFile = path.join(root, DATA_STORE_FILE);
+  const assetFile = path.join(root, ".astro", "content-assets.mjs");
+  /** @type {Set<any>} */
+  const pending = new Set();
   let editingUntil = 0;
-  let externalChangeUntil = 0;
-  /** @type {Array<(ok: boolean) => void>} */
-  let waiters = [];
 
-  const settle = (ok) => {
-    const pending = waiters;
-    waiters = [];
-    for (const resolve of pending) resolve(ok);
+  server.watcher.add(dataFile);
+  server.watcher.add(assetFile);
+  const changed = (file) => {
+    if (file === dataFile || file === assetFile) {
+      void checkAll();
+    }
   };
+  server.watcher.on("add", changed);
+  server.watcher.on("change", changed);
 
-  const isEditing = () => Date.now() < editingUntil;
-
-  // Astro 5's content layer sends the reload on `server.ws`; Astro 6+ sends it
-  // on the client environment's hot channel (`server.environments.client.hot`),
-  // which may or may not be the same object as `server.ws` depending on the
-  // Vite version. Wrap every distinct channel so the reload is caught wherever
-  // it is sent; `settle` is idempotent, so a message that passes through two of
-  // them counts once.
+  // Astro 5 sends on `server.ws`; Astro 6+ can use the client environment.
+  // All reloads stay suppressed during an edit session so an image move or an
+  // outside write cannot destroy the draft. `watch.js` sends an exact entry
+  // hash after Astro applies an outside content edit.
   for (const channel of hotChannels(server)) {
     const originalSend = channel.send.bind(channel);
     channel.send = (...args) => {
       const payload = args[0];
-      const isFullReload =
-        payload && typeof payload === "object" && payload.type === "full-reload";
-
-      if (isFullReload) {
-        // Astro's data store invalidation sends `path: "*"`; other reloads
-        // (SSR-only module updates) don't carry a path. Only the former means
-        // "the entry you just saved is now in the store".
-        const synced = payload.path === "*";
-        if (Date.now() < quietUntil) {
-          if (synced) settle(true);
-          logger.debug("suppressed full-reload inside Float quiet window");
-          return;
-        }
-        if (isEditing() && Date.now() < externalChangeUntil) {
-          if (synced) settle(true);
-          logger.debug("suppressed full-reload for an outside change during a Float edit session");
-          return;
-        }
-        if (synced) settle(true);
+      const fullReload = payload && typeof payload === "object" && payload.type === "full-reload";
+      if (fullReload && (pending.size > 0 || isEditing())) {
+        logger.debug("suppressed content full-reload during a Float edit or sync");
+        return;
       }
-
       return originalSend(...args);
     };
   }
 
-  // When Astro rejects the written entry (schema mismatch, YAML error) it never
-  // re-syncs, so no reload arrives and the wait would run to its timeout. The
-  // content layer logs that rejection through the logger's shared destination;
-  // watching for it answers `synced: false` right away.
-  // (Astro 5 calls the option `dest`, Astro 6+ `destination`; see `watchLogDestination`.)
-  watchLogDestination(logger, (event) => {
-    if (waiters.length && isContentFailure(event)) settle(false);
-  });
+  const isEditing = () => Date.now() < editingUntil;
 
-  /** Resolve once Astro re-syncs content (`true`), logs a content error (`false`), or `timeoutMs` passes (`false`). */
-  const awaitSync = (timeoutMs) =>
-    new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        waiters = waiters.filter((w) => w !== done);
-        resolve(false);
-      }, timeoutMs);
-      const done = (ok) => {
-        clearTimeout(timer);
-        resolve(ok);
-      };
-      waiters.push(done);
-    });
+  async function checkAll() {
+    await Promise.all([...pending].map((operation) => check(operation)));
+  }
+
+  async function check(operation) {
+    if (!operation.target || operation.done || operation.matched) return;
+    if (operation.checking) {
+      operation.recheck = true;
+      return operation.checking;
+    }
+    operation.checking = (async () => {
+      do {
+        operation.recheck = false;
+        try {
+          const snapshot = await readStore(root);
+          if (operation.requireChange && snapshot.raw === operation.baseline) continue;
+          if (!(await matches(root, snapshot.store, operation.target))) continue;
+          operation.matched = true;
+          operation.resolve(true);
+        } catch {
+          // Astro writes the store atomically. Retry a transient read or
+          // import error on the next concrete event or refresh finish.
+        }
+      } while (operation.recheck && !operation.done && !operation.matched);
+    })();
+    try {
+      await operation.checking;
+    } finally {
+      operation.checking = null;
+    }
+  }
+
+  async function begin(label, { requireChange = true } = {}) {
+    const baseline = (await readStore(root)).raw;
+    const operation = {
+      label,
+      baseline,
+      requireChange,
+      target: null,
+      checking: null,
+      recheck: false,
+      done: false,
+      matched: false,
+      timer: undefined,
+      resolve: undefined,
+      pending,
+    };
+    pending.add(operation);
+    return {
+      async waitFor(target, { refresh = true } = {}) {
+        operation.target = await prepareTarget(root, target);
+        const signal = new Promise((resolve) => {
+          operation.resolve = resolve;
+        });
+        const safety = new Promise((_, reject) => {
+          operation.timer = setTimeout(() => {
+            operation.done = true;
+            pending.delete(operation);
+            reject(httpError(504, `Astro did not apply ${label} within 30 seconds`));
+          }, SYNC_CAP_MS);
+        });
+        void check(operation);
+        try {
+          let work;
+          if (refresh && typeof refreshContent === "function") {
+            const refreshed = refreshContent().then(() => check(operation));
+            work = Promise.all([signal, refreshed]);
+          } else {
+            work = signal;
+          }
+          await Promise.race([work, safety]);
+          return true;
+        } catch (err) {
+          cancel(operation);
+          if (err?.status) throw err;
+          throw httpError(500, `Astro could not apply ${label}: ${err?.message ?? err}`);
+        } finally {
+          clearTimeout(operation.timer);
+        }
+      },
+      cancel: () => cancel(operation),
+    };
+  }
 
   return {
-    /**
-     * Open the quiet window and return a promise that resolves once Astro has
-     * re-synced content (or after `timeoutMs`, whichever comes first).
-     * Resolves to `true` when the sync signal was observed, `false` when Astro
-     * reported an error for the content instead or the wait timed out.
-     * @param {number} [timeoutMs]
-     * @returns {Promise<boolean>}
-     */
-    expectSync(timeoutMs = 2500) {
-      quietUntil = Date.now() + Math.max(QUIET_WINDOW_MS, timeoutMs + 500);
-      return awaitSync(timeoutMs);
-    },
+    begin,
 
-    /** Wait for the next content sync without opening the quiet window (for changes Float didn't make). */
-    awaitSync,
-
-    /** Open the quiet window without waiting on anything. */
-    quiet() {
-      quietUntil = Date.now() + QUIET_WINDOW_MS;
-    },
-
-    /** An entry file just changed: the full reload that follows belongs to it. */
-    noteEntryChange() {
-      externalChangeUntil = Date.now() + EXTERNAL_CHANGE_MS;
+    /** Ask Astro to finish a full content refresh. Used by deterministic test cleanup. */
+    async refresh(label = "the content refresh") {
+      if (typeof refreshContent !== "function") throw httpError(501, "this Astro version does not expose refreshContent");
+      let timer;
+      try {
+        await Promise.race([
+          refreshContent(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(httpError(504, `Astro did not finish ${label} within 30 seconds`)), SYNC_CAP_MS);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
     },
 
     /** Start (`true`) or end (`false`) the toolbar's edit session. */
@@ -137,61 +179,50 @@ export function createSyncGate(server, logger) {
   };
 }
 
-/**
- * See every log event Astro writes, whichever destination is current.
- *
- * Integration loggers are forks that share one `options` object with Astro's
- * root logger, so wrapping the destination there catches the content layer's
- * errors too. Astro 5 calls the option `dest`, Astro 6+ `destination`; and
- * Astro can swap the destination after `astro:server:setup` (Astro 7 does when
- * it tees logs to `.astro/dev.log`), so the option is turned into an accessor
- * that wraps whatever is set later as well.
- *
- * @param {any} logger
- * @param {(event: any) => void} onEvent
- */
-function watchLogDestination(logger, onEvent) {
-  const options = logger?.options;
-  if (!options || typeof options !== "object") return;
-  const key = "dest" in options ? "dest" : "destination";
-  const wrap = (dest) => {
-    if (!dest || typeof dest.write !== "function") return dest;
-    return Object.create(dest, {
-      write: {
-        configurable: true,
-        writable: true,
-        value: (event) => {
-          try {
-            onEvent(event);
-          } catch {
-            /* never let the watcher break logging */
-          }
-          return dest.write(event);
-        },
-      },
-    });
-  };
-  let wrapped = wrap(options[key]);
-  try {
-    Object.defineProperty(options, key, {
-      configurable: true,
-      enumerable: true,
-      get: () => wrapped,
-      set: (dest) => {
-        wrapped = wrap(dest);
-      },
-    });
-  } catch {
-    // Frozen options: wrap the current destination only.
-    try {
-      options[key] = wrapped;
-    } catch {
-      /* read-only; the save falls back to its timeout */
-    }
-  }
+function cancel(operation) {
+  if (operation.done) return;
+  operation.done = true;
+  clearTimeout(operation.timer);
+  operation.pending?.delete?.(operation);
+  operation.resolve?.(false);
 }
 
-/** The distinct objects a full-reload may be sent through, in the order Astro uses them. */
+async function prepareTarget(root, target) {
+  if (target.type !== "entry") return target;
+  const source = await fs.readFile(path.resolve(root, target.file), "utf8");
+  const xxhash = await importFromAstro(root, "xxhash-wasm");
+  const { h64ToString } = await xxhash.default();
+  return { ...target, digest: h64ToString(source) };
+}
+
+async function readStore(root) {
+  let raw;
+  try {
+    raw = await fs.readFile(path.join(root, DATA_STORE_FILE), "utf8");
+  } catch (err) {
+    if (err?.code === "ENOENT") return { raw: "", store: new Map() };
+    throw err;
+  }
+  const devalue = await importFromAstro(root, "devalue");
+  const store = devalue.parse(raw);
+  if (!(store instanceof Map)) throw new Error("Astro data store is not a Map");
+  return { raw, store };
+}
+
+async function matches(root, store, target) {
+  const collection = store.get(target.collection);
+  if (target.type === "collection-absent") return !(collection instanceof Map);
+  const entry = collection instanceof Map ? collection.get(target.id) : undefined;
+  if (target.type === "entry-absent") return entry === undefined;
+  if (!entry || entry.filePath !== target.file || entry.digest !== target.digest) return false;
+  if (target.oldId && target.oldId !== target.id && collection.get(target.oldId) !== undefined) return false;
+  const assets = Array.isArray(entry.assetImports) ? entry.assetImports : [];
+  if (!assets.length) return true;
+  const imported = await assetImportsForEntry({ root }, target.file);
+  return assets.every((asset) => imported.has(asset));
+}
+
+/** The distinct objects a full reload may be sent through, in the order Astro uses them. */
 function hotChannels(server) {
   const seen = new Set();
   const out = [];
@@ -203,10 +234,6 @@ function hotChannels(server) {
   return out;
 }
 
-/** An error-level log event from the content layer or one of its loaders. */
-function isContentFailure(event) {
-  if (!event || typeof event !== "object" || event.level !== "error") return false;
-  const label = String(event.label ?? "");
-  const message = String(event.message ?? "");
-  return label === "content" || /loader$/.test(label) || /does not match collection schema|frontmatter/i.test(message);
+function httpError(status, message) {
+  return Object.assign(new Error(message), { status });
 }

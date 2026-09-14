@@ -65,14 +65,14 @@ export default function astroFloat(options = {}) {
         logger.info("on-page content editor enabled (dev only) — toggle it from the toolbar's Edit icon");
       },
 
-      "astro:server:setup": ({ server, logger }) => {
+      "astro:server:setup": ({ server, logger, refreshContent }) => {
         if (!isDev || !root || !srcDir) return;
 
         const contentDir = options.contentDir
           ? path.resolve(root, options.contentDir)
           : path.join(srcDir, "content");
 
-        const gate = createSyncGate(server, logger);
+        const gate = createSyncGate(server, logger, { root, refreshContent });
 
         const ctx = {
           root,

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { CONTENT_DIR, copyTree, deleteDeferred, REPO, waitForContentSync } from "./content";
+import { CONTENT_DIR, copyTree, deleteDeferred, REPO } from "./content";
 
 /** Start the demo's `astro dev` on a free port and snapshot the content it serves. */
 export default async function globalSetup() {
@@ -24,8 +24,6 @@ export default async function globalSetup() {
   dev.stderr?.pipe(log);
 
   await waitForServer(base, dev);
-  // `astro dev` syncs content at start-up; make sure the pages serve before the first test asks.
-  await waitForContentSync(base, 8_000).catch(() => {});
 
   process.env.FLOAT_BASE_URL = base;
   process.env.FLOAT_BACKUP = backup;

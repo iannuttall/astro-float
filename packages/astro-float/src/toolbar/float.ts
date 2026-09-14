@@ -640,8 +640,6 @@ class Float {
     }
     const collection = this.collections.find((c) => c.name === doc.collection) ?? { name: doc.collection, dir: "", entries: [] };
     const { href } = routeFor(collection, renamed.id);
-    // The sync signal says the store has the entry; the route can still take a beat to answer.
-    await waitForPage(href, renamed.synced ? 3000 : 8000);
     await this.navigate(href);
   }
 
@@ -674,19 +672,16 @@ class Float {
     const here = this.doc?.collection === name;
     await this.settleSaves();
     this.setStatus("saving");
-    let deleted;
     try {
-      deleted = await api.deleteCollection(name);
+      const deleted = await api.deleteCollection(name);
+      if (this.listCollection === name) this.listCollection = null;
+      await this.navigate("/", { discard: here });
+      if (deleted.config.updated) this.flashDeleted();
+      else this.setStatus("warning", deleted.config.note ?? "Deleted, but the content config wasn't updated");
     } catch (err) {
       this.setStatus("error", describe(err));
       throw err;
     }
-    if (this.listCollection === name) this.listCollection = null;
-    // The content config changed: let the home page answer before it's swapped in.
-    await waitForPage("/", deleted.synced ? 3000 : 8000);
-    await this.navigate("/", { discard: here });
-    if (deleted.config.updated) this.flashDeleted();
-    else this.setStatus("warning", deleted.config.note ?? "Deleted, but the content config wasn't updated");
   }
 
   /** No autosave waiting and no write in flight: a save landing after a delete would put the file back. */
@@ -982,16 +977,11 @@ class Float {
       this.staleOnDisk = false;
       this.keepMine = false;
       this.panel.refreshAddress();
-      if (result.changed && result.synced === false) {
-        // Written, but Astro's content layer didn't pick it up (a schema rejection, most likely).
-        this.setStatus("warning", "Saved, but Astro rejected the entry. Check the terminal.");
-      } else {
-        this.setStatus("saved");
-        window.clearTimeout(this.savedTimer);
-        this.savedTimer = window.setTimeout(() => {
-          if (this.status === "saved") this.setStatus("idle");
-        }, SAVED_FOR);
-      }
+      this.setStatus("saved");
+      window.clearTimeout(this.savedTimer);
+      this.savedTimer = window.setTimeout(() => {
+        if (this.status === "saved") this.setStatus("idle");
+      }, SAVED_FOR);
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) this.setStatus("conflict");
       else if (err instanceof ApiError && err.status === 422 && err.issues?.length) {
@@ -1137,20 +1127,6 @@ function blockIndexAt(offset: number, lead: string, blocks: Array<{ src: string;
     if (offset < pos) return i;
   }
   return Math.max(0, blocks.length - 1);
-}
-
-/** Poll a page until the dev server renders it whole (a just-moved entry's route: no image left as Astro's `__ASTRO_IMAGE_` placeholder), or the time runs out. */
-async function waitForPage(href: string, timeoutMs: number) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(href, { headers: { accept: "text/html" }, cache: "no-store" });
-      if (res.ok && !(await res.text()).includes('__ASTRO_IMAGE_="')) return;
-    } catch {
-      /* server busy */
-    }
-    await new Promise((r) => setTimeout(r, 150));
-  }
 }
 
 /** Where a deleted entry's page goes: the collection's listing if it answers, else the entry before it (or after) if that does, else home. */

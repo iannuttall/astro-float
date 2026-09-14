@@ -1,23 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CONTENT_DIR, DEMO, entryPath, waitForContentSync } from "./content";
+import { CONTENT_DIR, DEMO, entryPath, syncContent } from "./content";
 import { expect, expectSameBox, test } from "./float";
 
 const CONFIG = path.join(DEMO, "src", "content.config.ts");
-
-/** Poll until the dev server answers `url` with a page (an entry or a collection Astro has only just been told about). */
-async function waitForPage(url: string) {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    try {
-      if ((await fetch(url, { headers: { accept: "text/html" } })).ok) return;
-    } catch {
-      /* server busy */
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  throw new Error(`${url} did not answer`);
-}
 
 test("Delete post turns into Confirm in its own place, and the second click deletes", async ({ float }) => {
   // A throwaway post, last in the blog's list: the blog has no /blog/ listing, so the page lands on the entry before it.
@@ -26,7 +12,6 @@ test("Delete post turns into Confirm in its own place, and the second click dele
     data: { collection: "blog", slug: "temporary-post", title: "Temporary post" },
   });
   expect(created.status()).toBe(201);
-  await waitForPage(`${float.base}/blog/temporary-post/`);
   await float.open("/blog/temporary-post/");
   await float.openPopover();
 
@@ -99,7 +84,6 @@ test("Delete collection works the same way: the folder and its config go, then h
     });
     expect(created.status()).toBe(201);
     expect(fs.readFileSync(CONFIG, "utf8")).toContain("const scratch = defineCollection(");
-    await waitForPage(`${float.base}/scratch/first-scratch/`);
     await float.open("/scratch/first-scratch/");
     await float.openPopover();
 
@@ -130,9 +114,8 @@ test("Delete collection works the same way: the folder and its config go, then h
     expect(fs.readFileSync(CONFIG, "utf8")).toBe(config);
   } finally {
     if (fs.readFileSync(CONFIG, "utf8") !== config) {
-      const synced = waitForContentSync(float.base, 8_000).catch(() => {});
       fs.writeFileSync(CONFIG, config);
-      await synced;
+      await syncContent(float.base);
     }
   }
 });

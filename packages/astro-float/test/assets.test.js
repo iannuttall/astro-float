@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { countAssetImports, invalidateAssetImports, pruneAssetImports, waitForAssetImports } from "../src/server/assets.js";
+import { assetImportsForEntry, countAssetImports, invalidateAssetImports, pruneAssetImports } from "../src/server/assets.js";
 import { tempRoot, writeFiles } from "./helpers";
 
 const id = (src, importer) => `${src}?astroContentImageFlag=&importer=${encodeURIComponent(importer)}`;
@@ -46,7 +46,7 @@ describe("pruneAssetImports", () => {
   });
 });
 
-describe("countAssetImports / waitForAssetImports", () => {
+describe("assetImportsForEntry / countAssetImports", () => {
   const root = tempRoot();
   const file = path.join(root, ".astro/content-assets.mjs");
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -59,6 +59,7 @@ describe("countAssetImports / waitForAssetImports", () => {
   });
 
   it("counts the images the map imports for one entry file", async () => {
+    expect(await assetImportsForEntry({ root }, "src/content/blog/old/index.md")).toEqual(new Set(["./a.png", "./b.png"]));
     expect(await countAssetImports({ root }, "src/content/blog/old/index.md")).toBe(2);
     expect(await countAssetImports({ root }, "src/content/blog/new/index.md")).toBe(0);
     expect(await countAssetImports({ root: tempRoot() }, "src/content/blog/old/index.md")).toBe(0);
@@ -66,15 +67,6 @@ describe("countAssetImports / waitForAssetImports", () => {
     expect(await countAssetImports({ root }, "src/content/blog/old/index.md", "---\ntitle: Old\n---\n\n![a](./a.png)\n")).toBe(1);
   });
 
-  it("waits for Astro's write of a moved entry's images, and gives up after the timeout", async () => {
-    const moved = map([
-      ["__A", id("./a.png", "src/content/blog/new/index.md")],
-      ["__B", id("./b.png", "src/content/blog/new/index.md")],
-    ]);
-    setTimeout(() => fs.writeFileSync(file, moved), 150);
-    expect(await waitForAssetImports({ root }, "src/content/blog/new/index.md", 2, 3000)).toBe(true);
-    expect(await waitForAssetImports({ root }, "src/content/blog/elsewhere/index.md", 1, 120)).toBe(false);
-  });
 });
 
 describe("invalidateAssetImports", () => {
