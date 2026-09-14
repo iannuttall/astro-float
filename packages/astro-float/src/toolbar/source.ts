@@ -67,6 +67,8 @@ export class SourceEditor {
     this.area.setAttribute("autocapitalize", "off");
     this.area.setAttribute("autocorrect", "off");
     Object.assign(this.area.style, type);
+    // The textarea paints its glyphs transparent (the mirror shows them); the caret needs the real colour.
+    this.area.style.caretColor = cs.color;
     this.area.value = text;
 
     this.el.append(this.mirror, this.area);

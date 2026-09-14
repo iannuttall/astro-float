@@ -103,9 +103,10 @@ const PAGE_STYLE = /* css */ `
   position: absolute;
   inset: 0;
   height: 100%;
+  z-index: 1;
   background: transparent;
   color: transparent;
-  caret-color: currentColor;
+  caret-color: #111; /* overridden inline with the prose colour when the view opens */
   resize: none;
   outline: none;
   overflow: hidden;
