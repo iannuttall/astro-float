@@ -1390,6 +1390,11 @@ export class PageEditor {
     const range = this.selectionRange();
     if (!range) return;
 
+    if (range.collapsed && !e.shiftKey && !e.altKey && !e.isComposing && this.leaveBlock(e.key, range)) {
+      e.preventDefault();
+      return;
+    }
+
     // Backspace/Delete against an island edge selects it instead of silently eating it.
     if ((e.key === "Backspace" || e.key === "Delete") && range.collapsed) {
       const block = this.topLevelBlock(range.startContainer);
@@ -1439,6 +1444,41 @@ export class PageEditor {
     if (e.key === " " && range.collapsed) this.markdownShortcut(e, range);
     else if (e.key === "`" && range.collapsed) this.codeFenceShortcut(e, range);
   };
+
+  /**
+   * Ways out of a block the caret would otherwise be stuck in. True when handled.
+   * - Enter on an empty line of a quote: the line leaves as a paragraph right after the quote.
+   * - Backspace at the very start of a quote's first line: that line leaves the quote; the rest stays quoted.
+   * - ↓ / → at the very end of a quote, code block or list that ends the body: a paragraph opens after it.
+   */
+  private leaveBlock(key: string, range: Range): boolean {
+    const el = this.container!;
+    if (key === "Enter" || key === "Backspace") {
+      const line = closestWithin(range.startContainer, el, "p, div");
+      const quote = line?.parentElement;
+      if (!line || quote?.tagName !== "BLOCKQUOTE") return false;
+      if (key === "Enter" && isEmptyBlock(line)) {
+        placeCaret(leaveQuote(line));
+        return true;
+      }
+      if (key === "Backspace" && quote.firstElementChild === line && isCaretAtStart(line, range)) {
+        quote.before(line);
+        if (isEmptyBlock(quote)) quote.remove();
+        placeCaret(line);
+        return true;
+      }
+      return false;
+    }
+    if (key === "ArrowDown" || key === "ArrowRight") {
+      const block = this.topLevelBlock(range.startContainer);
+      if (!block || block !== el.lastElementChild || !/^(BLOCKQUOTE|PRE|UL|OL)$/.test(block.tagName) || !isCaretAtEnd(block, range)) return false;
+      const p = emptyParagraph();
+      block.after(p);
+      placeCaret(p);
+      return true;
+    }
+    return false;
+  }
 
   /** `# `, `- `, `1. `, `> ` at the start of a paragraph become the matching block. */
   private markdownShortcut(e: KeyboardEvent, range: Range) {
@@ -1723,6 +1763,26 @@ function isEmptyBlock(block: HTMLElement): boolean {
 function isBlankParagraph(node: Node): boolean {
   if (!(node instanceof HTMLElement) || !/^(P|DIV)$/.test(node.tagName) || node.dataset.floatKey) return false;
   return !node.textContent?.trim() && !node.querySelector(":not(br)");
+}
+
+/**
+ * An empty quote line leaves the quote: an empty paragraph takes its place right after the quote,
+ * the lines that followed it stay quoted below that paragraph, and a quote left empty goes.
+ */
+function leaveQuote(line: HTMLElement): HTMLParagraphElement {
+  const quote = line.parentElement!;
+  const rest: Node[] = [];
+  for (let n = line.nextSibling; n; n = n.nextSibling) rest.push(n);
+  line.remove();
+  const p = emptyParagraph();
+  quote.after(p);
+  if (rest.some((n) => n instanceof Element || (n.textContent ?? "").trim())) {
+    const tail = document.createElement("blockquote");
+    tail.append(...rest);
+    p.after(tail);
+  }
+  if (isEmptyBlock(quote)) quote.remove();
+  return p;
 }
 
 function emptyParagraph(): HTMLParagraphElement {

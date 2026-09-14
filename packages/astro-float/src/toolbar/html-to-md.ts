@@ -57,7 +57,8 @@ export function blockToMarkdown(node: Node, ctx: SerializeContext): string {
       return listToMarkdown(el, ctx, 0);
     case "BLOCKQUOTE": {
       const inner = hasBlockChildren(el) ? childrenBlocks(el, ctx) : finishInline(inlineOf(el, ctx));
-      return inner.split("\n").map((l) => (l ? `> ${l}` : ">")).join("\n");
+      // A quote with nothing typed in it yet (the `> ` shortcut's empty line) writes nothing, not a lone `>`.
+      return inner ? inner.split("\n").map((l) => (l ? `> ${l}` : ">")).join("\n") : "";
     }
     case "PRE":
       return preToMarkdown(el);

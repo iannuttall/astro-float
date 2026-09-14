@@ -146,3 +146,13 @@ describe("image blocks", () => {
     expect(await roundTrip(md)).toBe(md);
   });
 });
+
+describe("quotes", () => {
+  const one = (html: string) => blockToMarkdown(containerFrom(html).firstChild!, identity);
+
+  it("writes nothing for a quote with nothing typed in it, and no stray > for its empty lines", () => {
+    expect(one("<blockquote><p><br></p></blockquote>")).toBe("");
+    expect(one("<blockquote></blockquote>")).toBe("");
+    expect(one("<blockquote><p>a</p><p><br></p><p>b</p></blockquote>")).toBe("> a\n>\n> b");
+  });
+});
