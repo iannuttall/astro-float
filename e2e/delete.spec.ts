@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CONTENT_DIR, DEMO, entryPath, waitForContentSync } from "./content";
-import { expect, test } from "./float";
+import { expect, expectSameBox, test } from "./float";
 
 const CONFIG = path.join(DEMO, "src", "content.config.ts");
 
@@ -19,7 +19,7 @@ async function waitForPage(url: string) {
   throw new Error(`${url} did not answer`);
 }
 
-test("Delete post asks once in place, removes the entry and moves the page on", async ({ float }) => {
+test("Delete post turns into Confirm in its own place, and the second click deletes", async ({ float }) => {
   // A throwaway post, last in the blog's list: the blog has no /blog/ listing, so the page lands on the entry before it.
   const created = await float.page.request.post(`${float.base}/__float/api/entries`, {
     headers: { "x-astro-float": "1" },
@@ -30,31 +30,51 @@ test("Delete post asks once in place, removes the entry and moves the page on", 
   await float.open("/blog/temporary-post/");
   await float.openPopover();
 
-  const row = float.popover.locator(".delete-row");
-  const button = row.getByRole("button", { name: "Delete post" });
-  const question = row.locator(".confirm-text");
+  const row = float.popover.locator(".pop-delete .delete-row");
+  const button = row.locator("button");
+  await expect(button).toHaveCount(1);
+  await expect(button).toHaveText("Delete post");
+  // In view first: a click scrolls to what it clicks, and that would move the box.
+  await button.scrollIntoViewIfNeeded();
+  const idle = await button.boundingBox();
+  const rowBox = await row.boundingBox();
 
-  // Esc, a click elsewhere in the popover, and Enter on the focused Cancel all put the button back.
+  // The first click turns the same button into a red Confirm, in exactly its box; nothing else appears.
   await button.click();
-  await expect(question).toHaveText("Delete “Temporary post”? This removes its folder.");
-  await expect(row.getByRole("button", { name: "Cancel" })).toBeFocused();
-  await float.page.keyboard.press("Escape");
-  await expect(button).toBeVisible();
-  await expect(float.popover).toBeVisible();
+  await expect(button).toHaveText("Confirm");
+  await expect(button).toHaveAttribute("data-confirming", "");
+  await expect(row).toHaveText("Confirm");
+  expectSameBox(await button.boundingBox(), idle);
+  expectSameBox(await row.boundingBox(), rowBox);
 
+  // Esc and a click elsewhere in the popover turn it back, and the popover stays open.
+  await float.page.keyboard.press("Escape");
+  await expect(button).toHaveText("Delete post");
+  await expect(float.popover).toBeVisible();
   await button.click();
   await float.popover.locator(".pop-head").click();
-  await expect(button).toBeVisible();
+  await expect(button).toHaveText("Delete post");
 
+  // Five seconds turn it back too, with the pointer and the focus still on it.
   await button.click();
-  await float.page.keyboard.press("Enter");
-  await expect(button).toBeVisible();
+  await expect(button).toHaveText("Confirm");
+  await float.page.waitForTimeout(5_500);
+  await expect(button).toHaveText("Delete post");
+  await expect(button).not.toHaveAttribute("data-confirming", "");
+  expectSameBox(await button.boundingBox(), idle);
+
+  // A double click is only the first click.
+  await button.dblclick();
+  await expect(button).toHaveText("Confirm");
+  await float.page.keyboard.press("Escape");
+  await expect(button).toHaveText("Delete post");
   expect(fs.existsSync(entryPath("blog/temporary-post/index.md"))).toBe(true);
 
-  // Tab to Delete, Enter: the folder goes and the page follows.
-  await button.click();
-  await float.page.keyboard.press("Tab");
-  await expect(row.getByRole("button", { name: "Delete", exact: true })).toBeFocused();
+  // From the keyboard: Enter arms it, Enter on the focused Confirm deletes; the folder goes and the page follows.
+  await button.focus();
+  await float.page.keyboard.press("Enter");
+  await expect(button).toHaveText("Confirm");
+  await expect(button).toBeFocused();
   const [res] = await Promise.all([
     float.page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().includes("/__float/api/entry?")),
     float.page.keyboard.press("Enter"),
@@ -70,7 +90,7 @@ test("Delete post asks once in place, removes the entry and moves the page on", 
   await expect.poll(async () => (await float.state()).status, { timeout: 8_000 }).toBe("idle");
 });
 
-test("Delete collection removes the folder and its config, then goes home", async ({ float }) => {
+test("Delete collection works the same way: the folder and its config go, then home", async ({ float }) => {
   const config = fs.readFileSync(CONFIG, "utf8");
   try {
     const created = await float.page.request.post(`${float.base}/__float/api/collections`, {
@@ -84,16 +104,21 @@ test("Delete collection removes the folder and its config, then goes home", asyn
     await float.openPopover();
 
     // Only there with the entries open.
-    const remove = float.popover.getByRole("button", { name: "Delete collection" });
-    await expect(remove).toBeHidden();
+    const line = float.popover.locator(".foot-body .delete-row");
+    const remove = line.locator("button");
+    await expect(line).toBeHidden();
     await float.popover.locator(".foot-toggle").click();
+    await expect(remove).toHaveText("Delete collection");
+    await remove.scrollIntoViewIfNeeded();
+    const idle = await remove.boundingBox();
     await remove.click();
-    const confirm = float.popover.locator(".foot-body .confirm");
-    await expect(confirm.locator(".confirm-text")).toHaveText("Delete scratch and its 1 entry? This removes the folder and its config.");
+    await expect(remove).toHaveText("Confirm");
+    await expect(line).toHaveText("Confirm");
+    expectSameBox(await remove.boundingBox(), idle);
 
     const [res] = await Promise.all([
       float.page.waitForResponse((r) => r.request().method() === "DELETE" && r.url().includes("/__float/api/collection?")),
-      confirm.getByRole("button", { name: "Delete", exact: true }).click(),
+      remove.click(),
     ]);
     expect(res.status()).toBe(200);
     expect(await res.json()).toMatchObject({ collection: "scratch", entries: 1, config: { updated: true } });

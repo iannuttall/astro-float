@@ -1,18 +1,10 @@
 import fs from "node:fs";
 import type { Locator } from "@playwright/test";
 import { entryPath, readEntry } from "./content";
-import { expect, test, type Float } from "./float";
+import { expect, expectSameBox, test, type Float } from "./float";
 
 // A 1×1 transparent PNG.
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
-
-type Box = { x: number; y: number; width: number; height: number } | null;
-
-/** The same place and size, to the half pixel. */
-function expectSameBox(actual: Box, expected: Box) {
-  expect(actual).not.toBeNull();
-  for (const key of ["x", "y", "width", "height"] as const) expect(actual![key]).toBeCloseTo(expected![key], 0);
-}
 
 /** Open the Address row's input: a click for a draft, two on the padlock for a published post (after an error it is still open). */
 async function openAddress(float: Float): Promise<Locator> {

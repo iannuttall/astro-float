@@ -630,11 +630,11 @@ class Float {
   }
 
   /**
-   * Delete the entry on this page (asked once in the popover). What's pending
+   * Delete the entry on this page (confirmed in the popover). What's pending
    * goes with it, unsaved. The page moves on — to the collection's listing
    * when one answers, else the entry before it (or after), else the home page
-   * — and the pill says "Deleted". Rejects with the reason for the question
-   * line to show; nothing is deleted then.
+   * — and the pill says "Deleted". When the server refuses, nothing is
+   * deleted: the pill turns red and says why, and this rejects.
    */
   private async deleteEntry() {
     const doc = this.doc;
@@ -644,7 +644,7 @@ class Float {
     try {
       await api.deleteEntry(doc.collection, doc.id);
     } catch (err) {
-      this.setStatus("idle");
+      this.setStatus("error", describe(err));
       throw err;
     }
     const href = await landingAfterDelete(this.collections.find((c) => c.name === doc.collection), doc.id);
@@ -652,7 +652,7 @@ class Float {
     this.flashDeleted();
   }
 
-  /** Delete a whole collection (asked once in the footer) and go to the home page. Rejects with the reason. */
+  /** Delete a whole collection (confirmed in the entries list) and go to the home page. When the server refuses, the pill says why and this rejects. */
   private async deleteCollection(name: string) {
     // An entry of another collection still saves on the way out; this collection's own edits go with it.
     const here = this.doc?.collection === name;
@@ -662,7 +662,7 @@ class Float {
     try {
       deleted = await api.deleteCollection(name);
     } catch (err) {
-      this.setStatus("idle");
+      this.setStatus("error", describe(err));
       throw err;
     }
     if (this.listCollection === name) this.listCollection = null;

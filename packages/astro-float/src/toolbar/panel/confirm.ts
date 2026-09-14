@@ -1,106 +1,86 @@
-import { h, replaceChildren } from "../dom";
-import { describe } from "./util";
+import { h } from "../dom";
 
 /**
- * Deleting asks once, in place. A quiet text button ("Delete post") turns
- * into one line that names what goes and what that means — `Delete “Hello”?
- * This removes its file.` — with Cancel and a small red Delete. No dialog.
- * Cancel, Esc or a click anywhere else puts the button back. Cancel has the
- * focus when the line opens, so Enter only deletes once Delete itself has it,
- * and the second click of a double click is never taken for an answer.
+ * Deleting takes two clicks on one button. A quiet "Delete post" (bottom left)
+ * turns into a red "Confirm" in exactly its own box, and a second click within
+ * five seconds deletes. Five seconds, Esc or a click anywhere else turn it
+ * back; hovering or focusing Confirm doesn't add time. Enter only deletes when
+ * Confirm has the focus, and neither the second click of a double click nor a
+ * held-down key counts as the second click.
  */
-export interface DeleteQuestion {
-  question: string;
-  /** Do it. A rejection's reason takes the question's place, and Delete can be tried again. */
-  confirm(): Promise<void>;
-}
 
-/** Lines waiting for an answer; the popover puts them back when it closes. */
-const waiting = new Set<() => void>();
+/** How long Confirm waits for its click. */
+const CONFIRM_FOR = 5000;
 
-/** Put back every open question (the popover is closing). */
+/** Buttons showing Confirm; the popover turns them back when it closes. */
+const armed = new Set<() => void>();
+
+/** Turn every Confirm back into its "Delete …" (the popover is closing). */
 export function cancelConfirms() {
-  for (const dismiss of Array.from(waiting)) dismiss();
+  for (const disarm of Array.from(armed)) disarm();
 }
 
-/** The "Delete …" button and the question it turns into. `ask` builds the question on click, from what the thing is called by then. */
-export function renderDeleteLine(label: string, ask: () => DeleteQuestion): HTMLElement {
-  const slot = h("div", { class: "delete-row" });
-  const button = h(
-    "button",
-    {
-      class: "text-btn",
-      type: "button",
-      onClick: () =>
-        replaceChildren(
-          slot,
-          renderQuestion(ask(), (refocus) => {
-            replaceChildren(slot, button);
-            if (refocus) button.focus({ preventScroll: true });
-          }),
-        ),
-    },
-    label,
-  ) as HTMLButtonElement;
-  slot.appendChild(button);
-  return slot;
-}
-
-/** The question line; `restore` puts the button back (and focuses it when the keyboard was in the line). */
-function renderQuestion({ question, confirm }: DeleteQuestion, restore: (refocus: boolean) => void): HTMLElement {
-  const text = h("span", { class: "confirm-text" }, question);
-  const cancel = h("button", { class: "btn btn-sm btn-ghost", type: "button" }, "Cancel") as HTMLButtonElement;
-  const remove = h("button", { class: "btn btn-sm btn-danger", type: "button" }, "Delete") as HTMLButtonElement;
-  // `data-escape="self"`: Escape in here answers the question and leaves the popover open.
-  const line = h("div", { class: "confirm", role: "group", "aria-label": question, "data-escape": "self" }, text, h("span", { class: "confirm-actions" }, cancel, remove));
+/** The row holding "Delete post" or "Delete collection". `confirm` runs on the second click; when it rejects, the pill has said why and the button turns back. */
+export function renderDeleteLine(label: string, confirm: () => Promise<void>): HTMLElement {
+  const button = h("button", { class: "text-btn", type: "button" }, label) as HTMLButtonElement;
+  let timer: number | undefined;
   let busy = false;
 
-  const settle = () => {
-    waiting.delete(dismiss);
+  const disarm = (refocus = false) => {
+    if (busy || !armed.has(disarm)) return;
+    armed.delete(disarm);
+    window.clearTimeout(timer);
     document.removeEventListener("pointerdown", onPointerDown, true);
-  };
-  const dismiss = (refocus = false) => {
-    if (busy || !waiting.has(dismiss)) return;
-    settle();
-    restore(refocus);
+    button.removeAttribute("data-confirming");
+    delete button.dataset.escape;
+    button.style.width = "";
+    button.textContent = label;
+    if (refocus) button.focus({ preventScroll: true });
   };
   const onPointerDown = (e: PointerEvent) => {
-    if (!line.isConnected) settle();
-    else if (!e.composedPath().includes(line)) dismiss();
+    if (!e.composedPath().includes(button)) disarm();
   };
 
-  cancel.addEventListener("click", () => dismiss(true));
-  remove.addEventListener("click", async (e) => {
-    if (busy || e.detail > 1) return;
+  button.addEventListener("click", async (e) => {
+    if (busy) return;
+    if (!armed.has(disarm)) {
+      // Confirm keeps the box "Delete post" had, to the pixel: nothing moves.
+      button.style.width = `${button.getBoundingClientRect().width}px`;
+      button.textContent = "Confirm";
+      button.setAttribute("data-confirming", "");
+      // Escape turns it back and leaves the popover open; Enter on it now deletes.
+      button.dataset.escape = "self";
+      button.focus({ preventScroll: true });
+      armed.add(disarm);
+      document.addEventListener("pointerdown", onPointerDown, true);
+      timer = window.setTimeout(() => disarm(), CONFIRM_FOR);
+      return;
+    }
+    // The second click of a double click on "Delete post" isn't an answer.
+    if (e.detail > 1) return;
+    window.clearTimeout(timer);
     busy = true;
-    cancel.disabled = remove.disabled = true;
-    text.textContent = question;
-    text.removeAttribute("data-error");
     try {
       await confirm();
+    } catch {
+      /* the pill says why */
+    } finally {
       busy = false;
-      settle();
-      // Nothing moved on (there was nothing to delete): back to the button.
-      if (line.isConnected) restore(false);
-    } catch (err) {
-      busy = false;
-      text.textContent = describe(err);
-      text.setAttribute("data-error", "");
-      cancel.disabled = remove.disabled = false;
-      cancel.focus({ preventScroll: true });
+      disarm();
     }
   });
-  line.addEventListener("keydown", (e) => {
-    if (e.key !== "Escape") return;
-    e.preventDefault();
-    e.stopPropagation();
-    dismiss(true);
+  button.addEventListener("keydown", (e) => {
+    if (!armed.has(disarm)) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      disarm(true);
+    } else if (e.repeat && (e.key === "Enter" || e.key === " ")) {
+      // The key that armed it, held down, never confirms.
+      e.preventDefault();
+    }
   });
-
-  waiting.add(dismiss);
-  document.addEventListener("pointerdown", onPointerDown, true);
-  queueMicrotask(() => cancel.focus({ preventScroll: true }));
-  return line;
+  return h("div", { class: "delete-row" }, button);
 }
 
 /** Plurals that aren't one: "news" isn't many "new"s. */

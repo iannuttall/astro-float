@@ -19,7 +19,7 @@ export interface CollectionHost {
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
   releaseFocus(): void;
-  /** Delete the collection (folder, media, config) and go home; rejects with the reason when it can't. */
+  /** Delete the collection (folder, media, config) and go home; rejects when it can't (the pill says why). */
   deleteCollection(name: string): Promise<void>;
 }
 
@@ -75,13 +75,7 @@ export function renderCollectionFooter(host: CollectionHost, state: FootState, r
         ),
       );
     }
-    const n = selected.entries.length;
-    list.appendChild(
-      renderDeleteLine("Delete collection", () => ({
-        question: `Delete ${selected.name}${n ? ` and its ${n === 1 ? "1 entry" : `${n} entries`}` : ""}? This removes the folder and its config.`,
-        confirm: () => host.deleteCollection(selected.name),
-      })),
-    );
+    list.appendChild(renderDeleteLine("Delete collection", () => host.deleteCollection(selected.name)));
   }
   list.appendChild(
     h(

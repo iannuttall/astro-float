@@ -467,18 +467,13 @@ button.address:hover, button.address:focus-visible { background: var(--bg-hover)
 .form-error:empty { display: none; }
 .card-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
-/* ---- delete: a quiet text button that turns into one question in place (two lines of it fit the same height) ---- */
-.text-btn { flex: none; height: 24px; padding: 0 6px; border-radius: var(--radius-sm); font-size: 12px; color: var(--fg-muted); white-space: nowrap; transition: background 120ms ease, color 120ms ease; }
+/* ---- delete: one quiet button that turns into a red Confirm in its own box ---- */
+.text-btn { flex: none; height: 24px; padding: 0 6px; border-radius: var(--radius-sm); font-size: 12px; color: var(--fg-muted); white-space: nowrap; transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
 .text-btn:hover, .text-btn:focus-visible { background: var(--bg-hover); color: var(--err); }
+.text-btn[data-confirming] { text-align: center; color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 30%, transparent); }
+.text-btn[data-confirming]:hover { background: color-mix(in srgb, var(--err) 16%, transparent); }
 .delete-row { display: flex; align-items: center; min-height: 40px; padding: 4px 14px 4px 8px; }
 .list > .delete-row { min-height: 36px; padding: 2px 8px 2px 2px; }
-.delete-row > .confirm { padding-left: 6px; }
-.confirm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
-.confirm-text { flex: 1; min-width: 0; font-size: 12px; line-height: 16px; }
-.confirm-text[data-error] { color: var(--err); }
-.confirm-actions { flex: none; display: flex; gap: 4px; }
-.btn-danger { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
-.btn-danger:hover { background: color-mix(in srgb, var(--err) 16%, transparent); border-color: color-mix(in srgb, var(--err) 50%, transparent); }
 
 /* ---- small screens ---------------------------------------------------------
  * The root becomes a box the size of the *visual* viewport (updated from JS as

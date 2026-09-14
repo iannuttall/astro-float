@@ -122,6 +122,14 @@ export class Float {
   }
 }
 
+type Box = { x: number; y: number; width: number; height: number } | null;
+
+/** The same place and size, to the half pixel. */
+export function expectSameBox(actual: Box, expected: Box) {
+  expect(actual).not.toBeNull();
+  for (const key of ["x", "y", "width", "height"] as const) expect(actual![key]).toBeCloseTo(expected![key], 0);
+}
+
 export const test = base.extend<{ float: Float }>({
   float: async ({ page }, use) => {
     const float = new Float(page);

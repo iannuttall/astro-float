@@ -6,7 +6,7 @@ import { humanize, type CollectionSchema } from "../schema";
 import { refreshTooltip } from "../tooltip";
 import { renderAddressRow, type AddressRow } from "./address";
 import { renderCollectionFooter, type FootState } from "./collection";
-import { cancelConfirms, nounFor, renderDeleteLine, type DeleteQuestion } from "./confirm";
+import { cancelConfirms, nounFor, renderDeleteLine } from "./confirm";
 import { renderForm } from "./form";
 import { resetViewportZoom } from "./util";
 import { createYamlView, type YamlView } from "./yaml";
@@ -68,9 +68,9 @@ export interface PillHost {
   discard(): void;
   /** Move the entry to a new address (its last id segment) and follow it; rejects with the reason when it can't. */
   rename(slug: string): Promise<void>;
-  /** Delete the entry on this page and move on; rejects with the reason when it can't. */
+  /** Delete the entry on this page and move on; rejects when it can't (the pill says why). */
   deleteEntry(): Promise<void>;
-  /** Delete a whole collection and go home; rejects with the reason when it can't. */
+  /** Delete a whole collection and go home; rejects when it can't (the pill says why). */
   deleteCollection(name: string): Promise<void>;
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
@@ -215,7 +215,7 @@ export class Pill {
 
     this.footHost = h("section", { class: "pop-section pop-entries" });
     // Last, below everything: the quiet way to delete the entry.
-    const removal = doc ? h("section", { class: "pop-section pop-delete" }, renderDeleteLine(`Delete ${nounFor(doc.collection)}`, () => this.deleteQuestion(doc))) : null;
+    const removal = doc ? h("section", { class: "pop-section pop-delete" }, renderDeleteLine(`Delete ${nounFor(doc.collection)}`, () => host.deleteEntry())) : null;
     const body = h("div", { class: "pop-body" }, address, this.fieldsHost, this.yamlHost, settings, this.footHost, removal);
     this.pop = h("div", { class: "popover", role: "dialog", "aria-label": "Entry", hidden: true }, head, body);
     this.pop.addEventListener("keydown", (e) => {
@@ -409,8 +409,8 @@ export class Pill {
 
   renderCollection() {
     if (!this.footHost) return;
-    // A save refreshes the entries in the background: never pull a form (New entry, New collection) or a delete question out from under the user.
-    if (this.isOpen && this.footHost.querySelector(".card, .confirm")) {
+    // A save refreshes the entries in the background: never pull a form (New entry, New collection) or a waiting Confirm out from under the user.
+    if (this.isOpen && this.footHost.querySelector(".card, [data-confirming]")) {
       this.footStale = true;
       return;
     }
@@ -432,19 +432,6 @@ export class Pill {
         () => this.renderCollection(),
       ),
     );
-  }
-
-  /** What "Delete post" asks, built on click so it names the title as it is by then: `Delete “Hello, Float”? This removes its folder.` */
-  private deleteQuestion(doc: EntryDoc): DeleteQuestion {
-    const title = [this.host.draft().title, doc.frontmatter.title].find((t): t is string => typeof t === "string" && t.trim() !== "")?.trim() ?? doc.id;
-    const name = title.length > 48 ? `${title.slice(0, 47).trimEnd()}…` : title;
-    // A folder entry takes its folder (images and all), unless it sits at the collection's root or other entries live in it: then only its file.
-    const collection = this.host.collections().find((c) => c.name === doc.collection);
-    const keepsFolder = doc.file.slice(0, doc.file.lastIndexOf("/")) === collection?.dir || !!collection?.entries.some((e) => e.id.startsWith(`${doc.id}/`));
-    return {
-      question: `Delete “${name}”? This removes its ${doc.folder && !keepsFolder ? "folder" : "file"}.`,
-      confirm: () => this.host.deleteEntry(),
-    };
   }
 
   // ---- status -----------------------------------------------------------------------------------
