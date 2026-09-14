@@ -9,7 +9,7 @@ import { CONTENT_DIR, copyTree, deleteDeferred, REPO } from "./content";
 export default async function globalSetup() {
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
-  const backup = fs.mkdtempSync(path.join(os.tmpdir(), "astro-float-e2e-"));
+  const backup = fs.mkdtempSync(path.join(os.tmpdir(), "astro-lee-e2e-"));
   copyTree(CONTENT_DIR, path.join(backup, "content"));
 
   const logDir = path.join(REPO, "test-results");
@@ -25,8 +25,8 @@ export default async function globalSetup() {
 
   await waitForServer(base, dev);
 
-  process.env.FLOAT_BASE_URL = base;
-  process.env.FLOAT_BACKUP = backup;
+  process.env.LEE_BASE_URL = base;
+  process.env.LEE_BACKUP = backup;
 
   return async () => {
     dev.kill("SIGTERM");

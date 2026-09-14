@@ -23,7 +23,7 @@ export function listFiles(dir: string, prefix = ""): string[] {
   return out.sort();
 }
 
-/** The demo content file for an entry, e.g. `blog/hello-float/index.md`. */
+/** The demo content file for an entry, e.g. `blog/hello-lee/index.md`. */
 export function entryPath(rel: string) {
   return path.join(CONTENT_DIR, rel);
 }
@@ -34,7 +34,7 @@ export function readEntry(rel: string) {
 
 /** The entry as it was when the run started. */
 export function originalEntry(rel: string) {
-  return fs.readFileSync(path.join(process.env.FLOAT_BACKUP!, "content", rel), "utf8");
+  return fs.readFileSync(path.join(process.env.LEE_BACKUP!, "content", rel), "utf8");
 }
 
 const MEDIA = /\.(png|jpe?g|gif|webp|avif|svg|mp4|webm|mov|m4v)$/i;
@@ -50,7 +50,7 @@ const MEDIA = /\.(png|jpe?g|gif|webp|avif|svg|mp4|webm|mov|m4v)$/i;
  * notes). The entry text is restored right away, so nothing references it.
  */
 export async function restoreContent(base: string) {
-  const backup = path.join(process.env.FLOAT_BACKUP!, "content");
+  const backup = path.join(process.env.LEE_BACKUP!, "content");
   const want = new Set(listFiles(backup));
   const have = listFiles(CONTENT_DIR);
   const changes: Array<() => void> = [];
@@ -80,7 +80,7 @@ export async function restoreContent(base: string) {
 }
 
 function deferredFile() {
-  return path.join(process.env.FLOAT_BACKUP!, "deferred-deletes.txt");
+  return path.join(process.env.LEE_BACKUP!, "deferred-deletes.txt");
 }
 
 /** After the dev server is down: delete the media tests added, then any directories that emptied out. */
@@ -102,11 +102,11 @@ function pruneEmptyDirs(dir: string) {
   }
 }
 
-/** Ask Float to run and await Astro's public content refresh signal. */
+/** Ask Lee to run and await Astro's public content refresh signal. */
 export async function syncContent(base: string): Promise<void> {
-  const res = await fetch(`${base}/__float/api/sync`, {
+  const res = await fetch(`${base}/__lee/api/sync`, {
     method: "POST",
-    headers: { "x-astro-float": "1" },
+    headers: { "x-lee": "1" },
   });
   if (!res.ok) throw new Error(`content refresh failed: ${res.status} ${await res.text()}`);
 }

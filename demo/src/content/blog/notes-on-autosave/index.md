@@ -10,7 +10,7 @@ draft: true
 
 When a Markdown file inside a content collection changes, Astro's content layer re-syncs it and asks the browser to reload. That is exactly right for edits coming from your editor, and exactly wrong for edits you are typing *into the page that would reload*.
 
-Float threads the needle:
+Lee threads the needle:
 
 1. It writes the file.
 2. It waits for Astro to finish syncing (the reload request is the signal).
@@ -20,7 +20,7 @@ Your scroll position and your caret survive. Edits from anywhere else still relo
 
 ## What autosave actually does
 
-With autosave on, the float waits about 800ms after you stop typing and then runs the same save path as ⌘S. With it off, a Save button appears at the top of the sidebar the moment the page differs from disk.
+With autosave on, Lee waits about 800ms after you stop typing and then runs the same save path as ⌘S. With it off, a Save button appears at the top of the sidebar the moment the page differs from disk.
 
 ## What actually gets written
 

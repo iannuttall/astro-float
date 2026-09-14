@@ -13,12 +13,12 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
 ---
 
 <Base title={`${post.data.title} · Field Notes`} description={post.data.description}>
-  {/* No data-float-* attributes are needed: Float finds the entry from the URL,
+  {/* No data-lee-* attributes are needed: Lee finds the entry from the URL,
       the rendered body by lining it up with the Markdown source, and the
       title / description / date by their text. They remain optional overrides:
-      - data-float-entry="blog:<id>" pins the page to an entry
-      - data-float-body marks the element that wraps the rendered body
-      - data-float-field="<key>" marks an element that prints a field verbatim
+      - data-lee-entry="blog:<id>" pins the page to an entry
+      - data-lee-body marks the element that wraps the rendered body
+      - data-lee-field="<key>" marks an element that prints a field verbatim
         (or a formatted date) */}
   <article>
     <header>
@@ -47,7 +47,7 @@ const fmt = new Intl.DateTimeFormat("en", { year: "numeric", month: "long", day:
   .badge { font-size: 11px; font-weight: 500; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
   h1 { font-size: 32px; line-height: 1.2; letter-spacing: -0.02em; margin: 0; }
   .lede { color: var(--muted); font-size: 17px; margin: 12px 0 0; }
-  .lede:empty:not([data-float-editing-field]) { display: none; }
+  .lede:empty:not([data-lee-editing-field]) { display: none; }
   .tags { display: flex; gap: 12px; margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 13px; color: var(--muted); }
   .back { margin-top: 40px; font-size: 14px; color: var(--muted); }
   .back a:hover { color: var(--fg); }
