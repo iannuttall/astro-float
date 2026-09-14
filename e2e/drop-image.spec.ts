@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import { entryPath, originalEntry, readEntry } from "./content";
+import path from "node:path";
+import { DEMO, originalEntry, readEntry } from "./content";
 import { expect, test } from "./lee";
 
 const ENTRY = "blog/hello-lee/index.md";
@@ -22,19 +23,23 @@ test("an image dropped on the prose is copied next to the entry and written as a
     },
     { png: PNG, x: box.x + box.width / 2, y: box.y + box.height / 2 },
   );
-  expect((await upload).status()).toBe(201);
+  const uploadResponse = await upload;
+  expect(uploadResponse.status()).toBe(201);
+  const saved = (await uploadResponse.json()) as { name: string; src: string; url: string; file: string };
+  const alt = saved.name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
 
-  const img = lee.body.locator("img[alt='tiny drop']");
+  const img = lee.body.locator(`img[alt="${alt}"]`);
   await expect(img).toHaveCount(1);
-  await expect(img).toHaveAttribute("src", /\/@fs\/.*\/blog\/hello-lee\/tiny-drop\.png$/);
-  expect(fs.existsSync(entryPath("blog/hello-lee/tiny-drop.png"))).toBe(true);
+  await expect(img).toHaveAttribute("src", saved.url);
+  expect(fs.existsSync(path.join(DEMO, saved.file))).toBe(true);
   // It landed right after the paragraph it was dropped on.
   await expect(lee.body.locator(":scope > p").nth(2).locator("img")).toHaveCount(1);
 
   await lee.save();
   await lee.expectSaved();
   const after = readEntry(ENTRY);
-  expect(after).toContain("\n![tiny drop](./tiny-drop.png)\n");
+  const markdown = `![${alt}](${saved.src})`;
+  expect(after).toContain(`\n${markdown}\n`);
   const before = originalEntry(ENTRY);
-  expect(after.replace("![tiny drop](./tiny-drop.png)\n\n", "")).toBe(before);
+  expect(after.replace(`${markdown}\n\n`, "")).toBe(before);
 });
