@@ -456,8 +456,8 @@ export const STYLES = /* css */ `
 .list-item svg { color: var(--fg-faint); }
 .list-action { color: var(--fg-muted); }
 .list-action:hover { color: var(--fg); }
-.list-item + .list-action { margin-top: 6px; position: relative; }
-.list-item + .list-action::before { content: ""; position: absolute; left: 8px; right: 8px; top: -4px; border-top: 1px solid var(--line); }
+.delete-row + .list-action { margin-top: 6px; position: relative; }
+.delete-row + .list-action::before { content: ""; position: absolute; left: 8px; right: 8px; top: -4px; border-top: 1px solid var(--line); }
 
 .card { display: flex; flex-direction: column; gap: 10px; margin: 8px 14px 12px; padding: 12px 14px; border: 0.5px solid var(--hairline); border-radius: var(--radius); background: var(--bg-elev); }
 .card-title { font-size: 13px; font-weight: 500; }
@@ -467,6 +467,19 @@ export const STYLES = /* css */ `
 .form-error { font-size: 12px; color: var(--err); }
 .form-error:empty { display: none; }
 .card-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* ---- delete: a quiet text button that turns into one question in place (two lines of it fit the same height) ---- */
+.text-btn { flex: none; height: 24px; padding: 0 6px; border-radius: var(--radius-sm); font-size: 12px; color: var(--fg-muted); white-space: nowrap; transition: background 120ms ease, color 120ms ease; }
+.text-btn:hover, .text-btn:focus-visible { background: var(--bg-hover); color: var(--err); }
+.delete-row { display: flex; align-items: center; min-height: 40px; padding: 4px 14px 4px 8px; }
+.list > .delete-row { min-height: 36px; padding: 2px 8px 2px 2px; }
+.delete-row > .confirm { padding-left: 6px; }
+.confirm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
+.confirm-text { flex: 1; min-width: 0; font-size: 12px; line-height: 16px; }
+.confirm-text[data-error] { color: var(--err); }
+.confirm-actions { flex: none; display: flex; gap: 4px; }
+.btn-danger { color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
+.btn-danger:hover { background: color-mix(in srgb, var(--err) 16%, transparent); border-color: color-mix(in srgb, var(--err) 50%, transparent); }
 
 /* ---- small screens ---------------------------------------------------------
  * The root becomes a box the size of the *visual* viewport (updated from JS as
@@ -502,5 +515,6 @@ export const STYLES = /* css */ `
   .chip { height: 28px; font-size: 14px; }
   .card label, .card-note { font-size: 13px; }
   .foot-body { max-height: 28vh; }
+  .delete-row, .list > .delete-row { min-height: 44px; }
 }
 `;

@@ -87,6 +87,17 @@ export function routeFor(collection: Collection, id: string): { href: string; gu
   return { href: `/${encodeURIComponent(collection.name)}/${encoded}/`, guessed: true };
 }
 
+/** The collection's listing page, from its entry route (`/blog/[id]/` → `/blog/`) or the `/collection/` guess; null when the route starts with the id. Unchecked: it may not exist. */
+export function indexFor(collection: Collection): string | null {
+  const pattern = collection.route ?? loadRoutes()[collection.name];
+  if (!pattern) return `/${encodeURIComponent(collection.name)}/`;
+  const at = pattern.search(/\[\.{0,3}[^\]]+\]/);
+  if (at <= 0) return null;
+  const prefix = pattern.slice(0, at);
+  const href = prefix.startsWith("/") ? prefix : `/${prefix}`;
+  return href === "/" ? null : href;
+}
+
 /** Elements that belong to dev tooling, not the page: never swapped out. */
 const KEEP_SELECTOR =
   "astro-dev-toolbar, [data-astro-float-host], .astro-float-bubble, .astro-float-bar, .astro-float-frame, .astro-float-dropline, .astro-float-datepicker";

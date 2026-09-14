@@ -2,11 +2,14 @@ import { api, type Collection, type EntryDoc } from "../api";
 import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
 import { routeFor } from "../page";
+import { renderDeleteLine } from "./confirm";
 import { describe, keepInView, slugify } from "./util";
 
 /**
  * The panel's footer: which collection, its entries (the current one marked),
  * and the two create flows — a new entry here, or a whole new collection.
+ * The entries end with a quiet "Delete collection", so it's only there with
+ * the list open.
  */
 export interface CollectionHost {
   doc(): EntryDoc | null;
@@ -16,6 +19,8 @@ export interface CollectionHost {
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
   releaseFocus(): void;
+  /** Delete the collection (folder, media, config) and go home; rejects with the reason when it can't. */
+  deleteCollection(name: string): Promise<void>;
 }
 
 export interface FootState {
@@ -70,6 +75,13 @@ export function renderCollectionFooter(host: CollectionHost, state: FootState, r
         ),
       );
     }
+    const n = selected.entries.length;
+    list.appendChild(
+      renderDeleteLine("Delete collection", () => ({
+        question: `Delete ${selected.name}${n ? ` and its ${n === 1 ? "1 entry" : `${n} entries`}` : ""}? This removes the folder and its config.`,
+        confirm: () => host.deleteCollection(selected.name),
+      })),
+    );
   }
   list.appendChild(
     h(

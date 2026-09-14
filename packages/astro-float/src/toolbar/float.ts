@@ -6,7 +6,7 @@ import { DatePicker } from "./datepicker";
 import { findBody, markBody, unmarkAuto } from "./autobind";
 import { FieldBindings } from "./fields";
 import { RegionControl } from "./overlays";
-import { detectEntry, routeFor, swapPage, type DetectedEntry } from "./page";
+import { detectEntry, indexFor, routeFor, swapPage, type DetectedEntry } from "./page";
 import { Pill, type PillPrefs, type StatusView } from "./panel/pill";
 import { clone, describe, resetViewportZoom } from "./panel/util";
 import { SourceEditor } from "./source";
@@ -14,7 +14,7 @@ import { humanize, schemaFor, type CollectionSchema } from "./schema";
 import { STYLES } from "./styles";
 import { attachTooltips, detachTooltips } from "./tooltip";
 
-type Status = "idle" | "saving" | "refreshing" | "saved" | "warning" | "error" | "conflict";
+type Status = "idle" | "saving" | "refreshing" | "saved" | "deleted" | "warning" | "error" | "conflict";
 
 export interface FloatHandle {
   setEditing(on: boolean): Promise<void>;
@@ -31,6 +31,8 @@ const PREFS_KEY = "astro-float:prefs";
 const AUTOSAVE_DELAY = 2000;
 /** How long the pill stays green (and says "Saved") after a successful write. */
 const SAVED_FOR = 4000;
+/** How long it says "Deleted" after an entry or a collection goes. */
+const DELETED_FOR = 2500;
 
 export function mountFloat(canvas: ShadowRoot, host: FloatHost): FloatHandle {
   const float = new Float(canvas, host);
@@ -153,6 +155,8 @@ class Float {
       save: (force) => this.save(force),
       discard: () => this.discardChanges(),
       rename: (slug) => this.rename(slug),
+      deleteEntry: () => this.deleteEntry(),
+      deleteCollection: (name) => this.deleteCollection(name),
       navigate: (href, opts) => this.navigate(href, opts),
       notify: (message) => this.setStatus("error", message),
     });
@@ -569,11 +573,12 @@ class Float {
 
   /**
    * Soft navigation: save anything pending, fetch the next page's HTML and swap
-   * it in under the panel. No unload, no "Leave site?".
+   * it in under the panel. No unload, no "Leave site?". `discard` drops what's
+   * pending instead: the entry it belonged to was just deleted.
    */
-  private async navigate(href: string, { push = true, focusBody = false } = {}) {
+  private async navigate(href: string, { push = true, focusBody = false, discard = false } = {}) {
     const url = new URL(href, location.href);
-    if (this.isDirty()) {
+    if (!discard && this.isDirty()) {
       await this.save();
       if (this.isDirty()) return;
     }
@@ -622,6 +627,66 @@ class Float {
     // The sync signal says the store has the entry; the route can still take a beat to answer.
     await waitForPage(href, renamed.synced ? 3000 : 8000);
     await this.navigate(href);
+  }
+
+  /**
+   * Delete the entry on this page (asked once in the popover). What's pending
+   * goes with it, unsaved. The page moves on — to the collection's listing
+   * when one answers, else the entry before it (or after), else the home page
+   * — and the pill says "Deleted". Rejects with the reason for the question
+   * line to show; nothing is deleted then.
+   */
+  private async deleteEntry() {
+    const doc = this.doc;
+    if (!doc) return;
+    await this.settleSaves();
+    this.setStatus("saving");
+    try {
+      await api.deleteEntry(doc.collection, doc.id);
+    } catch (err) {
+      this.setStatus("idle");
+      throw err;
+    }
+    const href = await landingAfterDelete(this.collections.find((c) => c.name === doc.collection), doc.id);
+    await this.navigate(href, { discard: true });
+    this.flashDeleted();
+  }
+
+  /** Delete a whole collection (asked once in the footer) and go to the home page. Rejects with the reason. */
+  private async deleteCollection(name: string) {
+    // An entry of another collection still saves on the way out; this collection's own edits go with it.
+    const here = this.doc?.collection === name;
+    await this.settleSaves();
+    this.setStatus("saving");
+    let deleted;
+    try {
+      deleted = await api.deleteCollection(name);
+    } catch (err) {
+      this.setStatus("idle");
+      throw err;
+    }
+    if (this.listCollection === name) this.listCollection = null;
+    // The content config changed: let the home page answer before it's swapped in.
+    await waitForPage("/", deleted.synced ? 3000 : 8000);
+    await this.navigate("/", { discard: here });
+    if (deleted.config.updated) this.flashDeleted();
+    else this.setStatus("warning", deleted.config.note ?? "Deleted, but the content config wasn't updated");
+  }
+
+  /** No autosave waiting and no write in flight: a save landing after a delete would put the file back. */
+  private async settleSaves() {
+    window.clearTimeout(this.autosaveTimer);
+    if (this.savePromise) await this.savePromise;
+    window.clearTimeout(this.autosaveTimer);
+  }
+
+  /** Green for a moment, saying "Deleted". */
+  private flashDeleted() {
+    this.setStatus("deleted");
+    window.clearTimeout(this.savedTimer);
+    this.savedTimer = window.setTimeout(() => {
+      if (this.status === "deleted") this.setStatus("idle");
+    }, DELETED_FOR);
   }
 
   private onDocumentClick = (e: MouseEvent) => {
@@ -701,7 +766,7 @@ class Float {
   private touched() {
     // A warning (Astro rejected the last write) stays until the next save says otherwise, and so does a
     // validation error while any of its issues are still standing.
-    if (this.status === "saved" || (this.status === "error" && !this.bodyReadOnly && !this.issues.length)) this.status = "idle";
+    if (this.status === "saved" || this.status === "deleted" || (this.status === "error" && !this.bodyReadOnly && !this.issues.length)) this.status = "idle";
     this.renderStatus();
     if (this.prefs.autosave) this.scheduleAutosave();
   }
@@ -944,7 +1009,7 @@ class Float {
       ? "saving"
       : this.status === "error" || this.status === "conflict" || this.status === "warning"
         ? this.status
-        : this.status === "saved"
+        : this.status === "saved" || this.status === "deleted"
           ? "saved"
           : dirty
             ? "dirty"
@@ -977,6 +1042,9 @@ class Float {
         break;
       case "saved":
         view.text = "Saved";
+        break;
+      case "deleted":
+        view.text = "Deleted";
         break;
       case "warning":
         view.text = this.statusMessage;
@@ -1063,6 +1131,27 @@ async function waitForPage(href: string, timeoutMs: number) {
       /* server busy */
     }
     await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+/** Where a deleted entry's page goes: the collection's listing if it answers, else the entry before it (or after) if that does, else home. */
+async function landingAfterDelete(collection: Collection | undefined, id: string): Promise<string> {
+  if (!collection) return "/";
+  const i = collection.entries.findIndex((e) => e.id === id);
+  const neighbour = i === -1 ? undefined : (collection.entries[i - 1] ?? collection.entries[i + 1]);
+  for (const href of [indexFor(collection), neighbour ? routeFor(collection, neighbour.id).href : null]) {
+    if (href && (await answers(href))) return href;
+  }
+  return "/";
+}
+
+/** One look: does the dev server answer `href` with a page? */
+async function answers(href: string): Promise<boolean> {
+  try {
+    const res = await fetch(href, { headers: { accept: "text/html" }, cache: "no-store" });
+    return res.ok && (res.headers.get("content-type") ?? "").includes("text/html");
+  } catch {
+    return false;
   }
 }
 

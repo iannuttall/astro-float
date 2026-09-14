@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { discoverCollections, httpError, serializeDocument, slugify } from "./content.js";
+import { discoverCollections, httpError, isInside, publicMediaDir, serializeDocument, slugify } from "./content.js";
 import { CONFIG_CANDIDATES } from "./schema.js";
 
 /**
@@ -136,6 +136,104 @@ async function wireContentConfig(ctx, name) {
 
   await fs.writeFile(file, text, "utf8");
   return { file: relFile, updated: true };
+}
+
+/**
+ * Delete a collection: its directory under the content dir, its
+ * `public/media/<name>/` folder, and — mirroring `createCollection` — its
+ * `defineCollection()` block and key in the content config. A config whose
+ * shape isn't recognised is left alone and reported (`config.updated: false`,
+ * with a note), the folder is gone either way.
+ */
+export async function deleteCollection(ctx, name) {
+  if (typeof name !== "string" || !/^[a-z][a-z0-9-]*$/.test(name)) throw httpError(400, "collection name must be kebab-case (a-z, 0-9, -)");
+  const collection = (await discoverCollections(ctx)).find((c) => c.name === name);
+  if (!collection) throw httpError(404, `unknown collection "${name}"`);
+  const dir = path.resolve(ctx.root, collection.dir);
+  if (!isInside(ctx.contentDir, dir)) throw httpError(400, "collection directory is outside the content dir");
+
+  // Unregister first, so Astro re-syncs without the collection before its files go.
+  const config = await unwireContentConfig(ctx, name);
+  const removed = [];
+  for (const target of [dir, publicMediaDir(ctx, name, [])]) {
+    if (!target || !(await exists(target))) continue;
+    await fs.rm(target, { recursive: true, force: true });
+    removed.push(rel(ctx.root, target));
+  }
+  return { collection: name, entries: collection.entries.length, removed, config };
+}
+
+/** Take a collection out of the content config: the key in `export const collections` and the `defineCollection` it names. */
+async function unwireContentConfig(ctx, name) {
+  let file = null;
+  for (const candidate of CONFIG_CANDIDATES) {
+    const abs = path.join(ctx.root, candidate);
+    if (await exists(abs)) {
+      file = abs;
+      break;
+    }
+  }
+  if (!file) return { file: null, updated: false, note: "no content config found; nothing to unregister" };
+  const relFile = rel(ctx.root, file);
+  let text = await fs.readFile(file, "utf8");
+
+  const exportMatch = text.match(/export const collections\s*=\s*\{([^}]*)\}/);
+  if (!exportMatch) {
+    return { file: relFile, updated: false, note: `couldn't find \`export const collections = { … }\` in ${relFile}; remove "${name}" by hand` };
+  }
+  // `blog`, `blog: posts`, `"blog": posts` — the entry for this collection, and the variable it points at.
+  const entries = exportMatch[1].split(",").map((s) => s.trim()).filter(Boolean);
+  const keyRe = new RegExp(`^(?:"${escapeRegExp(name)}"|'${escapeRegExp(name)}'|${escapeRegExp(name)})\\s*(?::\\s*([A-Za-z_$][\\w$]*))?$`);
+  const index = entries.findIndex((e) => keyRe.test(e));
+  if (index === -1) return { file: relFile, updated: false, note: `"${name}" isn't registered in ${relFile}` };
+  const ident = keyRe.exec(entries[index])[1] ?? name;
+  const remaining = entries.filter((_, i) => i !== index);
+
+  const inner = exportMatch[1];
+  const replacement = !remaining.length
+    ? "export const collections = {}"
+    : inner.includes("\n")
+      ? `export const collections = {\n${remaining.map((e) => `  ${e},`).join("\n")}\n}`
+      : `export const collections = { ${remaining.join(", ")} }`;
+  text = text.replace(exportMatch[0], replacement);
+
+  // The definition: `const <ident> = defineCollection(` through its matching `);`, plus the blank line after it.
+  const start = text.search(new RegExp(`(^|\\n)(export\\s+)?const\\s+${escapeRegExp(ident)}\\s*=\\s*defineCollection\\s*\\(`));
+  if (start !== -1) {
+    const open = text.indexOf("(", text.indexOf("defineCollection", start));
+    const close = matchParen(text, open);
+    if (close !== -1) {
+      let end = close + 1;
+      if (text[end] === ";") end++;
+      while (text[end] === "\n") end++;
+      const from = start === 0 ? 0 : start + 1; // keep the newline that ended the previous statement
+      text = text.slice(0, from) + text.slice(end);
+    }
+  }
+  await fs.writeFile(file, text, "utf8");
+  return { file: relFile, updated: true };
+}
+
+/** Index of the `)` matching the `(` at `open`, skipping strings and comments; -1 when unbalanced. */
+function matchParen(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"' || c === "'" || c === "`") {
+      for (i++; i < text.length && text[i] !== c; i++) if (text[i] === "\\") i++;
+    } else if (c === "/" && text[i + 1] === "/") {
+      i = text.indexOf("\n", i);
+      if (i === -1) return -1;
+    } else if (c === "/" && text[i + 1] === "*") {
+      i = text.indexOf("*/", i) + 1;
+      if (i === 0) return -1;
+    } else if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) return c === ")" ? i : -1;
+    }
+  }
+  return -1;
 }
 
 function toIdentifier(name) {

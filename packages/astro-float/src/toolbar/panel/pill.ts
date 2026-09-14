@@ -6,6 +6,7 @@ import { humanize, type CollectionSchema } from "../schema";
 import { refreshTooltip } from "../tooltip";
 import { renderAddressRow } from "./address";
 import { renderCollectionFooter, type FootState } from "./collection";
+import { cancelConfirms, nounFor, renderDeleteLine, type DeleteQuestion } from "./confirm";
 import { renderForm } from "./form";
 import { resetViewportZoom } from "./util";
 import { createYamlView, type YamlView } from "./yaml";
@@ -67,6 +68,10 @@ export interface PillHost {
   discard(): void;
   /** Move the entry to a new address (its last id segment) and follow it; rejects with the reason when it can't. */
   rename(slug: string): Promise<void>;
+  /** Delete the entry on this page and move on; rejects with the reason when it can't. */
+  deleteEntry(): Promise<void>;
+  /** Delete a whole collection and go home; rejects with the reason when it can't. */
+  deleteCollection(name: string): Promise<void>;
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
 }
@@ -207,7 +212,9 @@ export class Pill {
     );
 
     this.footHost = h("section", { class: "pop-section pop-entries" });
-    const body = h("div", { class: "pop-body" }, address, this.fieldsHost, this.yamlHost, settings, this.footHost);
+    // Last, below everything: the quiet way to delete the entry.
+    const removal = doc ? h("section", { class: "pop-section pop-delete" }, renderDeleteLine(`Delete ${nounFor(doc.collection)}`, () => this.deleteQuestion(doc))) : null;
+    const body = h("div", { class: "pop-body" }, address, this.fieldsHost, this.yamlHost, settings, this.footHost, removal);
     this.pop = h("div", { class: "popover", role: "dialog", "aria-label": "Entry", hidden: true }, head, body);
     this.pop.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
@@ -254,6 +261,7 @@ export class Pill {
   close() {
     if (!this.isOpen) return;
     DatePicker.close();
+    cancelConfirms();
     this.yaml?.commit();
     this.pop!.hidden = true;
     this.pillEl?.setAttribute("aria-expanded", "false");
@@ -392,8 +400,8 @@ export class Pill {
 
   renderCollection() {
     if (!this.footHost) return;
-    // A save refreshes the entries in the background: never pull a form (New entry, New collection) out from under the user.
-    if (this.isOpen && this.footHost.querySelector(".card")) {
+    // A save refreshes the entries in the background: never pull a form (New entry, New collection) or a delete question out from under the user.
+    if (this.isOpen && this.footHost.querySelector(".card, .confirm")) {
       this.footStale = true;
       return;
     }
@@ -409,11 +417,25 @@ export class Pill {
           navigate: (href, opts) => this.host.navigate(href, opts),
           notify: (m) => this.host.notify(m),
           releaseFocus: () => (this.host.canvas.activeElement as HTMLElement | null)?.blur(),
+          deleteCollection: (name) => this.host.deleteCollection(name),
         },
         this.foot,
         () => this.renderCollection(),
       ),
     );
+  }
+
+  /** What "Delete post" asks, built on click so it names the title as it is by then: `Delete “Hello, Float”? This removes its folder.` */
+  private deleteQuestion(doc: EntryDoc): DeleteQuestion {
+    const title = [this.host.draft().title, doc.frontmatter.title].find((t): t is string => typeof t === "string" && t.trim() !== "")?.trim() ?? doc.id;
+    const name = title.length > 48 ? `${title.slice(0, 47).trimEnd()}…` : title;
+    // A folder entry takes its folder (images and all), unless it sits at the collection's root or other entries live in it: then only its file.
+    const collection = this.host.collections().find((c) => c.name === doc.collection);
+    const keepsFolder = doc.file.slice(0, doc.file.lastIndexOf("/")) === collection?.dir || !!collection?.entries.some((e) => e.id.startsWith(`${doc.id}/`));
+    return {
+      question: `Delete “${name}”? This removes its ${doc.folder && !keepsFolder ? "folder" : "file"}.`,
+      confirm: () => this.host.deleteEntry(),
+    };
   }
 
   // ---- status -----------------------------------------------------------------------------------
@@ -425,7 +447,8 @@ export class Pill {
     if (key === this.lastKey) return;
     this.lastKey = key;
     this.dot.dataset.state = view.dot;
-    // Green says "Saved" next to the dot, growing leftwards from the pill's fixed right edge; grey and orange stay dot-only.
+    // Green says what just happened ("Saved", "Deleted") next to the dot, growing leftwards from the pill's fixed right edge; grey and orange stay dot-only.
+    if (view.dot === "saved") this.word.textContent = view.text || "Saved";
     if (this.pillEl) this.pillEl.dataset.state = view.dot;
     const tip = view.tip ?? (view.dot === "dirty" ? "Unsaved changes · ⌘S to save" : view.text || (this.host.doc() ? "Up to date" : "Float"));
     if (this.pillEl) {

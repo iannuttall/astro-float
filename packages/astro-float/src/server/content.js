@@ -386,6 +386,55 @@ export async function renameEntry(ctx, { collection: collectionName, id, slug, b
   };
 }
 
+/**
+ * Delete an entry: the file, or the whole folder for a folder entry (its
+ * images go with it); a flat entry's `<id>/` upload folder and the entry's
+ * `public/media/<collection>/<id>/` videos too. Entries that live under it
+ * stay: a folder holding other entries loses only this entry's file, and only
+ * the videos directly in its media folder go. Nothing else is touched.
+ */
+export async function deleteEntry(ctx, collectionName, id) {
+  const { collection, entry, abs, collectionDir } = await resolveEntry(ctx, collectionName, id);
+  // `docs/guide/install.md` inside `docs/guide/`, the folder of `docs/guide/index.md`.
+  const holdsEntries = (dir) => collection.entries.some((e) => e !== entry && isInside(dir, path.resolve(ctx.root, e.file)));
+  /** @type {string[]} */
+  const targets = [];
+  const dir = path.dirname(abs);
+  if (entry.folder && dir !== collectionDir && !holdsEntries(dir)) {
+    targets.push(dir);
+  } else {
+    targets.push(abs);
+    const mediaDir = mediaDirFor(abs, entry);
+    if (!entry.folder && isInside(collectionDir, mediaDir) && !holdsEntries(mediaDir) && (await exists(mediaDir))) targets.push(mediaDir);
+  }
+  const publicMedia = publicMediaDir(ctx, collection.name, id.split("/"));
+  if (publicMedia && (await exists(publicMedia))) {
+    if (collection.entries.some((e) => e.id.startsWith(`${id}/`))) {
+      // `<id>/<child>/` holds a nested entry's videos: only the files directly in here are this entry's.
+      for (const d of await fs.readdir(publicMedia, { withFileTypes: true })) if (d.isFile()) targets.push(path.join(publicMedia, d.name));
+    } else {
+      targets.push(publicMedia);
+    }
+  }
+  for (const target of targets) await fs.rm(target, { recursive: true, force: true });
+  return {
+    collection: collection.name,
+    id: entry.id,
+    file: entry.file,
+    removed: targets.map((t) => path.relative(ctx.root, t).split(path.sep).join("/")),
+  };
+}
+
+/** `public/media/<collection>/<...segments>` (the collection's own folder for no segments), or null when the segments would walk out of it. */
+export function publicMediaDir(ctx, collectionName, segments) {
+  const mediaRoot = path.join(path.resolve(ctx.root, ctx.publicDir ?? "public"), "media");
+  const base = path.join(mediaRoot, collectionName);
+  if (!isInside(mediaRoot, base)) return null;
+  if (!segments.length) return base;
+  const dir = path.join(base, ...segments);
+  return isInside(base, dir) ? dir : null;
+}
+
 /** The entry's page: the configured route with the id filled in, else the `/collection/id/` guess. */
 function routeFor(collection, id) {
   const encoded = id.split("/").map(encodeURIComponent).join("/");
