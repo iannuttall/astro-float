@@ -467,11 +467,10 @@ button.address:hover, button.address:focus-visible { background: var(--bg-hover)
 .form-error:empty { display: none; }
 .card-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
-/* ---- delete: one quiet button that turns into a red Confirm in its own box ---- */
-.text-btn { flex: none; height: 24px; padding: 0 6px; border-radius: var(--radius-sm); font-size: 12px; color: var(--fg-muted); white-space: nowrap; transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
-.text-btn:hover, .text-btn:focus-visible { background: var(--bg-hover); color: var(--err); }
-.text-btn[data-confirming] { text-align: center; color: var(--err); background: color-mix(in srgb, var(--err) 10%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--err) 30%, transparent); }
-.text-btn[data-confirming]:hover { background: color-mix(in srgb, var(--err) 16%, transparent); }
+/* ---- delete: one quiet text button that turns into a red Confirm in its own box; never a background ---- */
+.text-btn { flex: none; height: 24px; padding: 0 6px; border-radius: var(--radius-sm); font-size: 12px; color: var(--fg-muted); white-space: nowrap; text-underline-offset: 3px; transition: color 120ms ease; }
+.text-btn:hover, .text-btn:focus-visible { color: var(--err); text-decoration: underline; }
+.text-btn[data-confirming] { color: var(--err); }
 .delete-row { display: flex; align-items: center; min-height: 40px; padding: 4px 14px 4px 8px; }
 .list > .delete-row { min-height: 36px; padding: 2px 8px 2px 2px; }
 
