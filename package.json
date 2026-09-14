@@ -1,5 +1,5 @@
 {
-  "name": "astro-float-monorepo",
+  "name": "astro-lee-monorepo",
   "private": true,
   "type": "module",
   "scripts": {
@@ -7,7 +7,7 @@
     "build": "pnpm --filter demo build",
     "preview": "pnpm --filter demo preview",
     "check": "pnpm --filter demo check",
-    "test": "pnpm --filter astro-float test",
+    "test": "pnpm --filter astro-lee test",
     "test:e2e": "playwright test",
     "test:e2e:setup": "playwright install chromium"
   },

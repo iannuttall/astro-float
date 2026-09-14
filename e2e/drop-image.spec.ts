@@ -1,19 +1,19 @@
 import fs from "node:fs";
 import { entryPath, originalEntry, readEntry } from "./content";
-import { expect, test } from "./float";
+import { expect, test } from "./lee";
 
-const ENTRY = "blog/hello-float/index.md";
+const ENTRY = "blog/hello-lee/index.md";
 // A 1×1 transparent PNG.
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
-test("an image dropped on the prose is copied next to the entry and written as a relative link", async ({ float }) => {
-  await float.open("/blog/hello-float/");
-  const target = float.body.locator(":scope > p").nth(1);
+test("an image dropped on the prose is copied next to the entry and written as a relative link", async ({ lee }) => {
+  await lee.open("/blog/hello-lee/");
+  const target = lee.body.locator(":scope > p").nth(1);
   const box = (await target.boundingBox())!;
 
   // There is no file input for the body: dispatch the drop a person's drag would end with.
-  const upload = float.page.waitForResponse((r) => r.request().method() === "POST" && r.url().includes("/__float/api/media"));
-  await float.body.evaluate(
+  const upload = lee.page.waitForResponse((r) => r.request().method() === "POST" && r.url().includes("/__lee/api/media"));
+  await lee.body.evaluate(
     (el, { png, x, y }) => {
       const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
       const dt = new DataTransfer();
@@ -24,15 +24,15 @@ test("an image dropped on the prose is copied next to the entry and written as a
   );
   expect((await upload).status()).toBe(201);
 
-  const img = float.body.locator("img[alt='tiny drop']");
+  const img = lee.body.locator("img[alt='tiny drop']");
   await expect(img).toHaveCount(1);
-  await expect(img).toHaveAttribute("src", /\/@fs\/.*\/blog\/hello-float\/tiny-drop\.png$/);
-  expect(fs.existsSync(entryPath("blog/hello-float/tiny-drop.png"))).toBe(true);
+  await expect(img).toHaveAttribute("src", /\/@fs\/.*\/blog\/hello-lee\/tiny-drop\.png$/);
+  expect(fs.existsSync(entryPath("blog/hello-lee/tiny-drop.png"))).toBe(true);
   // It landed right after the paragraph it was dropped on.
-  await expect(float.body.locator(":scope > p").nth(2).locator("img")).toHaveCount(1);
+  await expect(lee.body.locator(":scope > p").nth(2).locator("img")).toHaveCount(1);
 
-  await float.save();
-  await float.expectSaved();
+  await lee.save();
+  await lee.expectSaved();
   const after = readEntry(ENTRY);
   expect(after).toContain("\n![tiny drop](./tiny-drop.png)\n");
   const before = originalEntry(ENTRY);

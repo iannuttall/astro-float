@@ -12,4 +12,4 @@ demo.dependencies.astro = astro; demo.dependencies["@astrojs/mdx"] = mdx;
 fs.writeFileSync("demo/package.json", JSON.stringify(demo, null, 2) + "\n");
 ' "$1" "$2"
 pnpm install --no-frozen-lockfile 2>&1 | grep -vE "^\s*$|Progress|resolved|reused|downloaded|added" | tail -15
-node -e 'console.log("demo astro:", require("./demo/node_modules/astro/package.json").version, "| pkg astro:", require("./packages/astro-float/node_modules/astro/package.json").version, "| mdx:", require("./demo/node_modules/@astrojs/mdx/package.json").version)'
+node -e 'console.log("demo astro:", require("./demo/node_modules/astro/package.json").version, "| pkg astro:", require("./packages/astro-lee/node_modules/astro/package.json").version, "| mdx:", require("./demo/node_modules/@astrojs/mdx/package.json").version)'
