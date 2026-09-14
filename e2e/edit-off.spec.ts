@@ -19,8 +19,6 @@ async function pageDom(page: import("@playwright/test").Page) {
 
 test("turning Edit off leaves the page exactly as it was", async ({ lee }) => {
   await lee.open("/blog/hello-lee/", { edit: false });
-  // Astro's own toolbar apps settle right after load.
-  await lee.page.waitForTimeout(500);
   const before = await pageDom(lee.page);
   expect(before.body).not.toContain("data-lee");
 

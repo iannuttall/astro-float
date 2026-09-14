@@ -18,13 +18,7 @@ fs.mkdirSync(SHOT, { recursive: true });
 const original = fs.readFileSync(ENTRY, "utf8");
 const results = [];
 const check = (name, ok, extra = "") => results.push(`${ok ? "PASS" : "FAIL"} ${name}${extra ? " — " + extra : ""}`);
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fileHas = (s) => fs.readFileSync(ENTRY, "utf8").includes(s);
-async function waitFile(s, ms = 8000) {
-  const t = Date.now();
-  while (Date.now() - t < ms) { if (fileHas(s)) return true; await sleep(150); }
-  return false;
-}
 
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -48,17 +42,14 @@ const clickToolbarApp = () => page.evaluate(() => {
 const waitEditing = (on) => page.waitForFunction(([js, on]) => { const c = eval(js); return !!c?.__lee && c.__lee.state().editing === on; }, [CANVAS_JS, on], { timeout: 10000 });
 
 try {
-  // First load lets Vite's dep optimizer settle (a fresh install can answer 504 "Outdated Optimize Dep" once); the reload is the real page.
   await page.goto(BASE + "/blog/hello-lee/", { waitUntil: "networkidle" });
-  // Vite may discover a dep on the first load, re-optimize and reload the page itself; wait for the toolbar app to be there.
-  const t0 = Date.now();
-  let toolbarReady = false;
-  while (Date.now() - t0 < 20000 && !toolbarReady) {
-    toolbarReady = await page.evaluate(() => !!document.querySelector("astro-dev-toolbar")?.shadowRoot?.querySelector("astro-dev-toolbar-app-canvas[data-app-id='astro-lee']")?.__lee).catch(() => false);
-    if (!toolbarReady) await sleep(500);
+  let toolbarReady = true;
+  try {
+    await page.waitForFunction((js) => !!eval(js)?.__lee, CANVAS_JS, { timeout: 20000 });
+  } catch {
+    toolbarReady = false;
   }
-  check(`toolbar app mounted (${Date.now() - t0}ms after first load)`, toolbarReady);
-  await sleep(500);
+  check("toolbar app mounted", toolbarReady);
 
   // 1. Toolbar app registered (addDevToolbarApp) and toggles through the toolbar button (defineToolbarApp / canvas).
   const btnTag = await clickToolbarApp();
@@ -104,25 +95,15 @@ try {
   const cover = notesSchema.fields?.find((f) => f.key === "cover");
   check("schema hints: reference(\"blog\") and image() found by loading content.config.ts", about?.type === "reference" && about?.collection === "blog" && cover?.type === "image", JSON.stringify({ about, cover }).slice(0, 200));
 
-  // 4c. A save Astro rejects answers synced:false fast (logger hook), not after the 2.5s timeout.
+  // 4c. Zod rejects bad content before it reaches Astro's content layer.
   const rejected = await page.evaluate(async () => {
     const doc = await (await fetch("/__lee/api/entry?collection=blog&id=hello-lee")).json();
-    const t = Date.now();
     const res = await fetch("/__lee/api/entry", { method: "PUT", headers: { "content-type": "application/json", "x-lee": "1" }, body: JSON.stringify({ collection: "blog", id: "hello-lee", frontmatter: { ...doc.frontmatter, pubDate: "not-a-date" }, body: doc.body, baseHash: doc.hash }) });
     const j = await res.json();
-    const ms = Date.now() - t;
-    // put it back (a 422 never touched the file)
-    if (res.status === 200) await fetch("/__lee/api/entry", { method: "PUT", headers: { "content-type": "application/json", "x-lee": "1" }, body: JSON.stringify({ collection: "blog", id: "hello-lee", frontmatter: doc.frontmatter, body: doc.body, baseHash: j.hash, force: true }) });
-    return { status: res.status, synced: j.synced, issues: j.issues, ms };
+    return { status: res.status, issues: j.issues };
   });
-  // With the Zod pre-validation the save is refused (422, issue on pubDate); without it Astro's
-  // content-layer error must be seen before the timeout and answer synced:false.
   const refused = rejected.status === 422 && Array.isArray(rejected.issues) && rejected.issues.some((i) => String(i.path).includes("pubDate"));
-  const seen = rejected.status === 200 && rejected.synced === false && rejected.ms < 2200;
-  check("invalid save is refused (422 with issues) or answers synced:false before the timeout", refused || seen, JSON.stringify(rejected).slice(0, 200));
-  await sleep(1500);
-  // Astro 5 also pushes the content error to Vite's overlay; clear it so it doesn't swallow the clicks below.
-  await page.evaluate(() => document.querySelectorAll("vite-error-overlay").forEach((el) => el.remove()));
+  check("invalid save is refused with 422 and issues", refused, JSON.stringify(rejected).slice(0, 200));
 
   // 5. Save round trip + sync gate: no full reload, PUT answers synced:true, file updated.
   await page.evaluate(() => { window.__leeNoReload = true; });
@@ -136,10 +117,9 @@ try {
   try { put = await (await putWait).json(); } catch (e) { check("PUT /entry answered", false, e.message); }
   if (put) {
     check("PUT /entry changed:true", put.changed === true, JSON.stringify(put).slice(0, 160));
-    check("PUT /entry synced:true (sync-gate saw the content-layer reload)", put.synced === true, `synced=${put.synced}`);
+    check("PUT /entry synced:true (exact Astro store state matched)", put.synced === true, `synced=${put.synced}`);
   }
-  check("edit written to disk", await waitFile(marker));
-  await sleep(1500);
+  check("edit written to disk", fileHas(marker));
   const noReload = await page.evaluate(() => window.__leeNoReload === true);
   check("no full page reload after save (reload swallowed)", noReload);
   const after = await state();
@@ -155,7 +135,7 @@ try {
     const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
   });
   await page.keyboard.press("Enter");
-  await sleep(200);
+  await page.waitForFunction(() => document.querySelector("[data-lee-body]")?.lastElementChild?.textContent === "");
   await page.evaluate(() => {
     const body = document.querySelector("[data-lee-body]");
     const dt = new DataTransfer();
@@ -163,7 +143,7 @@ try {
     const target = document.activeElement && body.contains(document.activeElement) ? document.activeElement : body;
     target.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
   });
-  await sleep(400);
+  await page.waitForSelector("[data-lee-body] figure.embed iframe[src*='youtube-nocookie']");
   const embedInfo = await page.evaluate(() => {
     const body = document.querySelector("[data-lee-body]");
     return { count: body.querySelectorAll("figure.embed iframe[src*='youtube-nocookie']").length, figures: body.querySelectorAll("figure.embed").length, tail: Array.from(body.children).slice(-2).map((c) => c.outerHTML.slice(0, 100)) };
@@ -172,8 +152,7 @@ try {
   const putWait2 = page.waitForResponse((r) => r.url().includes("/__lee/api/entry") && r.request().method() === "PUT", { timeout: 15000 });
   await page.keyboard.press("Meta+s");
   try { const p2 = await (await putWait2).json(); check("embed save synced", p2.synced === true, `synced=${p2.synced}`); } catch (e) { check("embed save answered", false, e.message); }
-  check("embed written to disk as raw HTML", await waitFile('<figure class="embed"><iframe src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"'));
-  await sleep(1500);
+  check("embed written to disk as raw HTML", fileHas('<figure class="embed"><iframe src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"'));
   const embedAfter = await page.evaluate(() => document.querySelectorAll("[data-lee-body] figure.embed iframe[src*='youtube-nocookie']").length);
   check("embed still rendered after the page swap (Astro rendered the raw HTML)", embedAfter === 1, `count=${embedAfter}`);
 

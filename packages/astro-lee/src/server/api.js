@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { countAssetImports, invalidateAssetImports, pruneAssetImports, waitForAssetImports } from "./assets.js";
+import { invalidateAssetImports, pruneAssetImports } from "./assets.js";
 import { createCollection, deleteCollection } from "./collections.js";
 import {
   createEntry,
@@ -120,62 +120,84 @@ export function attachLeeApi(server, ctx) {
         const { collection, id } = payload;
         if (typeof collection !== "string" || typeof id !== "string") throw httpError(400, "collection and id required");
 
-        const synced = ctx.gate.expectSync();
-        const result = await writeEntry(ctx, payload);
-        if (result.changed) {
+        const operation = await ctx.gate.begin(`the save of ${collection}/${id}`);
+        try {
+          const result = await writeEntry(ctx, payload);
+          if (!result.changed) {
+            operation.cancel();
+            return json(res, 200, { ...result, synced: true });
+          }
           ctx.logger.info(`saved ${result.file}`);
-          const ok = await synced;
-          return json(res, 200, { ...result, synced: ok });
+          await operation.waitFor({ type: "entry", collection, id, file: result.file });
+          operation.cancel();
+          return json(res, 200, { ...result, synced: true });
+        } catch (err) {
+          operation.cancel();
+          throw err;
         }
-        return json(res, 200, { ...result, synced: true });
       }
 
       if (method === "DELETE" && url.pathname === "/entry") {
         const { collection, id } = requireParams(url, ["collection", "id"]);
-        const synced = ctx.gate.expectSync(4000);
-        const deleted = await deleteEntry(ctx, collection, id);
-        located.delete(`${collection}\u0000${id}`);
-        ctx.logger.info(`deleted ${deleted.file}`);
-        const ok = await synced;
-        await cleanAssetMap(ctx, "after the delete");
-        return json(res, 200, { ...deleted, synced: ok });
+        const operation = await ctx.gate.begin(`the delete of ${collection}/${id}`);
+        try {
+          const deleted = await deleteEntry(ctx, collection, id);
+          located.delete(`${collection}\u0000${id}`);
+          ctx.logger.info(`deleted ${deleted.file}`);
+          await cleanAssetMap(ctx, "before syncing the delete");
+          await operation.waitFor({ type: "entry-absent", collection, id });
+          operation.cancel();
+          return json(res, 200, { ...deleted, synced: true });
+        } catch (err) {
+          operation.cancel();
+          throw err;
+        }
       }
 
       if (method === "DELETE" && url.pathname === "/collection") {
         const { name } = requireParams(url, ["name"]);
-        // A content.config change makes Astro re-sync every collection; give it room.
-        const synced = ctx.gate.expectSync(8000);
-        const deleted = await deleteCollection(ctx, name);
-        located.clear();
-        ctx.logger.info(`deleted collection ${name} (${deleted.config.updated ? `unwired ${deleted.config.file}` : deleted.config.note})`);
-        const ok = await synced;
-        await cleanAssetMap(ctx, "after the delete");
-        return json(res, 200, { ...deleted, synced: ok });
+        const operation = await ctx.gate.begin(`the delete of collection ${name}`);
+        try {
+          const deleted = await deleteCollection(ctx, name);
+          located.clear();
+          ctx.logger.info(`deleted collection ${name} (${deleted.config.updated ? `unwired ${deleted.config.file}` : deleted.config.note})`);
+          await cleanAssetMap(ctx, "before syncing the delete");
+          await operation.waitFor({ type: "collection-absent", collection: name });
+          operation.cancel();
+          return json(res, 200, { ...deleted, synced: true });
+        } catch (err) {
+          operation.cancel();
+          throw err;
+        }
       }
 
       if (method === "POST" && url.pathname === "/rename") {
         const payload = await readJson(req, 4096);
         const { collection, id } = payload;
         if (typeof collection !== "string" || typeof id !== "string") throw httpError(400, "collection and id required");
-        // The move is an unlink + add to Astro's watcher: one re-sync, like a new entry.
-        const synced = ctx.gate.expectSync(4000);
-        // The images Astro's map imports for the entry now, counting only those its text still links to: as many must be
-        // listed for its new file before the page is asked for.
-        const current = await resolveEntry(ctx, collection, id);
-        const images = await countAssetImports(ctx, current.entry.file, await fs.readFile(current.abs, "utf8"));
-        const renamed = await renameEntry(ctx, payload);
-        located.delete(`${collection}\u0000${id}`);
-        if (!renamed.changed) return json(res, 200, { ...renamed, synced: true });
-        ctx.logger.info(`renamed ${collection}/${id} → ${renamed.file}`);
-        const ok = await synced;
-        // "Synced" is Astro's entry store. Its image map is written on a debounce of its own, a moment later, and a page
-        // rendered before that shows the moved images as bare placeholders. Wait for the write, then drop the old place's
-        // imports and have Vite load the map afresh.
-        if (images && !(await waitForAssetImports(ctx, renamed.file, images))) {
-          ctx.logger.warn(`Astro hasn't listed the moved images of ${renamed.file} yet; reload the page if they don't show`);
+        const operation = await ctx.gate.begin(`the rename of ${collection}/${id}`);
+        try {
+          const renamed = await renameEntry(ctx, payload);
+          located.delete(`${collection}\u0000${id}`);
+          if (!renamed.changed) {
+            operation.cancel();
+            return json(res, 200, { ...renamed, synced: true });
+          }
+          ctx.logger.info(`renamed ${collection}/${id} → ${renamed.file}`);
+          // A folder move is an unlink plus add. Astro's glob loader handles
+          // the add directly and writes the new image imports. A forced full
+          // refresh would evaluate the old map while its files are moving.
+          await operation.waitFor(
+            { type: "entry", collection, id: renamed.id, file: renamed.file, oldId: id },
+            { refresh: false },
+          );
+          await cleanAssetMap(ctx, "after syncing the move");
+          operation.cancel();
+          return json(res, 200, { ...renamed, synced: true });
+        } catch (err) {
+          operation.cancel();
+          throw err;
         }
-        await cleanAssetMap(ctx, "after the move");
-        return json(res, 200, { ...renamed, synced: ok });
       }
 
       if (method === "POST" && url.pathname === "/render") {
@@ -189,21 +211,46 @@ export function attachLeeApi(server, ctx) {
 
       if (method === "POST" && url.pathname === "/entries") {
         const payload = await readJson(req, 1024 * 1024);
-        const synced = ctx.gate.expectSync(4000);
-        const created = await createEntry(ctx, payload);
-        ctx.logger.info(`created ${created.file}`);
-        return json(res, 201, { ...created, synced: await synced });
+        const operation = await ctx.gate.begin(`the creation of ${payload.collection}/${payload.slug}`);
+        try {
+          const created = await createEntry(ctx, payload);
+          ctx.logger.info(`created ${created.file}`);
+          await operation.waitFor({ type: "entry", collection: created.collection, id: created.id, file: created.file });
+          operation.cancel();
+          return json(res, 201, { ...created, synced: true });
+        } catch (err) {
+          operation.cancel();
+          throw err;
+        }
       }
 
       if (method === "POST" && url.pathname === "/collections") {
         const payload = await readJson(req, 1024 * 1024);
-        // A content.config change makes Astro re-sync every collection; give it room.
-        const synced = ctx.gate.expectSync(8000);
-        const created = await createCollection(ctx, payload);
-        ctx.logger.info(
-          `created collection ${created.collection} (${created.config.updated ? `wired ${created.config.file}` : created.config.note})`,
-        );
-        return json(res, 201, { ...created, synced: await synced });
+        const operation = await ctx.gate.begin(`the creation of collection ${payload.name}`);
+        try {
+          const created = await createCollection(ctx, payload);
+          ctx.logger.info(
+            `created collection ${created.collection} (${created.config.updated ? `wired ${created.config.file}` : created.config.note})`,
+          );
+          await operation.waitFor({ type: "entry", collection: created.collection, id: created.id, file: created.file });
+          operation.cancel();
+          return json(res, 201, { ...created, synced: true });
+        } catch (err) {
+          operation.cancel();
+          throw err;
+        }
+      }
+
+      if (method === "POST" && url.pathname === "/sync") {
+        const operation = await ctx.gate.begin("the requested content refresh", { requireChange: false });
+        try {
+          await operation.waitFor({ type: "content-snapshot", contentDir: ctx.contentDir });
+          operation.cancel();
+          return json(res, 200, { synced: true });
+        } catch (err) {
+          operation.cancel();
+          throw err;
+        }
       }
 
       if (method === "GET" && url.pathname === "/media") {
@@ -217,7 +264,6 @@ export function attachLeeApi(server, ctx) {
         if (!kind) throw httpError(415, `unsupported media type "${name}"`);
         const buffer = await readRaw(req, kind === "video" ? ctx.maxVideoBytes : ctx.maxUploadBytes);
         if (!buffer.length) throw httpError(400, "empty upload");
-        ctx.gate.quiet();
         const saved = await saveMedia(ctx, collection, id, name, buffer);
         ctx.logger.info(`saved ${kind} ${saved.file}`);
         return json(res, 201, saved);

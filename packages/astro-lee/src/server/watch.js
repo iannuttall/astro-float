@@ -16,20 +16,25 @@ import { discoverCollections, ENTRY_EXTS, hashOf } from "./content.js";
  * signal; otherwise the page reloads as usual and the event is a courtesy.
  *
  * @param {import('vite').ViteDevServer} server
- * @param {{ root: string, contentDir: string, collections: Record<string, { dir?: string, route?: string }>, gate: { noteEntryChange(): void, awaitSync(timeoutMs: number): Promise<boolean> }, logger: { debug(msg: string): void } }} ctx
+ * @param {{ root: string, contentDir: string, collections: Record<string, { dir?: string, route?: string }>, gate: { begin(label: string, options?: { requireChange?: boolean }): Promise<{ waitFor(target: any, options?: { refresh?: boolean }): Promise<boolean>, cancel(): void }> }, logger: { debug(msg: string): void } }} ctx
  */
 export function watchEntries(server, ctx) {
   const onChange = async (file) => {
     if (!ENTRY_EXTS.has(path.extname(file).toLowerCase())) return;
+    const operation = await ctx.gate.begin(`the outside change to ${path.relative(ctx.root, file)}`, { requireChange: false });
     try {
       const rel = path.relative(ctx.root, file).split(path.sep).join("/");
       const collections = await discoverCollections(ctx);
       for (const collection of collections) {
         const entry = collection.entries.find((e) => e.file === rel);
         if (!entry) continue;
-        ctx.gate.noteEntryChange();
-        // Let the content layer catch up first, so a page fetch after the event renders the new content.
-        await ctx.gate.awaitSync(2500);
+        // Wait for this file's exact digest in Astro's store. The watcher can
+        // run after Astro's own listener, so the immediate store check also
+        // covers a signal that arrived before this callback found the entry.
+        await operation.waitFor(
+          { type: "entry", collection: collection.name, id: entry.id, file: entry.file },
+          { refresh: false },
+        );
         const raw = await fs.readFile(file, "utf8");
         // `server.ws` on Astro 5 / Vite 5; later Vites also expose the client environment's channel.
         const channel = server.ws ?? server.environments?.client?.hot ?? server.hot;
@@ -39,9 +44,12 @@ export function watchEntries(server, ctx) {
           data: { collection: collection.name, id: entry.id, hash: hashOf(raw) },
         });
         ctx.logger.debug(`entry changed on disk: ${rel}`);
+        operation.cancel();
         return;
       }
+      operation.cancel();
     } catch {
+      operation.cancel();
       /* the file may be gone already; nothing to announce */
     }
   };

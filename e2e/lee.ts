@@ -14,6 +14,8 @@ export interface LeeState {
   bodyMapped: boolean;
   bodyReadOnly: boolean;
   bodyDiff: string | null;
+  staleOnDisk: boolean;
+  keepMine: boolean;
   onPageFields: string[];
   entry: string | null;
 }
@@ -133,6 +135,9 @@ export function expectSameBox(actual: Box, expected: Box) {
 export const test = base.extend<{ lee: Lee }>({
   lee: async ({ page }, use) => {
     const lee = new Lee(page);
+    // A stopped or failed test can leave content behind. Restore again before
+    // the next test so each case starts from the run's exact snapshot.
+    await restoreContent(lee.base);
     await use(lee);
     await page.close();
     await restoreContent(lee.base);
