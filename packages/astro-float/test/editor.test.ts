@@ -116,6 +116,81 @@ describe("PageEditor round trip", () => {
     expect(editor.toMarkdown()).toBe('Only paragraph.\n\n<video controls src="/media/blog/post/clip.mp4"></video>\n');
   });
 
+  it("treats a rendered image paragraph and a sized-image wrapper as image blocks, and writes the wrapper back verbatim", async () => {
+    const body = "Before.\n\n![pic](./x.png)\n\n<div style=\"width:50%;margin-left:auto;margin-right:auto\">\n\n![sized](./y.png)\n\n</div>\n\nAfter.\n";
+    const { editor, container } = await bound(body);
+    expect(editor.mapped).toBe(true);
+    const blocks = Array.from(container.children) as HTMLElement[];
+    expect(blocks.map((b) => [b.tagName, b.hasAttribute("data-float-image"), b.hasAttribute("data-float-key")])).toEqual([
+      ["P", false, false],
+      ["P", true, false],
+      ["DIV", true, false],
+      ["P", false, false],
+    ]);
+    expect(blocks[2].contentEditable).toBe("false");
+    expect(editor.isDirty()).toBe(false);
+    expect(editor.toMarkdown()).toBe(body);
+    // Moving the wrapper moves its source; alt text typed on the picture re-serializes just that block.
+    blocks[0].before(blocks[2]);
+    expect(editor.toMarkdown()).toBe("<div style=\"width:50%;margin-left:auto;margin-right:auto\">\n\n![sized](./y.png)\n\n</div>\n\nBefore.\n\n![pic](./x.png)\n\nAfter.\n");
+    blocks[1].querySelector("img")!.alt = "renamed";
+    expect(editor.toMarkdown()).toContain("![renamed](./x.png)");
+  });
+
+  it("takes every image mark off the DOM on unbind", async () => {
+    const body = "![pic](./x.png)\n\n<div style=\"width:25%\">\n\n![sized](./y.png)\n\n</div>\n";
+    const container = containerFrom(await renderMarkdown(body));
+    const before = container.innerHTML;
+    const editor = new PageEditor(hooks);
+    editor.bind(container, splitBlocks(body), ABS_DIR);
+    expect(container.querySelectorAll("[data-float-image]").length).toBe(2);
+    editor.attach();
+    editor.unbind();
+    expect(container.querySelector("[data-float-image], [data-float-island], [contenteditable], [draggable]")).toBeNull();
+    expect(container.innerHTML).toBe(before);
+  });
+
+  it("sizes a picture and puts it back: the wrapper is written, and 100% brings back the original bytes and a clean state", async () => {
+    const body = "Before.\n\n![pic](./x.png)\n\nAfter.\n";
+    const { editor, container } = await bound(body);
+    const picture = container.querySelector<HTMLElement>("[data-float-image]")!;
+    editor.setImageLayout(picture, { size: 50, align: "center" });
+    const wrapper = container.querySelector<HTMLElement>(":scope > div[data-float-image]")!;
+    expect(picture.hasAttribute("data-float-image")).toBe(false);
+    expect(editor.toMarkdown()).toBe('Before.\n\n<div style="width:50%;margin-left:auto;margin-right:auto">\n\n![pic](./x.png)\n\n</div>\n\nAfter.\n');
+    editor.setImageAlt(wrapper, "a [bracketed] pic");
+    expect(editor.toMarkdown()).toContain("\n\n![a \\[bracketed\\] pic](./x.png)\n\n</div>");
+    editor.setImageAlt(wrapper, "pic");
+    editor.setImageLayout(wrapper, { size: 100 });
+    expect(container.querySelector(":scope > div")).toBeNull();
+    expect(editor.isDirty()).toBe(false);
+    expect(editor.toMarkdown()).toBe(body);
+  });
+
+  it("makes a paragraph that became a lone picture an image block once the caret has left it", async () => {
+    const { editor, container } = await bound("Look: ![pic](./x.png)\n\nNext.\n");
+    document.body.appendChild(container);
+    editor.attach();
+    const [p, next] = Array.from(container.querySelectorAll("p"));
+    const caret = (node: Node, offset: number) => {
+      const range = document.createRange();
+      range.setStart(node, offset);
+      document.getSelection()!.removeAllRanges();
+      document.getSelection()!.addRange(range);
+    };
+    caret(p, 0);
+    p.firstChild!.remove(); // "Look: " deleted, the caret still in the paragraph
+    await new Promise((r) => setTimeout(r));
+    expect(p.hasAttribute("data-float-image")).toBe(false);
+    caret(next.firstChild!, 0);
+    next.append("!");
+    await new Promise((r) => setTimeout(r));
+    expect(p.hasAttribute("data-float-image")).toBe(true);
+    expect(p.contentEditable).toBe("false");
+    editor.unbind();
+    container.remove();
+  });
+
   it("treats MDX components as islands and lines them up with the source", async () => {
     const body = 'import C from "./C.astro";\n\nBefore.\n\n<C title="x">\n  inner\n</C>\n\nAfter.\n';
     const source = splitBlocks(body, { mdx: true });

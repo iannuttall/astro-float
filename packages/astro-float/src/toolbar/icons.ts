@@ -25,12 +25,17 @@ const PATHS = {
   code: `<path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/>`,
   eye: `<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>`,
   bold: `<path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/>`,
-  heading1: `<path d="M4 12h8"/><path d="M4 18V6"/><path d="M12 18V6"/><path d="m17 12 3-2v8"/>`,
-  heading2: `<path d="M4 12h8"/><path d="M4 18V6"/><path d="M12 18V6"/><path d="M21 18h-4c0-4 4-3 4-6 0-1.5-2-2.5-4-1"/>`,
-  heading3: `<path d="M4 12h8"/><path d="M4 18V6"/><path d="M12 18V6"/><path d="M17.5 10.5c1.7-1 3.5 0 3.5 1.5a2 2 0 0 1-2 2"/><path d="M17 17.5c2 1.5 4 .3 4-1.5a2 2 0 0 0-2-2"/>`,
+  // Heading glyphs drawn on the same box as bold / italic (y 4–20): Lucide's own H sits on 6–18 and reads a size smaller.
+  heading1: `<path d="M3 4v16"/><path d="M11 4v16"/><path d="M3 12h8"/><path d="m15.5 10.5 3-2.5v12"/>`,
+  heading2: `<path d="M3 4v16"/><path d="M11 4v16"/><path d="M3 12h8"/><path d="M15 11c.2-2 1.7-3 3.4-3 1.9 0 3.2 1.2 3.2 2.9 0 1.4-.8 2.4-2.2 3.7L15 20h6.8"/>`,
+  heading3: `<path d="M3 4v16"/><path d="M11 4v16"/><path d="M3 12h8"/><path d="M15.2 9.6c.6-1 1.7-1.6 3-1.6 1.9 0 3.2 1.1 3.2 2.6s-1.1 2.4-2.6 2.6c1.7.2 2.8 1.2 2.8 2.8 0 1.8-1.5 3-3.5 3-1.5 0-2.7-.6-3.3-1.6"/>`,
   italic: `<line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/>`,
   link: `<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>`,
-  // island bar
+  // island bar, image bar
+  alignLeft: `<path d="M15 12H3"/><path d="M17 18H3"/><path d="M21 6H3"/>`,
+  alignCenter: `<path d="M17 12H7"/><path d="M19 18H5"/><path d="M21 6H3"/>`,
+  alignRight: `<path d="M21 12H9"/><path d="M21 18H7"/><path d="M21 6H3"/>`,
+  captions: `<rect width="18" height="14" x="3" y="5" rx="2" ry="2"/><path d="M7 15h4M15 15h2M7 11h2M13 11h4"/>`,
   arrowUp: `<path d="m18 15-6-6-6 6"/>`,
   arrowDown: `<path d="m6 9 6 6 6-6"/>`,
   grip: `<circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/>`,

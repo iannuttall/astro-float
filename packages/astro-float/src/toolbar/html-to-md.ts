@@ -11,6 +11,8 @@
  * affects edited paragraphs.
  */
 
+import { imageBlockOf } from "./image-block";
+
 export interface SerializeContext {
   /** Map an <img src> as found in the DOM back to what belongs in the Markdown. */
   imageSrc: (src: string) => string;
@@ -32,6 +34,11 @@ export function blockToMarkdown(node: Node, ctx: SerializeContext): string {
   }
   if (!(node instanceof HTMLElement)) return "";
   const el = node;
+  // An image block is Markdown even when the editor treats it as an island (atomic, movable):
+  // `![alt](./x.png)`, inside its `<div style="…">` wrapper when it has a size or alignment.
+  const image = imageBlockOf(el);
+  if (image?.wrapper) return wrapperToMarkdown(image.wrapper, image.paragraph, ctx);
+  if (image) return finishInline(inlineOf(image.paragraph, ctx));
   // Islands (components, raw HTML such as a <video> or an embed) never become
   // Markdown syntax — a tweet's <blockquote> must not turn into `> …`.
   if (el.hasAttribute("data-float-island")) return rawHtml(el, ctx);
@@ -312,6 +319,25 @@ function finishInline(md: string): string {
     .replace(/^\s+|\s+$/g, "");
 }
 
+/**
+ * A sized / aligned image: the wrapper's own tag and attributes (minus Float's),
+ * blank lines, the Markdown image, blank lines, the closing tag. CommonMark reads
+ * the two tags as HTML blocks and the image between them as Markdown, so Astro
+ * still imports the picture; rehype-raw puts the wrapper back around it.
+ */
+function wrapperToMarkdown(wrapper: HTMLElement, paragraph: HTMLElement, ctx: SerializeContext): string {
+  const tag = wrapper.tagName.toLowerCase();
+  const attrs = Array.from(wrapper.attributes)
+    .filter((a) => !isFloatAttribute(a.name))
+    .map((a) => (a.value === "" ? ` ${a.name}` : ` ${a.name}="${a.value.replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`))
+    .join("");
+  return `<${tag}${attrs}>\n\n${finishInline(inlineOf(paragraph, ctx))}\n\n</${tag}>`;
+}
+
+function isFloatAttribute(name: string): boolean {
+  return name === "contenteditable" || name === "draggable" || name.startsWith("data-float-");
+}
+
 /** The element as it was written, minus Float's editing attributes; media `src`s go back to what belongs in the file. */
 function rawHtml(el: HTMLElement, ctx?: SerializeContext): string {
   const clone = el.cloneNode(true) as HTMLElement;
@@ -319,6 +345,7 @@ function rawHtml(el: HTMLElement, ctx?: SerializeContext): string {
     node.removeAttribute("contenteditable");
     node.removeAttribute("draggable");
     node.removeAttribute("data-float-island");
+    node.removeAttribute("data-float-image");
     node.removeAttribute("data-float-key");
   }
   if (ctx) {
