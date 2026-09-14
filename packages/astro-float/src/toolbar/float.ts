@@ -1121,13 +1121,13 @@ function blockIndexAt(offset: number, lead: string, blocks: Array<{ src: string;
   return Math.max(0, blocks.length - 1);
 }
 
-/** Poll a page until the dev server answers it with HTML (a just-moved entry's route), or the time runs out. */
+/** Poll a page until the dev server renders it whole (a just-moved entry's route: no image left as Astro's `__ASTRO_IMAGE_` placeholder), or the time runs out. */
 async function waitForPage(href: string, timeoutMs: number) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const res = await fetch(href, { headers: { accept: "text/html" }, cache: "no-store" });
-      if (res.ok) return;
+      if (res.ok && !(await res.text()).includes('__ASTRO_IMAGE_="')) return;
     } catch {
       /* server busy */
     }

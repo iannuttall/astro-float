@@ -36,7 +36,32 @@ async function rename(float: Float, slug: string) {
   return res;
 }
 
-test("a published folder entry unlocks in two clicks, moves with its image, and the page follows", async ({ float }) => {
+/**
+ * A failed attempt can leave an entry at its new address, where the next attempt couldn't move it again. Move it back
+ * the way Float does (images and all, the asset map cleaned); restoreContent then puts the text back.
+ */
+test.afterEach(async ({ float }) => {
+  const moved = [
+    { collection: "blog", id: "hello-moved", slug: "hello-float", file: "blog/hello-moved/index.md", from: "blog/hello-moved", to: "blog/hello-float" },
+    { collection: "notes", id: "to-read", slug: "reading-list", file: "notes/to-read.md", from: "notes/to-read.md", to: "notes/reading-list.md" },
+  ];
+  for (const entry of moved) {
+    if (!fs.existsSync(entryPath(entry.file))) continue;
+    const res = await fetch(`${float.base}/__float/api/rename`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-astro-float": "1" },
+      body: JSON.stringify({ collection: entry.collection, id: entry.id, slug: entry.slug }),
+    }).catch(() => null);
+    // The server couldn't: move it back by hand, so the paths Astro already knows exist again.
+    if (!res?.ok && !fs.existsSync(entryPath(entry.to))) fs.renameSync(entryPath(entry.from), entryPath(entry.to));
+  }
+});
+
+test("a published folder entry unlocks in two clicks, moves with its image, and the page follows", async ({ float }, testInfo) => {
+  // A new image name for every attempt: an earlier attempt's image stays next to the entry until the run ends.
+  const image = `tiny-move-${testInfo.repeatEachIndex}-${testInfo.retry}.png`;
+  const alt = image.replace(/[.]png$/, "").replace(/-/g, " ");
+  const srcIn = (folder: string) => new RegExp(`${folder}(/|%2F)${image.replace(".", "[.]")}`);
   await float.open("/blog/hello-float/");
 
   // Give the entry an image first, so there is something next to it to move.
@@ -44,18 +69,18 @@ test("a published folder entry unlocks in two clicks, moves with its image, and 
   const box = (await target.boundingBox())!;
   const upload = float.page.waitForResponse((r) => r.request().method() === "POST" && r.url().includes("/__float/api/media"));
   await float.body.evaluate(
-    (el, { png, x, y }) => {
+    (el, { png, name, x, y }) => {
       const bytes = Uint8Array.from(atob(png), (c) => c.charCodeAt(0));
       const dt = new DataTransfer();
-      dt.items.add(new File([bytes], "tiny-move.png", { type: "image/png" }));
+      dt.items.add(new File([bytes], name, { type: "image/png" }));
       el.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
     },
-    { png: PNG, x: box.x + box.width / 2, y: box.y + box.height / 2 },
+    { png: PNG, name: image, x: box.x + box.width / 2, y: box.y + box.height / 2 },
   );
   expect((await upload).status()).toBe(201);
   await float.save();
   await float.expectSaved();
-  expect(readEntry("blog/hello-float/index.md")).toContain("![tiny move](./tiny-move.png)");
+  expect(readEntry("blog/hello-float/index.md")).toContain(`![${alt}](./${image})`);
 
   // Published: the address sits behind a padlock, and the id itself does nothing.
   await float.openPopover();
@@ -115,13 +140,13 @@ test("a published folder entry unlocks in two clicks, moves with its image, and 
   await float.page.waitForURL("**/blog/hello-moved/");
   await expect.poll(() => float.state()).toMatchObject({ entry: "blog/hello-moved", editing: true, bodyBound: true, frontmatterDirty: false, bodyDirty: false });
   await expect(float.page.locator('h1[data-float-field="title"]')).toHaveText("Hello, Float");
-  const img = float.body.locator("img[alt='tiny move']");
-  await expect(img).toHaveAttribute("src", /hello-moved(\/|%2F)tiny-move\.png/);
+  const img = float.body.locator(`img[alt='${alt}']`);
+  await expect(img).toHaveAttribute("src", srcIn("hello-moved"));
   await expect.poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth)).toBe(1);
 
   expect(fs.existsSync(entryPath("blog/hello-float"))).toBe(false);
   expect(fs.existsSync(entryPath("blog/hello-moved/index.md"))).toBe(true);
-  expect(fs.existsSync(entryPath("blog/hello-moved/tiny-move.png"))).toBe(true);
+  expect(fs.existsSync(entryPath(`blog/hello-moved/${image}`))).toBe(true);
 
   // The popover follows, locked again: header, Address row, entries list.
   await float.openPopover();
@@ -137,8 +162,8 @@ test("a published folder entry unlocks in two clicks, moves with its image, and 
   await float.page.waitForURL("**/blog/hello-float/");
   await expect.poll(() => float.state()).toMatchObject({ entry: "blog/hello-float", editing: true, bodyBound: true });
   expect(fs.existsSync(entryPath("blog/hello-moved"))).toBe(false);
-  expect(fs.existsSync(entryPath("blog/hello-float/tiny-move.png"))).toBe(true);
-  await expect(float.body.locator("img[alt='tiny move']")).toHaveAttribute("src", /hello-float(\/|%2F)tiny-move\.png/);
+  expect(fs.existsSync(entryPath(`blog/hello-float/${image}`))).toBe(true);
+  await expect(float.body.locator(`img[alt='${alt}']`)).toHaveAttribute("src", srcIn("hello-float"));
 });
 
 test("a flat entry renames its file and the page follows", async ({ float }) => {
