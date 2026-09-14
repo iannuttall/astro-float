@@ -54,6 +54,14 @@ export function refreshTooltip(el?: Element) {
   show(current);
 }
 
+/** Show `el`'s tip now, without waiting for the pointer to settle: its text just changed because of a click. */
+export function showTooltip(el: Element) {
+  window.clearTimeout(timer);
+  timer = undefined;
+  current = el;
+  show(el);
+}
+
 export function hideTooltip() {
   window.clearTimeout(timer);
   timer = undefined;

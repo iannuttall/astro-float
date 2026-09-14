@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { attachFloatApi } from "./server/api.js";
+import { watchAssetImports } from "./server/assets.js";
 import { createSyncGate } from "./server/sync-gate.js";
 import { watchEntries } from "./server/watch.js";
 
@@ -90,6 +91,8 @@ export default function astroFloat(options = {}) {
         attachFloatApi(server, ctx);
         // Outside edits to entry files reach the toolbar as `astro-float:file-changed`.
         watchEntries(server, ctx);
+        // Astro's image import map only grows; keep moved / deleted images from taking every page down.
+        watchAssetImports(server, ctx);
       },
     },
   };

@@ -1,13 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createCollection } from "./collections.js";
+import { countAssetImports, invalidateAssetImports, pruneAssetImports, waitForAssetImports } from "./assets.js";
+import { createCollection, deleteCollection } from "./collections.js";
 import {
   createEntry,
+  deleteEntry,
   discoverCollections,
   httpError,
   listMedia,
   mediaKindOf,
   readEntry,
+  renameEntry,
   resolveEntry,
   saveMedia,
   writeEntry,
@@ -127,6 +130,54 @@ export function attachFloatApi(server, ctx) {
         return json(res, 200, { ...result, synced: true });
       }
 
+      if (method === "DELETE" && url.pathname === "/entry") {
+        const { collection, id } = requireParams(url, ["collection", "id"]);
+        const synced = ctx.gate.expectSync(4000);
+        const deleted = await deleteEntry(ctx, collection, id);
+        located.delete(`${collection}\u0000${id}`);
+        ctx.logger.info(`deleted ${deleted.file}`);
+        const ok = await synced;
+        await cleanAssetMap(ctx, "after the delete");
+        return json(res, 200, { ...deleted, synced: ok });
+      }
+
+      if (method === "DELETE" && url.pathname === "/collection") {
+        const { name } = requireParams(url, ["name"]);
+        // A content.config change makes Astro re-sync every collection; give it room.
+        const synced = ctx.gate.expectSync(8000);
+        const deleted = await deleteCollection(ctx, name);
+        located.clear();
+        ctx.logger.info(`deleted collection ${name} (${deleted.config.updated ? `unwired ${deleted.config.file}` : deleted.config.note})`);
+        const ok = await synced;
+        await cleanAssetMap(ctx, "after the delete");
+        return json(res, 200, { ...deleted, synced: ok });
+      }
+
+      if (method === "POST" && url.pathname === "/rename") {
+        const payload = await readJson(req, 4096);
+        const { collection, id } = payload;
+        if (typeof collection !== "string" || typeof id !== "string") throw httpError(400, "collection and id required");
+        // The move is an unlink + add to Astro's watcher: one re-sync, like a new entry.
+        const synced = ctx.gate.expectSync(4000);
+        // The images Astro's map imports for the entry now, counting only those its text still links to: as many must be
+        // listed for its new file before the page is asked for.
+        const current = await resolveEntry(ctx, collection, id);
+        const images = await countAssetImports(ctx, current.entry.file, await fs.readFile(current.abs, "utf8"));
+        const renamed = await renameEntry(ctx, payload);
+        located.delete(`${collection}\u0000${id}`);
+        if (!renamed.changed) return json(res, 200, { ...renamed, synced: true });
+        ctx.logger.info(`renamed ${collection}/${id} → ${renamed.file}`);
+        const ok = await synced;
+        // "Synced" is Astro's entry store. Its image map is written on a debounce of its own, a moment later, and a page
+        // rendered before that shows the moved images as bare placeholders. Wait for the write, then drop the old place's
+        // imports and have Vite load the map afresh.
+        if (images && !(await waitForAssetImports(ctx, renamed.file, images))) {
+          ctx.logger.warn(`Astro hasn't listed the moved images of ${renamed.file} yet; reload the page if they don't show`);
+        }
+        await cleanAssetMap(ctx, "after the move");
+        return json(res, 200, { ...renamed, synced: ok });
+      }
+
       if (method === "POST" && url.pathname === "/render") {
         const payload = await readJson(req, 5 * 1024 * 1024);
         const { collection, id, body } = payload;
@@ -181,6 +232,17 @@ export function attachFloatApi(server, ctx) {
       return json(res, status, body);
     }
   });
+}
+
+/** Images that moved or went away with an entry: take them out of Astro's import map, and have Vite load the map afresh before the next page is asked for. */
+async function cleanAssetMap(ctx, when) {
+  try {
+    const dropped = await pruneAssetImports(ctx);
+    if (dropped.length) ctx.logger.debug(`dropped ${dropped.length} stale asset import(s) ${when}`);
+  } catch (err) {
+    ctx.logger.warn(`couldn't clean .astro/content-assets.mjs ${when} (${err?.message ?? err}); restart astro dev if pages 500`);
+  }
+  invalidateAssetImports(ctx.server, ctx.root);
 }
 
 /** Localhost-only, same-origin-only, and mutations must be sent by our client. */

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { slugError } from "../shared/slug.js";
 import { splitBlocks } from "./blocks.js";
 import { readCollectionSchema, templateFromSchema } from "./schema.js";
 import { validateDocument, validationError } from "./validate.js";
@@ -297,6 +298,155 @@ export async function createEntry(ctx, { collection: collectionName, slug, title
     id: slug,
     file: path.relative(ctx.root, abs).split(path.sep).join("/"),
   };
+}
+
+/**
+ * Rename an entry's address: the last segment of its id. A folder entry
+ * (`<id>/index.md`) renames the folder, so the images next to it move with it
+ * and their `./x.png` links stay right; a flat entry renames the file, and the
+ * `<id>/` folder its uploads went to (if any) moves along with the links in
+ * the text rewritten. Videos under `public/media/<collection>/<id>/` move too,
+ * and their public URLs in the text follow. Nothing else in the document
+ * changes.
+ *
+ * Refuses: an invalid slug (400), an id that comes from a frontmatter `slug`
+ * (400 — the file name isn't the address then), a taken address (409), a
+ * stale `baseHash` (409).
+ */
+export async function renameEntry(ctx, { collection: collectionName, id, slug, baseHash }) {
+  if (typeof id !== "string" || typeof slug !== "string") throw httpError(400, "id and slug required");
+  const error = slugError(slug);
+  if (error) throw httpError(400, error);
+  const { collection, entry, abs, collectionDir } = await resolveEntry(ctx, collectionName, id);
+
+  const current = await fs.readFile(abs, "utf8");
+  if (baseHash && hashOf(current) !== baseHash) throw httpError(409, "file changed on disk since it was loaded");
+  const { frontmatter } = parseDocument(current);
+  if (typeof frontmatter.slug === "string") throw httpError(400, "this entry's address is set by its slug field");
+
+  const segments = id.split("/");
+  const parent = segments.slice(0, -1);
+  const nextId = [...parent, slug].join("/");
+  const route = routeFor(collection, nextId);
+  const unchanged = { collection: collection.name, id, file: entry.file, route: routeFor(collection, id), hash: hashOf(current), changed: false };
+  if (nextId === id) return unchanged;
+  if (collection.entries.some((e) => e.id === nextId)) throw httpError(409, `"${nextId}" is taken`);
+
+  // What moves: [from, to] pairs, the entry's own file or folder first.
+  /** @type {Array<[string, string]>} */
+  const moves = [];
+  let nextAbs;
+  if (entry.folder) {
+    const dir = path.dirname(abs);
+    const nextDir = path.join(path.dirname(dir), slug);
+    nextAbs = path.join(nextDir, path.basename(abs));
+    moves.push([dir, nextDir]);
+  } else {
+    const ext = path.extname(abs);
+    nextAbs = path.join(path.dirname(abs), `${slug}${ext}`);
+    moves.push([abs, nextAbs]);
+    const mediaDir = mediaDirFor(abs, entry);
+    if (await exists(mediaDir)) moves.push([mediaDir, path.join(path.dirname(abs), slug)]);
+  }
+  if (!isInside(collectionDir, nextAbs)) throw httpError(400, "bad slug");
+
+  const publicDir = path.resolve(ctx.root, ctx.publicDir ?? "public");
+  const mediaRoot = path.join(publicDir, "media", collection.name);
+  const publicFrom = path.join(mediaRoot, ...segments);
+  const publicTo = path.join(mediaRoot, ...parent, slug);
+  if (isInside(mediaRoot, publicFrom) && (await exists(publicFrom))) moves.push([publicFrom, publicTo]);
+
+  for (const [, to] of moves) {
+    if (await exists(to)) throw httpError(409, `${path.relative(ctx.root, to).split(path.sep).join("/")} already exists`);
+  }
+  for (const [from, to] of moves) {
+    await fs.mkdir(path.dirname(to), { recursive: true });
+    await fs.rename(from, to);
+  }
+
+  // Links that named the old address: a flat entry's `./old/photo.png`, any `/media/<collection>/<old>/clip.mp4`.
+  let next = current;
+  if (!entry.folder && moves.length > 1) {
+    const base = path.basename(abs, path.extname(abs));
+    next = next.replace(new RegExp(`(^|[\\s("'=])(\\./)?${escapeRegExp(base)}/`, "g"), (_, pre, dot) => `${pre}${dot ?? ""}${slug}/`);
+  }
+  if (moves.some(([from]) => from === publicFrom)) {
+    const oldUrl = `/media/${collection.name}/${id}/`;
+    next = next.split(oldUrl).join(`/media/${collection.name}/${nextId}/`);
+  }
+  if (next !== current) await fs.writeFile(nextAbs, next, "utf8");
+
+  return {
+    collection: collection.name,
+    id: nextId,
+    file: path.relative(ctx.root, nextAbs).split(path.sep).join("/"),
+    route,
+    hash: hashOf(next),
+    changed: true,
+  };
+}
+
+/**
+ * Delete an entry: the file, or the whole folder for a folder entry (its
+ * images go with it); a flat entry's `<id>/` upload folder and the entry's
+ * `public/media/<collection>/<id>/` videos too. Entries that live under it
+ * stay: a folder holding other entries loses only this entry's file, and only
+ * the videos directly in its media folder go. Nothing else is touched.
+ */
+export async function deleteEntry(ctx, collectionName, id) {
+  const { collection, entry, abs, collectionDir } = await resolveEntry(ctx, collectionName, id);
+  // `docs/guide/install.md` inside `docs/guide/`, the folder of `docs/guide/index.md`.
+  const holdsEntries = (dir) => collection.entries.some((e) => e !== entry && isInside(dir, path.resolve(ctx.root, e.file)));
+  /** @type {string[]} */
+  const targets = [];
+  const dir = path.dirname(abs);
+  if (entry.folder && dir !== collectionDir && !holdsEntries(dir)) {
+    targets.push(dir);
+  } else {
+    targets.push(abs);
+    const mediaDir = mediaDirFor(abs, entry);
+    if (!entry.folder && isInside(collectionDir, mediaDir) && !holdsEntries(mediaDir) && (await exists(mediaDir))) targets.push(mediaDir);
+  }
+  const publicMedia = publicMediaDir(ctx, collection.name, id.split("/"));
+  if (publicMedia && (await exists(publicMedia))) {
+    if (collection.entries.some((e) => e.id.startsWith(`${id}/`))) {
+      // `<id>/<child>/` holds a nested entry's videos: only the files directly in here are this entry's.
+      for (const d of await fs.readdir(publicMedia, { withFileTypes: true })) if (d.isFile()) targets.push(path.join(publicMedia, d.name));
+    } else {
+      targets.push(publicMedia);
+    }
+  }
+  for (const target of targets) await fs.rm(target, { recursive: true, force: true });
+  return {
+    collection: collection.name,
+    id: entry.id,
+    file: entry.file,
+    removed: targets.map((t) => path.relative(ctx.root, t).split(path.sep).join("/")),
+  };
+}
+
+/** `public/media/<collection>/<...segments>` (the collection's own folder for no segments), or null when the segments would walk out of it. */
+export function publicMediaDir(ctx, collectionName, segments) {
+  const mediaRoot = path.join(path.resolve(ctx.root, ctx.publicDir ?? "public"), "media");
+  const base = path.join(mediaRoot, collectionName);
+  if (!isInside(mediaRoot, base)) return null;
+  if (!segments.length) return base;
+  const dir = path.join(base, ...segments);
+  return isInside(base, dir) ? dir : null;
+}
+
+/** The entry's page: the configured route with the id filled in, else the `/collection/id/` guess. */
+function routeFor(collection, id) {
+  const encoded = id.split("/").map(encodeURIComponent).join("/");
+  if (collection.route) {
+    const href = collection.route.replace(/\[\.{0,3}[^\]]+\]/, encoded);
+    return href.startsWith("/") ? href : `/${href}`;
+  }
+  return `/${encodeURIComponent(collection.name)}/${encoded}/`;
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Directory where images for an entry live (colocated next to the entry). */

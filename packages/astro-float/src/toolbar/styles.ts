@@ -177,6 +177,19 @@ export const STYLES = /* css */ `
 .pop-section:last-child { border-bottom: 0; }
 .pop-yaml { display: flex; flex-direction: column; min-height: 200px; }
 .pop-settings .row { border-bottom: 0; }
+
+/* ---- the Address row: the id, quiet; changed in a box of the same size and font, so nothing around it moves ---- */
+.pop-address .row { border-bottom: 0; }
+.address-row .row-side { max-width: 72%; gap: 2px; margin-right: -6px; }
+.address { display: inline-block; min-width: 0; max-width: 100%; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: none; line-height: 24px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 120ms ease, color 120ms ease; }
+button.address:hover, button.address:focus-visible { background: var(--bg-hover); color: var(--fg); }
+.address-prefix { color: var(--fg-muted); white-space: nowrap; margin-right: -8px; }
+.address-input { min-width: 24px; color: var(--fg); background: var(--bg-hover); box-shadow: inset 0 -1px 0 var(--line-focus); text-overflow: clip; }
+.float .address-input:focus-visible { outline: none; }
+.address-input[data-invalid] { box-shadow: inset 0 0 0 1px var(--err); }
+.address-mirror { position: absolute; top: 0; left: 0; max-width: none; visibility: hidden; pointer-events: none; white-space: pre; }
+.address-lock { flex: none; width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--radius-sm); color: var(--fg-faint); transition: background 120ms ease, color 120ms ease; }
+.address-lock:hover, .address-lock:focus-visible { background: var(--bg-hover); color: var(--fg-muted); }
 .empty { padding: 10px 14px; color: var(--fg-muted); font-size: 12px; line-height: 1.55; margin: 0; }
 .empty code { font-family: var(--mono); font-size: 11px; background: var(--bg-elev); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; letter-spacing: 0; }
 
@@ -442,8 +455,8 @@ export const STYLES = /* css */ `
 .list-item svg { color: var(--fg-faint); }
 .list-action { color: var(--fg-muted); }
 .list-action:hover { color: var(--fg); }
-.list-item + .list-action { margin-top: 6px; position: relative; }
-.list-item + .list-action::before { content: ""; position: absolute; left: 8px; right: 8px; top: -4px; border-top: 1px solid var(--line); }
+.delete-row + .list-action { margin-top: 6px; position: relative; }
+.delete-row + .list-action::before { content: ""; position: absolute; left: 8px; right: 8px; top: -4px; border-top: 1px solid var(--line); }
 
 .card { display: flex; flex-direction: column; gap: 10px; margin: 8px 14px 12px; padding: 12px 14px; border: 0.5px solid var(--hairline); border-radius: var(--radius); background: var(--bg-elev); }
 .card-title { font-size: 13px; font-weight: 500; }
@@ -453,6 +466,13 @@ export const STYLES = /* css */ `
 .form-error { font-size: 12px; color: var(--err); }
 .form-error:empty { display: none; }
 .card-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* ---- delete: one quiet text button that turns into a red Confirm in its own box; never a background ---- */
+.text-btn { flex: none; height: 24px; padding: 0 6px; border-radius: var(--radius-sm); font-size: 12px; color: var(--fg-muted); white-space: nowrap; text-underline-offset: 3px; transition: color 120ms ease; }
+.text-btn:hover, .text-btn:focus-visible { color: var(--err); text-decoration: underline; }
+.text-btn[data-confirming] { color: var(--err); }
+.delete-row { display: flex; align-items: center; min-height: 40px; padding: 4px 14px 4px 8px; }
+.list > .delete-row { min-height: 36px; padding: 2px 8px 2px 2px; }
 
 /* ---- small screens ---------------------------------------------------------
  * The root becomes a box the size of the *visual* viewport (updated from JS as
@@ -488,5 +508,8 @@ export const STYLES = /* css */ `
   .chip { height: 28px; font-size: 14px; }
   .card label, .card-note { font-size: 13px; }
   .foot-body { max-height: 28vh; }
+  .delete-row, .list > .delete-row { min-height: 44px; }
+  .address { height: 32px; line-height: 32px; font-size: 16px; }
+  .address-lock { width: 32px; height: 32px; }
 }
 `;

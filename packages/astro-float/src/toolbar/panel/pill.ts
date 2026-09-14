@@ -4,7 +4,9 @@ import { h, replaceChildren } from "../dom";
 import { icon } from "../icons";
 import { humanize, type CollectionSchema } from "../schema";
 import { refreshTooltip } from "../tooltip";
+import { renderAddressRow, type AddressRow } from "./address";
 import { renderCollectionFooter, type FootState } from "./collection";
+import { cancelConfirms, nounFor, renderDeleteLine } from "./confirm";
 import { renderForm } from "./form";
 import { resetViewportZoom } from "./util";
 import { createYamlView, type YamlView } from "./yaml";
@@ -64,6 +66,12 @@ export interface PillHost {
 
   save(force?: boolean): Promise<void>;
   discard(): void;
+  /** Move the entry to a new address (its last id segment) and follow it; rejects with the reason when it can't. */
+  rename(slug: string): Promise<void>;
+  /** Delete the entry on this page and move on; rejects when it can't (the pill says why). */
+  deleteEntry(): Promise<void>;
+  /** Delete a whole collection and go home; rejects when it can't (the pill says why). */
+  deleteCollection(name: string): Promise<void>;
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
   notify(message: string): void;
 }
@@ -74,6 +82,7 @@ export class Pill {
   private fieldsHost: HTMLElement | null = null;
   private yamlHost: HTMLElement | null = null;
   private footHost: HTMLElement | null = null;
+  private address: AddressRow | null = null;
   private yaml: YamlView | null = null;
   private yamlMode = false;
   private yamlToggle: HTMLButtonElement | null = null;
@@ -159,6 +168,10 @@ export class Pill {
       this.yamlToggle,
     );
 
+    // The address comes first: it's where the entry lives, not one of its fields.
+    this.address = doc ? renderAddressRow({ doc: () => host.doc(), rename: (slug) => host.rename(slug) }) : null;
+    const address = this.address ? h("section", { class: "pop-section pop-address" }, this.address.el) : null;
+
     this.fieldsHost = h("section", { class: "pop-section pop-fields" });
     this.yaml = createYamlView({
       draft: () => host.draft(),
@@ -201,7 +214,9 @@ export class Pill {
     );
 
     this.footHost = h("section", { class: "pop-section pop-entries" });
-    const body = h("div", { class: "pop-body" }, this.fieldsHost, this.yamlHost, settings, this.footHost);
+    // Last, below everything: the quiet way to delete the entry.
+    const removal = doc ? h("section", { class: "pop-section pop-delete" }, renderDeleteLine(`Delete ${nounFor(doc.collection)}`, () => host.deleteEntry())) : null;
+    const body = h("div", { class: "pop-body" }, address, this.fieldsHost, this.yamlHost, settings, this.footHost, removal);
     this.pop = h("div", { class: "popover", role: "dialog", "aria-label": "Entry", hidden: true }, head, body);
     this.pop.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
@@ -224,6 +239,7 @@ export class Pill {
     this.fieldsHost = null;
     this.yamlHost = null;
     this.footHost = null;
+    this.address = null;
     this.yaml = null;
     this.yamlToggle = null;
     this.syncs.clear();
@@ -238,6 +254,7 @@ export class Pill {
     this.savedRange = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
     this.pop.hidden = false;
     this.pillEl.setAttribute("aria-expanded", "true");
+    this.address?.refresh();
     if (this.fieldsStale) this.renderFields();
     if (this.footStale) this.renderCollection();
     if (this.yamlMode) this.yaml?.refresh();
@@ -248,6 +265,7 @@ export class Pill {
   close() {
     if (!this.isOpen) return;
     DatePicker.close();
+    cancelConfirms();
     this.yaml?.commit();
     this.pop!.hidden = true;
     this.pillEl?.setAttribute("aria-expanded", "false");
@@ -277,7 +295,10 @@ export class Pill {
   };
 
   private onDocumentKeydown = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && !DatePicker.isOpenFor(document.body)) {
+    if (e.key !== "Escape") return;
+    // A control that handles Escape itself (the Address input puts the id back) keeps the popover open.
+    if (e.composedPath().some((n) => n instanceof HTMLElement && n.dataset.escape === "self")) return;
+    if (!DatePicker.isOpenFor(document.body)) {
       e.stopPropagation();
       this.close();
     }
@@ -381,10 +402,15 @@ export class Pill {
     this.yaml?.commit();
   }
 
+  /** The entry was written: the Address row locks or opens up if it was just published or made a draft. */
+  refreshAddress() {
+    this.address?.refresh();
+  }
+
   renderCollection() {
     if (!this.footHost) return;
-    // A save refreshes the entries in the background: never pull a form (New entry, New collection) out from under the user.
-    if (this.isOpen && this.footHost.querySelector(".card")) {
+    // A save refreshes the entries in the background: never pull a form (New entry, New collection) or a waiting Confirm out from under the user.
+    if (this.isOpen && this.footHost.querySelector(".card, [data-confirming]")) {
       this.footStale = true;
       return;
     }
@@ -400,6 +426,7 @@ export class Pill {
           navigate: (href, opts) => this.host.navigate(href, opts),
           notify: (m) => this.host.notify(m),
           releaseFocus: () => (this.host.canvas.activeElement as HTMLElement | null)?.blur(),
+          deleteCollection: (name) => this.host.deleteCollection(name),
         },
         this.foot,
         () => this.renderCollection(),
@@ -416,7 +443,8 @@ export class Pill {
     if (key === this.lastKey) return;
     this.lastKey = key;
     this.dot.dataset.state = view.dot;
-    // Green says "Saved" next to the dot, growing leftwards from the pill's fixed right edge; grey and orange stay dot-only.
+    // Green says what just happened ("Saved", "Deleted") next to the dot, growing leftwards from the pill's fixed right edge; grey and orange stay dot-only.
+    if (view.dot === "saved") this.word.textContent = view.text || "Saved";
     if (this.pillEl) this.pillEl.dataset.state = view.dot;
     const tip = view.tip ?? (view.dot === "dirty" ? "Unsaved changes · ⌘S to save" : view.text || (this.host.doc() ? "Up to date" : "Float"));
     if (this.pillEl) {

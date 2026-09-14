@@ -53,6 +53,17 @@ export interface SaveResult {
   blocks: SourceBlock[];
 }
 
+/** What a rename came back with: the entry's new id, file and page (and hash, when links in the text had to follow). */
+export interface RenameResult {
+  collection: string;
+  id: string;
+  file: string;
+  route: string;
+  hash: string;
+  changed: boolean;
+  synced: boolean;
+}
+
 /** One top-level block of a body, rendered by Astro's Markdown pipeline. Islands come back with `html: ""`. */
 export interface RenderedBlock {
   type: string;
@@ -172,6 +183,17 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  /** Change the last segment of an entry's id: the folder or file moves (with its media); 409 when the address is taken. */
+  rename: (payload: { collection: string; id: string; slug: string; baseHash: string }) =>
+    request<RenameResult>("/rename", { method: "POST", body: JSON.stringify(payload) }),
+
+  /** Delete an entry: its file (or its folder, images and all) and its videos under public/media. */
+  deleteEntry: (collection: string, id: string) =>
+    request<{ collection: string; id: string; file: string; removed: string[]; synced: boolean }>(
+      `/entry?collection=${encodeURIComponent(collection)}&id=${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+
   createCollection: (payload: { name: string; title: string }) =>
     request<{
       collection: string;
@@ -181,6 +203,16 @@ export const api = {
       synced: boolean;
       config: { file: string; updated: boolean; created?: boolean; note?: string };
     }>("/collections", { method: "POST", body: JSON.stringify(payload) }),
+
+  /** Delete a collection: its folder, its public/media folder, and its defineCollection() and key in the content config when that shape is recognised (`config.note` says when it wasn't). */
+  deleteCollection: (name: string) =>
+    request<{
+      collection: string;
+      entries: number;
+      removed: string[];
+      synced: boolean;
+      config: { file: string | null; updated: boolean; note?: string };
+    }>(`/collection?name=${encodeURIComponent(name)}`, { method: "DELETE" }),
 
   /**
    * Tell the server an edit session is on or off. While one is on, an outside

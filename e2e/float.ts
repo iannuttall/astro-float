@@ -61,6 +61,8 @@ export class Float {
   async openPopover() {
     if ((await this.pill.getAttribute("aria-expanded")) !== "true") await this.pill.click();
     await expect(this.popover).toBeVisible();
+    // Let the pop-in animation land, so a box measured next is where it stays.
+    await this.popover.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
   }
 
   async closePopover() {
@@ -118,6 +120,14 @@ export class Float {
   async expectSaved() {
     await expect.poll(() => this.state()).toMatchObject({ status: "saved", frontmatterDirty: false, bodyDirty: false });
   }
+}
+
+type Box = { x: number; y: number; width: number; height: number } | null;
+
+/** The same place and size, to the half pixel. */
+export function expectSameBox(actual: Box, expected: Box) {
+  expect(actual).not.toBeNull();
+  for (const key of ["x", "y", "width", "height"] as const) expect(actual![key]).toBeCloseTo(expected![key], 0);
 }
 
 export const test = base.extend<{ float: Float }>({
