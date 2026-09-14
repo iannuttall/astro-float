@@ -109,3 +109,50 @@ describe("DOM the browser produced while editing", () => {
     expect(isBlockElement(document.createTextNode("x"))).toBe(false);
   });
 });
+
+describe("image blocks", () => {
+  const one = (html: string, ctx: SerializeContext = identity) => blockToMarkdown(containerFrom(html).firstChild!, ctx);
+  const decorated = 'contenteditable="false" draggable="true" data-float-island="" data-float-image=""';
+
+  it("writes a plain image paragraph as Markdown even when the editor marked it atomic", () => {
+    expect(one(`<p ${decorated}><img src="./x.png" alt="a picture"></p>`)).toBe("![a picture](./x.png)");
+    expect(one(`<p ${decorated}><a href="https://x.test/"><img src="./x.png" alt="linked"></a></p>`)).toBe("[![linked](./x.png)](https://x.test/)");
+  });
+
+  it("writes a sized / aligned image as its wrapper around the Markdown image, minus Float's attributes", () => {
+    const html = `<div style="width:50%;margin-left:auto;margin-right:auto" ${decorated}>\n<p><img src="./x.png" alt="a picture"></p>\n</div>`;
+    expect(one(html)).toBe('<div style="width:50%;margin-left:auto;margin-right:auto">\n\n![a picture](./x.png)\n\n</div>');
+  });
+
+  it("keeps the wrapper's own attributes and maps the image src back through the context", () => {
+    const ctx: SerializeContext = { imageSrc: (src) => src.replace(/^\/@fs\/site\/post\//, "./") };
+    const html = '<div class="wide" style="width:75%" data-x="1"><p><img src="/@fs/site/post/sub/y.jpg" alt="y [z]"></p></div>';
+    expect(one(html, ctx)).toBe('<div class="wide" style="width:75%" data-x="1">\n\n![y \\[z\\]](./sub/y.jpg)\n\n</div>');
+  });
+
+  it("keeps a link and a title on a sized picture", () => {
+    const html = '<div style="width:25%"><p><a href="https://x.test/"><img src="./x.png" alt="linked" title="A title"></a></p></div>';
+    expect(one(html)).toBe('<div style="width:25%">\n\n[![linked](./x.png "A title")](https://x.test/)\n\n</div>');
+  });
+
+  it("does not mistake other divs for image blocks", () => {
+    expect(one('<div data-float-island=""><p><img src="a.png" alt="a"></p><p>text</p></div>')).toBe('<div><p><img src="a.png" alt="a"></p><p>text</p></div>');
+    expect(one('<div data-float-island=""><p>caption <img src="a.png" alt="a"></p></div>')).toBe('<div><p>caption <img src="a.png" alt="a"></p></div>');
+    expect(one('<div><p><img src="a.png" alt="a"><img src="b.png" alt="b"></p></div>')).toBe("![a](a.png)![b](b.png)");
+  });
+
+  it("round-trips the wrapper through Astro's renderer", async () => {
+    const md = '<div style="width:50%;margin-left:auto;margin-right:auto">\n\n![a picture](./x.png)\n\n</div>';
+    expect(await roundTrip(md)).toBe(md);
+  });
+});
+
+describe("quotes", () => {
+  const one = (html: string) => blockToMarkdown(containerFrom(html).firstChild!, identity);
+
+  it("writes nothing for a quote with nothing typed in it, and no stray > for its empty lines", () => {
+    expect(one("<blockquote><p><br></p></blockquote>")).toBe("");
+    expect(one("<blockquote></blockquote>")).toBe("");
+    expect(one("<blockquote><p>a</p><p><br></p><p>b</p></blockquote>")).toBe("> a\n>\n> b");
+  });
+});

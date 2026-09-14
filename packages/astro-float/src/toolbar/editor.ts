@@ -1,6 +1,7 @@
 import { altFromName, embedFor, mediaKind, videoHtml } from "./embeds";
 import { blockToMarkdown, type SerializeContext } from "./html-to-md";
 import { icon, type IconName } from "./icons";
+import { applyImageLayout, IMAGE_SIZES, imageBlockOf, imageLayoutOf, type ImageAlign, type ImageBlock, type ImageLayout } from "./image-block";
 import { SelectionBubble } from "./overlays";
 
 export interface SourceBlock {
@@ -31,6 +32,8 @@ export interface PageEditorHooks {
 const PAGE_STYLE_ID = "astro-float-page-style";
 const ISLAND_DRAG_TYPE = "text/x-astro-float-island";
 const ISLAND_SELECTOR = "astro-island, iframe, video, [data-float-island]";
+/** The image grip sits this far outside the block's left edge and this far below its top. */
+const GRIP_GAP = 8;
 
 const PAGE_STYLE = /* css */ `
 /*
@@ -103,9 +106,10 @@ const PAGE_STYLE = /* css */ `
   position: absolute;
   inset: 0;
   height: 100%;
+  z-index: 1;
   background: transparent;
   color: transparent;
-  caret-color: currentColor;
+  caret-color: #111; /* overridden inline with the prose colour when the view opens */
   resize: none;
   outline: none;
   overflow: hidden;
@@ -344,6 +348,28 @@ const PAGE_STYLE = /* css */ `
 .astro-float-frame { border: 1px solid color-mix(in srgb, currentColor 30%, transparent); border-radius: 6px; }
 .astro-float-frame[data-selected] { border-color: color-mix(in srgb, currentColor 60%, transparent); }
 .astro-float-dropline { height: 2px; background: #8b93a1; border-radius: 1px; }
+/* Drag grip for an image block: a muted six-dot handle in the gutter at the block's top-left, on hover. */
+.astro-float-grip {
+  position: fixed;
+  z-index: 1999999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: currentColor;
+  opacity: 0.4;
+  cursor: grab;
+  box-sizing: border-box;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: opacity 100ms ease;
+}
+.astro-float-grip svg { width: 14px; height: 14px; display: block; }
+.astro-float-grip:hover { opacity: 0.8; }
+.astro-float-grip:active { cursor: grabbing; }
+.astro-float-grip[hidden] { display: none; }
 
 /* Selection bubble and island bar: one quiet pill on the shared palette, one icon set. They stack
  * *below* the panel (2000000000): when a narrow window puts the prose's edge under the panel, the
@@ -354,11 +380,11 @@ const PAGE_STYLE = /* css */ `
   z-index: 1999999999;
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
   padding: 2px;
   background: var(--dp-bg);
   border: 1px solid var(--dp-line);
-  border-radius: 6px;
+  border-radius: 8px;
   box-shadow: var(--dp-shadow);
   color: var(--dp-muted);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
@@ -367,16 +393,17 @@ const PAGE_STYLE = /* css */ `
   -webkit-font-smoothing: antialiased;
 }
 .astro-float-bubble[hidden], .astro-float-bar[hidden] { display: none; }
+/* Buttons are 28px squares, the corner control's size; a text label (an image width) widens one. */
 .astro-float-bubble button, .astro-float-bar button {
   all: unset;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
-  height: 24px;
-  min-width: 24px;
-  padding: 0 5px;
-  border-radius: 4px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0 7px;
+  border-radius: 6px;
   color: var(--dp-muted);
   cursor: pointer;
   font: inherit;
@@ -389,24 +416,25 @@ const PAGE_STYLE = /* css */ `
 .astro-float-bar button:disabled { opacity: 0.4; cursor: default; background: none; }
 .astro-float-bubble button[data-on] { color: var(--dp-fg); background: var(--dp-hover); }
 .astro-float-bar button[data-danger]:hover { color: var(--dp-err); }
-.astro-float-bubble input {
+.astro-float-bubble input, .astro-float-bar input {
   all: unset;
   width: 220px;
-  height: 24px;
+  height: 28px;
   padding: 0 8px;
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--dp-input);
   border: 1px solid var(--dp-line);
   color: var(--dp-fg);
   font: 12px/1 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   box-sizing: border-box;
 }
-.astro-float-bubble input:focus { border-color: var(--dp-line-focus); }
-.astro-float-bubble input::placeholder { color: var(--dp-faint); }
+.astro-float-bubble input:focus, .astro-float-bar input:focus { border-color: var(--dp-line-focus); }
+.astro-float-bubble input::placeholder, .astro-float-bar input::placeholder { color: var(--dp-faint); }
+/* The arrow points at the selection's centre (--arrow-x), not the bubble's, when the bubble is held inside the viewport. */
 .astro-float-bubble::after {
   content: "";
   position: absolute;
-  left: 50%;
+  left: var(--arrow-x, 50%);
   bottom: -5px;
   transform: translateX(-50%);
   border: 4px solid transparent;
@@ -417,7 +445,7 @@ const PAGE_STYLE = /* css */ `
 .astro-float-bar button[data-grip] { cursor: grab; }
 .astro-float-bar .astro-float-sep, .astro-float-bubble .astro-float-sep { width: 1px; height: 16px; background: var(--dp-line); margin: 0 2px; flex: none; }
 .astro-float-bar .astro-float-confirm { display: flex; align-items: center; gap: 6px; padding: 0 4px 0 8px; white-space: nowrap; }
-.astro-float-bar .astro-float-confirm button { width: auto; height: 24px; padding: 0 9px; }
+.astro-float-bar .astro-float-confirm button { width: auto; height: 28px; padding: 0 9px; }
 .astro-float-bar .astro-float-confirm button[data-danger] { background: var(--dp-err); color: var(--dp-err-fg); }
 .astro-float-bar .astro-float-confirm button[data-danger]:hover { background: var(--dp-err); color: var(--dp-err-fg); opacity: 0.9; }
 @media (pointer: coarse) {
@@ -427,8 +455,9 @@ const PAGE_STYLE = /* css */ `
   .astro-float-dp-grid button { height: 38px; font-size: 14px; }
   .astro-float-dp-head button { width: 34px; height: 34px; }
   .astro-float-dp-foot button { height: 34px; font-size: 13px; }
-  .astro-float-bubble input { height: 36px; font-size: 16px; }
+  .astro-float-bubble input, .astro-float-bar input { height: 36px; font-size: 16px; }
   .astro-float-bar .astro-float-confirm button { height: 34px; }
+  .astro-float-grip { width: 28px; height: 28px; }
 }
 `;
 
@@ -485,7 +514,16 @@ export class PageEditor {
   private frame: HTMLElement | null = null;
   private bar: HTMLElement | null = null;
   private dropLine: HTMLElement | null = null;
+  /** The drag handle of an image block, in the gutter at its top-left. */
+  private grip: HTMLElement | null = null;
+  /** The image block whose row the pointer is on: the block itself, or the gutter beside it where the grip sits. */
+  private gripFor: HTMLElement | null = null;
   private confirming = false;
+  /** The image bar shows the alt-text field instead of its buttons. */
+  private altEditing = false;
+  /** The block the bar was last built for, and what it showed then (see `barView`). */
+  private barFor: HTMLElement | null = null;
+  private barShows = "";
   private bubble: SelectionBubble | null = null;
 
   constructor(private hooks: PageEditorHooks) {}
@@ -583,6 +621,8 @@ export class PageEditor {
     el.addEventListener("dragend", this.onDragEnd);
     document.addEventListener("click", this.onDocumentClick, true);
     document.addEventListener("keydown", this.onDocumentKeydown);
+    document.addEventListener("pointermove", this.onPointerMove, { passive: true });
+    document.addEventListener("pointerout", this.onPointerOut);
     window.addEventListener("scroll", this.reposition, true);
     window.addEventListener("resize", this.reposition);
 
@@ -615,13 +655,16 @@ export class PageEditor {
     el.removeEventListener("dragend", this.onDragEnd);
     document.removeEventListener("click", this.onDocumentClick, true);
     document.removeEventListener("keydown", this.onDocumentKeydown);
+    document.removeEventListener("pointermove", this.onPointerMove);
+    document.removeEventListener("pointerout", this.onPointerOut);
     window.removeEventListener("scroll", this.reposition, true);
     window.removeEventListener("resize", this.reposition);
     this.observer?.disconnect();
     this.observer = null;
     this.select(null);
     this.hovered = null;
-    this.hideOverlays();
+    this.gripFor = null;
+    this.removeOverlays();
   }
 
   /** Let go of the container and take back everything `bind` put on its islands. */
@@ -629,6 +672,7 @@ export class PageEditor {
     this.detach();
     for (const node of Array.from(this.container?.querySelectorAll<HTMLElement>("[data-float-island]") ?? [])) {
       node.removeAttribute("data-float-island");
+      node.removeAttribute("data-float-image");
       node.removeAttribute("data-float-key");
       node.removeAttribute("contenteditable");
       node.removeAttribute("draggable");
@@ -832,6 +876,7 @@ export class PageEditor {
     img.src = url;
     img.alt = alt;
     figure.appendChild(img);
+    this.decorateImage(figure);
     this.placeBlock(figure, at);
   }
 
@@ -883,9 +928,16 @@ export class PageEditor {
     const mapped = nodes.length === source.blocks.length;
     nodes.forEach((node, i) => {
       if (!(node instanceof HTMLElement)) return;
+      // A picture (plain, or in its size / alignment wrapper — an island to the server) is an image block:
+      // atomic like an island, but keyed by its HTML and written back as Markdown when its bar changes it.
+      if (imageBlockOf(node)) {
+        this.decorateImage(node);
+        return;
+      }
       const isIsland = mapped ? Boolean(source.blocks[i].island) : node.matches(ISLAND_SELECTOR) || node.tagName.includes("-");
       if (!isIsland) {
         node.removeAttribute("data-float-island");
+        node.removeAttribute("data-float-image");
         node.removeAttribute("data-float-key");
         return;
       }
@@ -894,6 +946,62 @@ export class PageEditor {
       node.contentEditable = "false";
       node.draggable = true;
     });
+  }
+
+  /** Static attributes that make an image block select, move and remove like an island. No key: it keys by its HTML. */
+  private decorateImage(node: HTMLElement) {
+    node.setAttribute("data-float-island", "");
+    node.setAttribute("data-float-image", "");
+    node.removeAttribute("data-float-key");
+    node.contentEditable = "false";
+    node.draggable = true;
+  }
+
+  private undecorateImage(node: HTMLElement) {
+    node.removeAttribute("data-float-island");
+    node.removeAttribute("data-float-image");
+    node.removeAttribute("contenteditable");
+    node.removeAttribute("draggable");
+  }
+
+  /**
+   * A paragraph that became one picture while editing (text deleted around an image) joins the image
+   * blocks — once the caret has left it, so it doesn't turn atomic under the caret mid-deletion.
+   */
+  private decorateNewImages() {
+    const caret = this.selectionRange()?.startContainer ?? null;
+    for (const node of this.domBlocks()) {
+      if (!(node instanceof HTMLElement) || node.hasAttribute("data-float-island") || !node.querySelector("img")) continue;
+      if (caret && node.contains(caret)) continue;
+      if (imageBlockOf(node)) this.decorateImage(node);
+    }
+  }
+
+  // ---- image blocks ------------------------------------------------------------------
+
+  /** Width / alignment for an image block; the DOM shows exactly what Astro will render after save. */
+  setImageLayout(block: HTMLElement, next: Partial<ImageLayout>) {
+    const image = imageBlockOf(block);
+    if (!image) return;
+    const layout = { ...imageLayoutOf(image), ...next };
+    if (layout.size >= 100) layout.align = "left";
+    const before = image.wrapper ?? image.paragraph;
+    const after = applyImageLayout(image, layout);
+    if (after !== before) {
+      this.undecorateImage(before);
+      this.decorateImage(after);
+      if (this.selected === before) this.selected = after;
+      if (this.gripFor === before) this.gripFor = after;
+    }
+    this.renderOverlays();
+  }
+
+  /** Alt text for an image block's picture. */
+  setImageAlt(block: HTMLElement, alt: string) {
+    const image = imageBlockOf(block);
+    if (!image) return;
+    image.img.alt = alt;
+    this.renderOverlays();
   }
 
   private islandFrom(target: EventTarget | null): HTMLElement | null {
@@ -906,6 +1014,7 @@ export class PageEditor {
     if (this.selected === island) return;
     this.selected = island;
     this.confirming = false;
+    this.altEditing = false;
     if (island) document.getSelection()?.removeAllRanges();
     this.renderOverlays();
   }
@@ -935,42 +1044,89 @@ export class PageEditor {
       this.dropLine.className = "astro-float-dropline";
       this.bar = document.createElement("div");
       this.bar.className = "astro-float-bar";
-      this.bar.addEventListener("mousedown", (e) => e.preventDefault()); // keep page selection where it is
-      for (const el of [this.frame, this.dropLine, this.bar]) el.hidden = true;
+      // Keep the page selection where it is — except for the bar's own text field, which needs the click.
+      this.bar.addEventListener("mousedown", (e) => {
+        if (!(e.target instanceof HTMLInputElement)) e.preventDefault();
+      });
+      this.grip = document.createElement("div");
+      this.grip.className = "astro-float-grip";
+      this.grip.setAttribute("data-tip", "Drag to move");
+      this.grip.appendChild(icon("grip", 14));
+      this.grip.draggable = true;
+      // No mousedown preventDefault here: that would stop the browser from starting the drag.
+      this.grip.addEventListener("dragstart", (e) => {
+        const block = this.gripBlock();
+        if (block) this.startIslandDrag(e, block);
+      });
+      this.grip.addEventListener("dragend", this.onDragEnd);
+      for (const el of [this.frame, this.dropLine, this.bar, this.grip]) el.hidden = true;
     }
     // A page swap may have dropped them from the document; put them back.
-    for (const el of [this.frame, this.dropLine!, this.bar!]) if (!el.isConnected) document.body.appendChild(el);
+    for (const el of [this.frame, this.dropLine!, this.bar!, this.grip!]) if (!el.isConnected) document.body.appendChild(el);
   }
 
-  private hideOverlays() {
-    for (const el of [this.frame, this.bar, this.dropLine]) if (el) el.hidden = true;
+  /** Edit off: the overlays leave the page with it. */
+  private removeOverlays() {
+    for (const el of [this.frame, this.bar, this.dropLine, this.grip]) el?.remove();
+    this.frame = this.bar = this.dropLine = this.grip = null;
   }
 
   private renderOverlays() {
+    if (!this.attached) return;
     this.ensureOverlays();
     const frame = this.frame!;
     const bar = this.bar!;
+    this.renderGrip();
     const target = this.selected ?? this.hovered;
-    if (!target || !this.attached || !target.isConnected) {
+    if (!target || !target.isConnected) {
       frame.hidden = true;
       bar.hidden = true;
+      this.barFor = null;
       return;
     }
-    const r = target.getBoundingClientRect();
+    const image = target.hasAttribute("data-float-image") ? imageBlockOf(target) : null;
+    // An image block's outline and bar sit on the picture; a generic island's on its whole box.
+    const r = (image?.img ?? target).getBoundingClientRect();
     const pad = 6;
     Object.assign(frame.style, { left: `${r.left - pad}px`, top: `${r.top - pad}px`, width: `${r.width + pad * 2}px`, height: `${r.height + pad * 2}px` });
     frame.toggleAttribute("data-selected", target === this.selected);
-    frame.hidden = false;
+    // Hovering a picture shows only its grip; the outline comes with selection.
+    frame.hidden = !!image && target !== this.selected;
 
     if (target !== this.selected) {
       bar.hidden = true;
+      this.barFor = null;
       return;
     }
+    // Rebuilt only when what it shows changes: a scroll or a mutation elsewhere must not reset a field mid-typing.
+    const view = this.barView(target, image);
+    if (this.barFor !== target || this.barShows !== view) {
+      this.barFor = target;
+      this.barShows = view;
+      this.fillBar(bar, target, image);
+    }
+    bar.hidden = false;
+    const bw = bar.offsetWidth;
+    const left = Math.min(Math.max(8, r.right - bw - 2), window.innerWidth - bw - 8);
+    const top = r.top - pad - bar.offsetHeight - 6 >= 4 ? r.top - pad - bar.offsetHeight - 6 : r.top + pad + 4;
+    Object.assign(bar.style, { left: `${left}px`, top: `${top}px` });
+  }
+
+  /** What the bar shows for the selected block, as a key. */
+  private barView(target: HTMLElement, image: ImageBlock | null): string {
+    if (this.confirming) return "confirm";
+    if (!image) return `island:${!!target.previousElementSibling}:${!!target.nextElementSibling}`;
+    if (this.altEditing) return "alt";
+    const { size, align } = imageLayoutOf(image);
+    return `image:${size}:${align}:${image.img.getAttribute("alt") ?? ""}`;
+  }
+
+  private fillBar(bar: HTMLElement, target: HTMLElement, image: ImageBlock | null) {
     bar.textContent = "";
     if (this.confirming) {
       const wrap = document.createElement("span");
       wrap.className = "astro-float-confirm";
-      wrap.append("Remove this block?");
+      wrap.append(image ? "Remove this image?" : "Remove this block?");
       const yes = button(null, "Remove", () => this.removeIsland(target), "Remove");
       yes.setAttribute("data-danger", "");
       const no = button(null, "Keep", () => {
@@ -979,6 +1135,68 @@ export class PageEditor {
       }, "Keep");
       wrap.append(yes, no);
       bar.appendChild(wrap);
+    } else if (image && this.altEditing) {
+      // Alt text: an inline field in the bar's place. Enter applies, Esc puts the buttons back.
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = "Describe the image";
+      input.value = image.img.getAttribute("alt") ?? "";
+      input.setAttribute("aria-label", "Alt text");
+      const apply = () => {
+        this.altEditing = false;
+        this.setImageAlt(target, input.value.trim());
+      };
+      input.addEventListener("keyup", (e) => e.stopPropagation());
+      input.addEventListener("keydown", (e) => {
+        // ⌘S takes what's typed along: apply, then let the save through.
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+          apply();
+          return;
+        }
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          e.preventDefault();
+          apply();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          this.altEditing = false;
+          this.renderOverlays();
+        }
+      });
+      const ok = button("check", "Apply", apply);
+      bar.append(input, ok);
+      input.focus();
+      input.select();
+    } else if (image) {
+      const layout = imageLayoutOf(image);
+      for (const size of IMAGE_SIZES) {
+        const b = button(null, `Width ${size}%`, () => this.setImageLayout(target, { size }), String(size));
+        if (layout.size === size) b.setAttribute("data-on", "");
+        bar.appendChild(b);
+      }
+      bar.appendChild(separator());
+      const aligns: Array<[ImageAlign, IconName, string]> = [
+        ["left", "alignLeft", "Align left"],
+        ["center", "alignCenter", "Align centre"],
+        ["right", "alignRight", "Align right"],
+      ];
+      for (const [align, name, label] of aligns) {
+        const b = button(name, layout.size >= 100 ? `${label} (needs a width under 100%)` : label, () => this.setImageLayout(target, { align }));
+        b.disabled = layout.size >= 100;
+        if (layout.size < 100 && layout.align === align) b.setAttribute("data-on", "");
+        bar.appendChild(b);
+      }
+      bar.appendChild(separator());
+      const alt = button("captions", image.img.getAttribute("alt") ? `Alt text: ${image.img.getAttribute("alt")}` : "Alt text", () => {
+        this.altEditing = true;
+        this.renderOverlays();
+      });
+      const del = button("trash", "Remove", () => {
+        this.confirming = true;
+        this.renderOverlays();
+      });
+      del.setAttribute("data-danger", "");
+      bar.append(alt, separator(), del);
     } else {
       const up = button("arrowUp", "Move up", () => this.moveIsland(target, -1));
       const down = button("arrowDown", "Move down", () => this.moveIsland(target, 1));
@@ -988,25 +1206,49 @@ export class PageEditor {
       grip.setAttribute("data-grip", "");
       grip.draggable = true;
       grip.addEventListener("dragstart", (e) => this.startIslandDrag(e, target));
-      const sep = document.createElement("span");
-      sep.className = "astro-float-sep";
+      grip.addEventListener("dragend", this.onDragEnd);
       const del = button("trash", "Remove", () => {
         this.confirming = true;
         this.renderOverlays();
       });
       del.setAttribute("data-danger", "");
-      bar.append(up, down, grip, sep, del);
+      bar.append(up, down, grip, separator(), del);
     }
-    bar.hidden = false;
-    const bw = bar.offsetWidth;
-    const left = Math.min(Math.max(8, r.right - bw - 2), window.innerWidth - bw - 8);
-    const top = r.top - pad - bar.offsetHeight - 6 >= 4 ? r.top - pad - bar.offsetHeight - 6 : r.top + pad + 4;
-    Object.assign(bar.style, { left: `${left}px`, top: `${top}px` });
   }
 
   private reposition = () => {
-    if (this.selected || this.hovered) this.renderOverlays();
+    if (this.selected || this.hovered || this.gripFor) this.renderOverlays();
   };
+
+  /** The image block the grip belongs to: the row under the pointer, else the selected picture. */
+  private gripBlock(): HTMLElement | null {
+    const block = this.gripFor ?? (this.selected?.hasAttribute("data-float-image") ? this.selected : null);
+    return block?.isConnected ? block : null;
+  }
+
+  /** The muted six-dot grip, in the gutter at the image block's top-left. */
+  private renderGrip() {
+    const grip = this.grip!;
+    const block = this.dragging ? null : this.gripBlock();
+    grip.hidden = !block;
+    if (!block) return;
+    const r = block.getBoundingClientRect();
+    Object.assign(grip.style, { left: `${Math.max(4, r.left - GRIP_GAP - grip.offsetWidth)}px`, top: `${r.top + GRIP_GAP}px` });
+  }
+
+  /** The image block whose row holds the point: its box, widened over the gutter to its left where the grip sits. */
+  private imageRowAt(x: number, y: number): HTMLElement | null {
+    const el = this.container;
+    if (!el) return null;
+    const gutter = GRIP_GAP + (this.grip?.offsetWidth || 20) + 4;
+    const cr = el.getBoundingClientRect();
+    if (y < cr.top || y > cr.bottom || x < cr.left - gutter || x > cr.right) return null;
+    for (const block of Array.from(el.querySelectorAll<HTMLElement>(":scope > [data-float-image]"))) {
+      const r = block.getBoundingClientRect();
+      if (y >= r.top && y <= r.bottom && x >= r.left - gutter && x <= r.right) return block;
+    }
+    return null;
+  }
 
   private startIslandDrag(e: DragEvent, island: HTMLElement) {
     this.dragging = island;
@@ -1017,7 +1259,12 @@ export class PageEditor {
       e.dataTransfer.setDragImage(island, Math.min(40, r.width / 2), 20);
     }
     this.hovered = null;
-    if (this.bar) this.bar.hidden = true;
+    // A tick later: Chrome cancels a drag whose source (the grip) is hidden during dragstart itself.
+    setTimeout(() => {
+      if (this.dragging !== island) return;
+      if (this.bar) this.bar.hidden = true;
+      if (this.grip) this.grip.hidden = true;
+    });
   }
 
   private updateDropTarget(y: number) {
@@ -1052,9 +1299,18 @@ export class PageEditor {
     this.changeQueued = true;
     queueMicrotask(() => {
       this.changeQueued = false;
+      this.decorateNewImages();
       this.hooks.onChange();
       this.reposition();
     });
+  }
+
+  /** Alt+↑ / Alt+↓ with a block selected: move it past its neighbour. True when handled. */
+  private moveByKey(e: KeyboardEvent): boolean {
+    if (!this.selected || !e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return false;
+    e.preventDefault();
+    this.moveIsland(this.selected, e.key === "ArrowUp" ? -1 : 1);
+    return true;
   }
 
   /** The dev toolbar closes the active app on Escape keyup; inside the body Escape only leaves the text. */
@@ -1076,6 +1332,7 @@ export class PageEditor {
 
     // An island is selected: it is atomic. Nothing types into it; Backspace asks first.
     if (this.selected) {
+      if (this.moveByKey(e)) return;
       if (mod && ["c", "x", "v", "z", "y", "s"].includes(e.key.toLowerCase())) {
         if (e.key.toLowerCase() === "x") e.preventDefault();
         return;
@@ -1134,6 +1391,11 @@ export class PageEditor {
     const range = this.selectionRange();
     if (!range) return;
 
+    if (range.collapsed && !e.shiftKey && !e.altKey && !e.isComposing && this.leaveBlock(e.key, range)) {
+      e.preventDefault();
+      return;
+    }
+
     // Backspace/Delete against an island edge selects it instead of silently eating it.
     if ((e.key === "Backspace" || e.key === "Delete") && range.collapsed) {
       const block = this.topLevelBlock(range.startContainer);
@@ -1183,6 +1445,41 @@ export class PageEditor {
     if (e.key === " " && range.collapsed) this.markdownShortcut(e, range);
     else if (e.key === "`" && range.collapsed) this.codeFenceShortcut(e, range);
   };
+
+  /**
+   * Ways out of a block the caret would otherwise be stuck in. True when handled.
+   * - Enter on an empty line of a quote: the line leaves as a paragraph right after the quote.
+   * - Backspace at the very start of a quote's first line: that line leaves the quote; the rest stays quoted.
+   * - ↓ / → at the very end of a quote, code block or list that ends the body: a paragraph opens after it.
+   */
+  private leaveBlock(key: string, range: Range): boolean {
+    const el = this.container!;
+    if (key === "Enter" || key === "Backspace") {
+      const line = closestWithin(range.startContainer, el, "p, div");
+      const quote = line?.parentElement;
+      if (!line || quote?.tagName !== "BLOCKQUOTE") return false;
+      if (key === "Enter" && isEmptyBlock(line)) {
+        placeCaret(leaveQuote(line));
+        return true;
+      }
+      if (key === "Backspace" && quote.firstElementChild === line && isCaretAtStart(line, range)) {
+        quote.before(line);
+        if (isEmptyBlock(quote)) quote.remove();
+        placeCaret(line);
+        return true;
+      }
+      return false;
+    }
+    if (key === "ArrowDown" || key === "ArrowRight") {
+      const block = this.topLevelBlock(range.startContainer);
+      if (!block || block !== el.lastElementChild || !/^(BLOCKQUOTE|PRE|UL|OL)$/.test(block.tagName) || !isCaretAtEnd(block, range)) return false;
+      const p = emptyParagraph();
+      block.after(p);
+      placeCaret(p);
+      return true;
+    }
+    return false;
+  }
 
   /** `# `, `- `, `1. `, `> ` at the start of a paragraph become the matching block. */
   private markdownShortcut(e: KeyboardEvent, range: Range) {
@@ -1269,7 +1566,7 @@ export class PageEditor {
   private onDocumentClick = (e: MouseEvent) => {
     if (!this.selected) return;
     const path = e.composedPath();
-    if (path.includes(this.selected) || (this.bar && path.includes(this.bar))) return;
+    if (path.includes(this.selected) || (this.bar && path.includes(this.bar)) || (this.grip && path.includes(this.grip))) return;
     this.select(null);
   };
 
@@ -1278,6 +1575,7 @@ export class PageEditor {
     if (!this.selected || this.container?.contains(document.activeElement)) return;
     const target = e.target as HTMLElement | null;
     if (target && target !== document.body && target.matches("input, textarea, select, [contenteditable]")) return;
+    if (this.moveByKey(e)) return;
     if (e.key === "Escape") {
       e.preventDefault();
       this.select(null);
@@ -1300,6 +1598,19 @@ export class PageEditor {
       this.hovered = null;
       this.renderOverlays();
     }
+  };
+  /** The grip follows the pointer's row, which reaches past the body into the gutter where the grip sits. */
+  private onPointerMove = (e: PointerEvent) => {
+    if (this.dragging || e.pointerType === "touch") return;
+    const block = this.imageRowAt(e.clientX, e.clientY);
+    if (block === this.gripFor) return;
+    this.gripFor = block;
+    this.renderOverlays();
+  };
+  private onPointerOut = (e: PointerEvent) => {
+    if (e.relatedTarget || !this.gripFor) return; // still inside the window
+    this.gripFor = null;
+    this.renderOverlays();
   };
 
   private onDragStart = (e: DragEvent) => {
@@ -1356,6 +1667,7 @@ export class PageEditor {
   private onDragEnd = () => {
     this.dragging = null;
     this.dropTarget = null;
+    this.gripFor = null;
     if (this.dropLine) this.dropLine.hidden = true;
     this.renderOverlays();
   };
@@ -1422,6 +1734,12 @@ function keyOf(node: Node): string {
   return "#text:" + (node.textContent ?? "");
 }
 
+function separator(): HTMLSpanElement {
+  const sep = document.createElement("span");
+  sep.className = "astro-float-sep";
+  return sep;
+}
+
 function button(name: IconName | null, label: string, onClick: () => void, text?: string): HTMLButtonElement {
   const b = document.createElement("button");
   b.type = "button";
@@ -1446,6 +1764,26 @@ function isEmptyBlock(block: HTMLElement): boolean {
 function isBlankParagraph(node: Node): boolean {
   if (!(node instanceof HTMLElement) || !/^(P|DIV)$/.test(node.tagName) || node.dataset.floatKey) return false;
   return !node.textContent?.trim() && !node.querySelector(":not(br)");
+}
+
+/**
+ * An empty quote line leaves the quote: an empty paragraph takes its place right after the quote,
+ * the lines that followed it stay quoted below that paragraph, and a quote left empty goes.
+ */
+function leaveQuote(line: HTMLElement): HTMLParagraphElement {
+  const quote = line.parentElement!;
+  const rest: Node[] = [];
+  for (let n = line.nextSibling; n; n = n.nextSibling) rest.push(n);
+  line.remove();
+  const p = emptyParagraph();
+  quote.after(p);
+  if (rest.some((n) => n instanceof Element || (n.textContent ?? "").trim())) {
+    const tail = document.createElement("blockquote");
+    tail.append(...rest);
+    p.after(tail);
+  }
+  if (isEmptyBlock(quote)) quote.remove();
+  return p;
 }
 
 function emptyParagraph(): HTMLParagraphElement {

@@ -100,7 +100,7 @@ export function indexFor(collection: Collection): string | null {
 
 /** Elements that belong to dev tooling, not the page: never swapped out. */
 const KEEP_SELECTOR =
-  "astro-dev-toolbar, [data-astro-float-host], .astro-float-bubble, .astro-float-bar, .astro-float-frame, .astro-float-dropline, .astro-float-datepicker";
+  "astro-dev-toolbar, [data-astro-float-host], .astro-float-bubble, .astro-float-bar, .astro-float-frame, .astro-float-dropline, .astro-float-grip, .astro-float-datepicker";
 
 /**
  * Render a page in place: fetch its HTML from the dev server and swap
