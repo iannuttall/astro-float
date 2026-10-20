@@ -321,6 +321,8 @@ button.address:hover, button.address:focus-visible { background: var(--bg-hover)
 .image-option img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; display: block; background: var(--bg); }
 .image-option span { font-size: 10.5px; color: var(--fg-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+.group-fold > summary { cursor: pointer; color: var(--fg-muted); font-size: 12px; padding: 2px 0; user-select: none; }
+.group-fold > summary:hover { color: var(--fg); }
 .group { display: flex; flex-direction: column; gap: 10px; padding: 8px 0 4px 12px; border-left: 2px solid var(--line); }
 .array { display: flex; flex-direction: column; gap: 6px; }
 .items { display: flex; flex-direction: column; gap: 6px; }

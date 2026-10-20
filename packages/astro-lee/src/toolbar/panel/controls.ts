@@ -546,7 +546,7 @@ function imageControl(value: unknown, ctx: ControlCtx): Control {
 
 // ---- object / array ---------------------------------------------------------------------
 
-/** Nested group: one row per sub-field, indented, sharing the parent's change callback. */
+/** Nested group, collapsed by default: one row per sub-field, indented, sharing the parent's change callback. */
 function objectControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
   let obj: Record<string, unknown> = value && typeof value === "object" && !Array.isArray(value) ? { ...(value as Record<string, unknown>) } : {};
   const defs = [...(def.fields ?? [])];
@@ -566,8 +566,10 @@ function objectControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control 
     group.appendChild(row.el);
   }
   if (!defs.length) group.appendChild(h("span", { class: "muted" }, "Empty"));
+  // Collapsed until asked for: nested data (an importer's metadata, say) stays out of the way.
+  const fold = h("details", { class: "group-fold" }, h("summary", {}, defs.length === 1 ? "1 field" : `${defs.length} fields`), group);
   return {
-    el: group,
+    el: fold,
     inline: false,
     set: (v) => {
       obj = v && typeof v === "object" && !Array.isArray(v) ? { ...(v as Record<string, unknown>) } : {};
