@@ -69,6 +69,40 @@ describe("serializeDocument", () => {
     );
   });
 
+  it("given the file on disk, keeps unchanged keys as written and re-emits only changed ones", () => {
+    const previous = [
+      "---",
+      'title: "Keep these quotes"',
+      "# a comment stays with its key",
+      'description: "Old description"',
+      'source: {"id":"123","ids":["1","2"],"likes":5}',
+      'tags: ["a","b"]',
+      "draft: true",
+      "---",
+      "",
+      "Old body.",
+      "",
+    ].join("\n");
+    const { frontmatter } = parseDocument(previous);
+    const next = { ...frontmatter, description: "New description", source: { likes: 5, ids: ["1", "2"], id: "123" }, extra: 1 };
+    delete next.draft;
+    expect(serializeDocument(next, "New body.\n", previous)).toBe(
+      [
+        "---",
+        'title: "Keep these quotes"',
+        "# a comment stays with its key",
+        "description: New description",
+        'source: {"id":"123","ids":["1","2"],"likes":5}',
+        'tags: ["a","b"]',
+        "extra: 1",
+        "---",
+        "",
+        "New body.",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("never wraps long lines", () => {
     const long = "word ".repeat(60).trim();
     expect(serializeDocument({ description: long }, "")).toContain(`description: ${long}\n`);

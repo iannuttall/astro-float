@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml, parseDocument as parseYamlDocument, stringify as stringifyYaml } from "yaml";
 import { slugError } from "../shared/slug.js";
 import { splitBlocks } from "./blocks.js";
 import { readCollectionSchema, templateFromSchema } from "./schema.js";
@@ -38,15 +38,52 @@ export function parseDocument(raw) {
 
 /**
  * Serialize frontmatter + body back to a Markdown document.
- * Body is kept byte-for-byte; frontmatter is re-emitted through the YAML
- * stringifier (key order preserved, quoting normalized).
+ * Body is kept byte-for-byte. Given the document as it is on disk
+ * (`previous`), every top-level key whose value didn't change keeps its
+ * source text exactly (quoting, flow style, comments); only changed and new
+ * keys go through the YAML stringifier. Without it, all of the frontmatter is
+ * re-emitted (key order preserved, quoting normalized).
  */
-export function serializeDocument(frontmatter, body) {
+export function serializeDocument(frontmatter, body, previous) {
   const keys = Object.keys(frontmatter ?? {});
-  const yaml = keys.length ? stringifyYaml(frontmatter, { lineWidth: 0 }) : "";
+  const yaml = keys.length ? ((previous && keepUnchangedYaml(frontmatter, previous)) ?? stringifyYaml(frontmatter, { lineWidth: 0 })) : "";
   const cleanBody = body.replace(/^\r?\n+/, "");
   const trailing = cleanBody.endsWith("\n") ? "" : "\n";
   return `---\n${yaml}---\n\n${cleanBody}${trailing}`;
+}
+
+/**
+ * The frontmatter YAML for `frontmatter`, splicing the source text of each
+ * unchanged top-level key out of `previous`. Null when `previous` has no
+ * frontmatter map to splice from.
+ */
+function keepUnchangedYaml(frontmatter, previous) {
+  const match = previous.match(FRONTMATTER_RE);
+  if (!match) return null;
+  const source = match[1];
+  const doc = parseYamlDocument(source, { schema: "core" });
+  const items = doc.contents?.items;
+  if (doc.errors.length || !Array.isArray(items) || !items.length || items.some((item) => !item.key?.range)) return null;
+  const old = doc.toJS();
+  const emit = (key) => stringifyYaml({ [key]: frontmatter[key] }, { lineWidth: 0 });
+  let out = source.slice(0, items[0].key.range[0]);
+  items.forEach((item, i) => {
+    const key = String(item.key.value);
+    if (!(key in frontmatter)) return;
+    if (!sameValue(old[key], frontmatter[key])) return void (out += emit(key));
+    const slice = source.slice(item.key.range[0], i + 1 < items.length ? items[i + 1].key.range[0] : source.length);
+    out += slice.endsWith("\n") ? slice : `${slice}\n`;
+  });
+  for (const key of Object.keys(frontmatter)) if (!(key in old)) out += emit(key);
+  return out;
+}
+
+function sameValue(a, b) {
+  if (a === b) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => Object.hasOwn(b, k) && sameValue(a[k], b[k]));
 }
 
 /** @param {string} value */
@@ -203,7 +240,7 @@ export async function writeEntry(ctx, { collection, id, frontmatter, body, baseH
   if (!force && baseHash && hashOf(current) !== baseHash) {
     throw httpError(409, "file changed on disk since it was loaded");
   }
-  const next = serializeDocument(frontmatter ?? {}, typeof body === "string" ? body : "");
+  const next = serializeDocument(frontmatter ?? {}, typeof body === "string" ? body : "", current);
   // Refuse what Astro would refuse, before anything touches the disk.
   const { issues } = await validateDocument(ctx, collection, next, { entryDir: path.dirname(abs) });
   if (issues.length) throw validationError(issues);
