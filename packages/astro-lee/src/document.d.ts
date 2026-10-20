@@ -14,3 +14,12 @@ export function parseDocument(raw: string): { frontmatter: Record<string, unknow
 
 /** Write a document back; unchanged keys keep their source text from `previous`. */
 export function serializeDocument(frontmatter: Record<string, unknown>, body: string, previous?: string): string;
+
+export interface RenderedBlock {
+  type: string;
+  island: boolean;
+  html: string;
+}
+
+/** Render a body block by block with the project's Markdown pipeline (the Markdown tab's live preview). Islands come back as `html: ""`. */
+export function renderBlocks(body: string, renderMarkdown: (markdown: string) => Promise<string>, options?: { mdx?: boolean }): Promise<RenderedBlock[]>;

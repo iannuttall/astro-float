@@ -2,6 +2,12 @@ import type { CollectionSchema } from "./schema";
 
 export const API_BASE = "/__lee/api";
 
+/** Where the client sends its requests: the dev server's API, or a hosted editor's (see `astro-lee/hosted`). */
+let apiBase = API_BASE;
+export function setApiBase(base: string) {
+  apiBase = base.replace(/\/+$/, "");
+}
+
 export interface EntrySummary {
   id: string;
   title: string;
@@ -125,7 +131,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   let res: Response;
   try {
-    res = await fetch(API_BASE + path, { ...init, headers, cache: "no-store" });
+    res = await fetch(apiBase + path, { ...init, headers, cache: "no-store" });
   } catch {
     throw new ApiError(0, "dev server unreachable");
   }

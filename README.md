@@ -134,6 +134,22 @@ lee({
 
 A collection also needs pages. The demo ships generic `src/pages/[collection]/index.astro` and `src/pages/[collection]/[id].astro` routes that render any collection without a dedicated page, so `/til/first-entry/` works the moment it's created.
 
+### Hosted Lee (outside `astro dev`)
+
+The client only talks to the HTTP routes in `server/api.js`. A site can serve those routes itself (say from a Worker, saving to a database or a Git API) and mount the same pill and editors on its own pages:
+
+```ts
+import { mountHostedLee } from "astro-lee/hosted";
+
+mountHostedLee({
+  apiBase: "/admin/lee/api",
+  // Optional buttons for a saved, clean entry, such as Publish.
+  entryActions: (doc) => [{ label: "Publish", primary: true, run: async () => { /* … */ return "Published"; } }],
+});
+```
+
+Edit mode is on while the page is open, and autosave defaults on. The server side can reuse `astro-lee/document` (`splitBlocks`, `renderBlocks`, `parseDocument`, `serializeDocument`) and, at build time, `fieldsFromJsonSchema` from `astro-lee/schema` for the panel's fields.
+
 ## How it works
 
 - **Dev toolbar app.** `addDevToolbarApp()` registers "Edit" (only when `command === "dev"`). The pill and its popover render into the app's canvas, so Astro hides them when the app is off; page-side styles (wash, body control, bubble, island bar) are injected for the edit session and removed after. Edit state persists across reloads in `sessionStorage`; `beforeTogglingOff` saves pending work first. Escape keyups are stopped at the document while editing so Astro's "Escape closes the app" never fires mid-edit.

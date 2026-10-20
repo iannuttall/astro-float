@@ -13,9 +13,17 @@
       "types": "./src/editor.ts",
       "default": "./src/editor.ts"
     },
+    "./hosted": {
+      "types": "./src/hosted.ts",
+      "default": "./src/hosted.ts"
+    },
     "./document": {
       "types": "./src/document.d.ts",
       "default": "./src/document.js"
+    },
+    "./schema": {
+      "types": "./src/schema.d.ts",
+      "default": "./src/server/schema.js"
     }
   },
   "types": "./index.d.ts",

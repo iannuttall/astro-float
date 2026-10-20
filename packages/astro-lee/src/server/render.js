@@ -1,6 +1,6 @@
 import path from "node:path";
 import { importFromAstro } from "./astro-deps.js";
-import { splitBlocks } from "./blocks.js";
+import { renderBlocks } from "../shared/render-blocks.js";
 
 /**
  * Live rendering for the Markdown tab: the draft body is split with the same
@@ -22,8 +22,6 @@ import { splitBlocks } from "./blocks.js";
  * @typedef {{ render(content: string, opts?: { fileURL?: URL }): Promise<{ code: string }> }} Renderer
  */
 
-/** Link reference definitions (`[label]: url`) — they render nothing, but the block that uses them needs them in scope. */
-const DEFINITION_LINE = /^ {0,3}\[(?!\^)[^\]]+\]:[ \t]*\S.*$/gm;
 /** `<img src="...">` with a relative path: Astro would import it; the preview points at Vite's file server instead. */
 const IMG_SRC = /(<img\b[^>]*?\ssrc=")([^"]+)(")/g;
 /**
@@ -56,29 +54,10 @@ export function createBlockRenderer(ctx) {
      * @returns {Promise<RenderedBlock[]>}
      */
     async render(body, { mdx, absDir }) {
-      const { lead, blocks } = splitBlocks(body, { mdx });
-      const definitions = collectDefinitions(lead, blocks);
       const md = await getRenderer();
-      return Promise.all(
-        blocks.map(async (block) => {
-          if (block.island) return { type: block.type, island: true, html: "" };
-          const src = definitions ? `${block.src}\n\n${definitions}` : block.src;
-          const { code } = await md.render(src);
-          return { type: block.type, island: false, html: previewImages(code, absDir) };
-        }),
-      );
+      return renderBlocks(body, async (src) => previewImages((await md.render(src)).code, absDir), { mdx });
     },
   };
-}
-
-/** Every `[label]: url` line in the lead and the trailers, so `[text][label]` resolves in any block. */
-function collectDefinitions(lead, blocks) {
-  const lines = [];
-  for (const text of [lead, ...blocks.map((b) => b.trailer)]) {
-    if (!text) continue;
-    for (const m of text.matchAll(DEFINITION_LINE)) lines.push(m[0]);
-  }
-  return lines.join("\n");
 }
 
 /** Point relative image sources at the entry's directory through Vite's `/@fs/` route. */

@@ -24,6 +24,14 @@ export interface LeeHandle {
 export interface LeeHost {
   /** Ask the toolbar to switch the Edit app off. */
   requestOff(): void;
+  /**
+   * Extra buttons in the popover header while the entry is saved and clean,
+   * such as a hosted editor's Publish. Lee shows a busy dot while `run` works,
+   * then its returned text (or the error's message) as the status.
+   */
+  /** Autosave until the pill's switch says otherwise (a hosted editor, where a save is only a draft). */
+  autosave?: boolean;
+  entryActions?(doc: EntryDoc): Array<{ label: string; primary?: boolean; busy?: string; run(): Promise<string | void> }>;
 }
 
 const PREFS_KEY = "astro-lee:prefs";
@@ -50,7 +58,7 @@ class Lee {
   private root: HTMLElement;
   private panel: Pill;
 
-  private prefs: PillPrefs = loadPrefs();
+  private prefs: PillPrefs;
   private editing = false;
   private loadedFor: string | null = null;
 
@@ -104,6 +112,7 @@ class Lee {
     private canvas: ShadowRoot,
     private host: LeeHost,
   ) {
+    this.prefs = loadPrefs(host.autosave ?? false);
     const style = document.createElement("style");
     style.textContent = STYLES;
     canvas.appendChild(style);
@@ -1032,7 +1041,7 @@ class Lee {
     };
     switch (this.status) {
       case "saving":
-        view.text = "Saving…";
+        view.text = this.statusMessage || "Saving…";
         break;
       case "refreshing":
         view.text = "Updating page…";
@@ -1049,7 +1058,7 @@ class Lee {
         if (dirty && !this.issues.length) view.actions.push({ label: this.bodyReadOnly ? "Save fields" : "Retry", onClick: () => void this.save() });
         break;
       case "saved":
-        view.text = "Saved";
+        view.text = this.statusMessage || "Saved";
         break;
       case "deleted":
         view.text = "Deleted";
@@ -1078,7 +1087,21 @@ class Lee {
         } else if (dirty) view.text = "Unsaved changes";
         else view.text = this.doc ? (this.savedAt ? `${this.prefs.autosave ? "Autosaved" : "Saved"} ${formatTime(this.savedAt)}` : "Up to date") : "";
     }
+    if (this.doc && !dirty && !busy && (this.status === "idle" || this.status === "saved") && this.host.entryActions) {
+      for (const action of this.host.entryActions(this.doc)) {
+        view.actions.push({ label: action.label, primary: action.primary, onClick: () => void this.runEntryAction(action) });
+      }
+    }
     this.panel.renderStatus(view);
+  }
+
+  private async runEntryAction(action: { busy?: string; run(): Promise<string | void> }) {
+    this.setStatus("saving", action.busy);
+    try {
+      this.setStatus("saved", (await action.run()) || "");
+    } catch (err) {
+      this.setStatus("error", err instanceof Error ? err.message : String(err));
+    }
   }
 
   // ---- images and video (drop / paste on the prose only) ------------------------------
@@ -1196,12 +1219,12 @@ function issueKeyOf(issue: ValidationIssue): string | null {
   return first === undefined || first === "" ? null : String(first);
 }
 
-function loadPrefs(): PillPrefs {
+function loadPrefs(autosave: boolean): PillPrefs {
   try {
     const stored = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    return { autosave: Boolean(stored.autosave) };
+    return { autosave: typeof stored.autosave === "boolean" ? stored.autosave : autosave };
   } catch {
-    return { autosave: false };
+    return { autosave };
   }
 }
 
