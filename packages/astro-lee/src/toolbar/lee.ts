@@ -601,8 +601,8 @@ class Lee {
     this.releaseFocus();
     this.setStatus("refreshing");
     try {
-      await swapPage(url.href);
-      if (push) history.pushState({ lee: true }, "", url.href);
+      const landed = await swapPage(url.href);
+      if (push) history.pushState({ lee: true }, "", landed);
       window.scrollTo(0, 0);
       await this.loadPage();
       if (focusBody) this.page.focusStart();

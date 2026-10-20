@@ -124,7 +124,7 @@ const KEEP_SELECTOR =
  * With no URL it re-renders the current page — scroll position, the editor
  * and its focus all survive. With a URL it's a soft navigation.
  */
-export async function swapPage(href: string = location.href): Promise<void> {
+export async function swapPage(href: string = location.href): Promise<string> {
   const res = await fetch(href, { headers: { accept: "text/html" }, cache: "no-store" });
   if (!res.ok) throw new Error(`page fetch failed (${res.status})`);
   const contentType = res.headers.get("content-type") ?? "";
@@ -154,4 +154,6 @@ export async function swapPage(href: string = location.href): Promise<void> {
   for (const style of Array.from(next.head.querySelectorAll("style, link[rel=stylesheet]"))) {
     if (!haveStyles.has(style.outerHTML)) document.head.appendChild(document.adoptNode(style));
   }
+  // Where the fetch landed, after any redirect, so the address bar can show it.
+  return res.url || href;
 }
