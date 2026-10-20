@@ -6,7 +6,7 @@ import { DatePicker } from "./datepicker";
 import { findBody, markBody, unmarkAuto } from "./autobind";
 import { FieldBindings } from "./fields";
 import { RegionControl } from "./overlays";
-import { detectEntry, indexFor, routeFor, swapPage, type DetectedEntry } from "./page";
+import { detectEntry, indexFor, renamedPath, routeFor, swapPage, type DetectedEntry } from "./page";
 import { Pill, type PillPrefs, type StatusView } from "./panel/pill";
 import { clone, describe, resetViewportZoom } from "./panel/util";
 import { SourceEditor } from "./source";
@@ -618,8 +618,8 @@ class Lee {
   /**
    * Change the entry's address (the last segment of its id). Pending edits
    * are saved first — they'd be lost with the old file otherwise — then the
-   * server moves the file or folder, and the page follows to the new route
-   * (the learned pattern with the id swapped). Rejects with the reason
+   * server moves the file or folder, and the page follows to the new route:
+   * this URL with the id swapped, else the learned pattern with the new id. Rejects with the reason
    * ("taken", a bad slug) for the Address row to show; nothing else moves.
    */
   private async rename(slug: string) {
@@ -639,8 +639,7 @@ class Lee {
       throw err;
     }
     const collection = this.collections.find((c) => c.name === doc.collection) ?? { name: doc.collection, dir: "", entries: [] };
-    const { href } = routeFor(collection, renamed.id);
-    await this.navigate(href);
+    await this.navigate(renamedPath(location.pathname, doc.id, renamed.id) ?? routeFor(collection, renamed.id).href);
   }
 
   /**

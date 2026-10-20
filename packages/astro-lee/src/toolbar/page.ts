@@ -87,6 +87,22 @@ export function routeFor(collection: Collection, id: string): { href: string; gu
   return { href: `/${encodeURIComponent(collection.name)}/${encoded}/`, guessed: true };
 }
 
+/**
+ * Where the page goes after its entry is renamed: the current URL with the
+ * old id at its end swapped for the new one (a trailing slash kept). This
+ * follows routes a pattern can't describe, such as `/seo/<id>` where the
+ * folder comes from frontmatter. Null when the URL doesn't end with the id;
+ * use routeFor then.
+ */
+export function renamedPath(pathname: string, oldId: string, newId: string): string | null {
+  const encode = (id: string) => id.split("/").map(encodeURIComponent).join("/");
+  const slash = pathname.length > 1 && pathname.endsWith("/") ? "/" : "";
+  const bare = slash ? pathname.slice(0, -1) : pathname;
+  const old = `/${encode(oldId)}`;
+  if (!bare.endsWith(old)) return null;
+  return `${bare.slice(0, -old.length)}/${encode(newId)}${slash}`;
+}
+
 /** The collection's listing page, from its entry route (`/blog/[id]/` → `/blog/`) or the `/collection/` guess; null when the route starts with the id. Unchecked: it may not exist. */
 export function indexFor(collection: Collection): string | null {
   const pattern = collection.route ?? loadRoutes()[collection.name];

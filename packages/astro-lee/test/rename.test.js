@@ -4,6 +4,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { isValidSlug, slugError } from "../src/shared/slug.js";
 import { discoverCollections, hashOf, readEntry, renameEntry } from "../src/server/content.js";
 import { tempRoot, writeFiles } from "./helpers";
+import { renamedPath } from "../src/toolbar/page.ts";
 
 describe("slug rules", () => {
   it("accepts lowercase letters, digits and single dashes", () => {
@@ -118,5 +119,20 @@ describe("renameEntry", () => {
     const pinned = { ...ctx, collections: { blog: { route: "/posts/[...id]" } } };
     const renamed = await renameEntry(pinned, { collection: "blog", id: "2024/deeper", slug: "deepest" });
     expect(renamed.route).toBe("/posts/2024/deepest");
+  });
+});
+
+describe("the page follows a rename", () => {
+  it("swaps the id at the end of the current URL, wherever the route puts it", () => {
+    // A folder the route pattern can't know: it comes from the post's frontmatter.
+    expect(renamedPath("/seo/keywords/long-tail", "long-tail", "long-tail-keywords")).toBe("/seo/keywords/long-tail-keywords");
+    expect(renamedPath("/blog/hello/", "hello", "hi")).toBe("/blog/hi/");
+    expect(renamedPath("/docs/guide/intro", "guide/intro", "guide/start")).toBe("/docs/guide/start");
+  });
+
+  it("leaves the pattern to answer when the URL doesn't end with the id", () => {
+    // "tail" is the end of the last segment, not the whole segment.
+    expect(renamedPath("/seo/long-tail", "tail", "head")).toBeNull();
+    expect(renamedPath("/", "home", "start")).toBeNull();
   });
 });
