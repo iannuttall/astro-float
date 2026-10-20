@@ -8,6 +8,13 @@
     ".": {
       "types": "./index.d.ts",
       "default": "./src/index.js"
+    },
+    "./editor": {
+      "types": "./src/editor.ts",
+      "default": "./src/editor.ts"
+    },
+    "./document": {
+      "default": "./src/document.js"
     }
   },
   "types": "./index.d.ts",
