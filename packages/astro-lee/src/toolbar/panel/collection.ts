@@ -14,6 +14,8 @@ import { describe, keepInView, slugify } from "./util";
 export interface CollectionHost {
   doc(): EntryDoc | null;
   collections(): Collection[];
+  /** A link back to the host's own page (see `LeeHost.home`). */
+  home?: { label: string; href: string };
   listCollection(): string | null;
   setListCollection(name: string): void;
   navigate(href: string, opts?: { focusBody?: boolean }): Promise<void>;
@@ -114,6 +116,7 @@ export function renderCollectionFooter(host: CollectionHost, state: FootState, r
       { class: "foot-bar" },
       picker,
       toggle,
+      host.home ? h("a", { class: "btn btn-sm btn-ghost", href: host.home.href }, host.home.label) : null,
       selected
         ? h(
             "button",

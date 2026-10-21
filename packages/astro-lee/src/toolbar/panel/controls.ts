@@ -48,7 +48,7 @@ function buildControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
     case "enum":
       return enumControl(def, value, ctx);
     case "tags":
-      return tagsControl(value, ctx);
+      return tagsControl(def, value, ctx);
     case "image":
       return imageControl(value, ctx);
     case "object":
@@ -77,8 +77,17 @@ function stringControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control 
     maxlength: def.max,
   }) as HTMLInputElement;
   input.addEventListener("input", () => ctx.onChange(input.value));
+  let el: HTMLElement = input;
+  if (def.values?.length) {
+    // What other entries use here (a series, a category): pick one instead of retyping it.
+    const menu = suggestions(input, () => def.values!.filter((v) => v !== input.value), (v) => {
+      input.value = v;
+      ctx.onChange(v);
+    });
+    el = h("div", { class: "suggest" }, input, menu);
+  }
   return {
-    el: input,
+    el,
     inline: false,
     set: (v) => {
       if (ctx.canvas.activeElement === input) return;
@@ -86,6 +95,113 @@ function stringControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control 
       if (input.value !== text) input.value = text;
     },
   };
+}
+
+// ---- suggestions -----------------------------------------------------------------------
+
+let suggestIds = 0;
+
+/**
+ * A list under `input` of the values `pool()` offers, filtered by what's typed
+ * (prefix matches first). Shows on focus, so you can see what's there before
+ * typing. ↑/↓ move, Enter or a click picks, Escape closes. Registers its
+ * keydown in the capture phase so Enter on a highlighted value never reaches
+ * the control's own Enter.
+ */
+function suggestions(input: HTMLInputElement, pool: () => string[], pick: (value: string) => void): HTMLElement {
+  const id = `lee-suggest-${++suggestIds}`;
+  const list = h("div", { class: "suggest-list", role: "listbox", id, hidden: true });
+  input.setAttribute("role", "combobox");
+  input.setAttribute("aria-autocomplete", "list");
+  input.setAttribute("aria-controls", id);
+  input.setAttribute("aria-expanded", "false");
+  input.autocomplete = "off";
+  let shown: string[] = [];
+  let active = -1;
+
+  const close = () => {
+    list.hidden = true;
+    input.setAttribute("aria-expanded", "false");
+    input.removeAttribute("aria-activedescendant");
+    active = -1;
+  };
+  const highlight = (i: number) => {
+    active = i;
+    list.querySelectorAll<HTMLElement>(".suggest-item").forEach((item, j) => item.setAttribute("aria-selected", String(j === i)));
+    if (i >= 0) input.setAttribute("aria-activedescendant", `${id}-${i}`);
+    else input.removeAttribute("aria-activedescendant");
+  };
+  const choose = (value: string) => {
+    pick(value);
+    // A tags field clears its input for the next one; a text field is done.
+    if (input.value) close();
+    else open();
+  };
+  const open = () => {
+    const query = input.value.trim().toLowerCase();
+    const all = pool();
+    const starts = all.filter((v) => v.toLowerCase().startsWith(query));
+    const contains = query ? all.filter((v) => !v.toLowerCase().startsWith(query) && v.toLowerCase().includes(query)) : [];
+    shown = [...starts, ...contains].slice(0, 8);
+    if (!shown.length) return close();
+    replaceChildren(
+      list,
+      shown.map((value, i) =>
+        h(
+          "div",
+          {
+            class: "suggest-item",
+            role: "option",
+            id: `${id}-${i}`,
+            "aria-selected": "false",
+            // mousedown, not click: the input keeps focus, so a tags field doesn't commit half a word on blur.
+            onMousedown: (e: MouseEvent) => {
+              e.preventDefault();
+              choose(value);
+            },
+            onMousemove: () => active !== i && highlight(i),
+          },
+          value,
+        ),
+      ),
+    );
+    list.hidden = false;
+    input.setAttribute("aria-expanded", "true");
+    highlight(-1);
+  };
+
+  input.addEventListener("focus", open);
+  input.addEventListener("input", open);
+  input.addEventListener("blur", close);
+  input.addEventListener(
+    "keydown",
+    (e) => {
+      if (list.hidden) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          open();
+        }
+        return;
+      }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const step = e.key === "ArrowDown" ? 1 : -1;
+        // Past either end goes back to the typed text (nothing highlighted).
+        const next = active + step;
+        highlight(next >= shown.length ? -1 : next < -1 ? shown.length - 1 : next);
+      } else if (e.key === "Enter" && active >= 0) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        choose(shown[active]);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      }
+    },
+    true,
+  );
+  return list;
 }
 
 function textControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
@@ -387,7 +503,7 @@ function selectControl(options: Array<{ value: string; label: string; title?: st
 // ---- tags ------------------------------------------------------------------------------
 
 /** Chips plus a text input: Enter or comma adds, Backspace on an empty input removes the last chip. */
-function tagsControl(value: unknown, ctx: ControlCtx): Control {
+function tagsControl(def: FieldDef, value: unknown, ctx: ControlCtx): Control {
   let items: Array<string | number> = Array.isArray(value) ? (value.filter((v) => typeof v === "string" || typeof v === "number") as Array<string | number>) : [];
   const numeric = items.length > 0 && items.every((v) => typeof v === "number");
   const list = h("div", { class: "chips-list" });
@@ -449,8 +565,15 @@ function tagsControl(value: unknown, ctx: ControlCtx): Control {
     if (input.value.includes(",")) add();
   });
   paint();
+  // Tags other entries already use, so "tool" doesn't become a second "tools".
+  const menu = def.values?.length
+    ? suggestions(input, () => def.values!.filter((v) => !items.includes(v)), (v) => {
+        input.value = v;
+        add();
+      })
+    : null;
   return {
-    el: box,
+    el: menu ? h("div", { class: "suggest" }, box, menu) : box,
     inline: false,
     set: (v) => {
       items = Array.isArray(v) ? (v.filter((x) => typeof x === "string" || typeof x === "number") as Array<string | number>) : [];

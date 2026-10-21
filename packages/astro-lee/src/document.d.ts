@@ -23,3 +23,8 @@ export interface RenderedBlock {
 
 /** Render a body block by block with the project's Markdown pipeline (the Markdown tab's live preview). Islands come back as `html: ""`. */
 export function renderBlocks(body: string, renderMarkdown: (markdown: string) => Promise<string>, options?: { mdx?: boolean }): Promise<RenderedBlock[]>;
+
+import type { FieldDef } from "./toolbar/schema";
+
+/** Top-level tags and repeated short-text fields with `values` (suggestions): what the entries already use, most used first. */
+export function withFieldValues(fields: FieldDef[], frontmatters: Array<Record<string, unknown>>): FieldDef[];

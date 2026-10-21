@@ -87,3 +87,42 @@ export function inferType(key, value) {
   if (typeof value === "object") return "object";
   return "json";
 }
+
+/** Most suggestions a field carries; a tag cloud bigger than this is noise. */
+const VALUES_MAX = 200;
+
+/**
+ * Fill `values` on top-level tags and short-text fields: what the collection's
+ * entries already use there, most used first, so the panel can suggest them
+ * as you type. Tags always get them. A text field gets them when some value
+ * appears in two or more entries, or when only a minority of entries set it
+ * (a series or category); not when every entry has its own (a title).
+ *
+ * @param {FieldDef[]} fields
+ * @param {Array<Record<string, unknown>>} frontmatters
+ * @returns {FieldDef[]}
+ */
+export function withFieldValues(fields, frontmatters) {
+  return fields.map((field) => {
+    if (field.type !== "tags" && field.type !== "string") return field;
+    /** @type {Map<string, number>} */
+    const counts = new Map();
+    for (const data of frontmatters) {
+      const value = data?.[field.key];
+      const list = field.type === "tags" ? (Array.isArray(value) ? value : []) : [value];
+      for (const v of new Set(list)) {
+        if (typeof v !== "string" || !v.trim() || v.length > TEXT_MAX) continue;
+        counts.set(v, (counts.get(v) ?? 0) + 1);
+      }
+    }
+    if (!counts.size) return field;
+    // One of its own per entry (a title, a canonical URL): nothing worth suggesting.
+    const used = [...counts.values()].reduce((a, b) => a + b, 0);
+    if (field.type === "string" && Math.max(...counts.values()) < 2 && used * 2 >= frontmatters.length) return field;
+    const values = [...counts]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, VALUES_MAX)
+      .map(([v]) => v);
+    return { ...field, values };
+  });
+}

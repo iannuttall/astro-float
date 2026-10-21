@@ -13,3 +13,6 @@ export function humanize(key: string): string;
 export function inferField(key: string, value: unknown): FieldDef;
 /** The control a value asks for. */
 export function inferType(key: string, value: unknown): FieldType;
+
+/** Top-level tags and repeated short-text fields with `values`: what the entries already use, most used first. */
+export function withFieldValues(fields: FieldDef[], frontmatters: Array<Record<string, unknown>>): FieldDef[];

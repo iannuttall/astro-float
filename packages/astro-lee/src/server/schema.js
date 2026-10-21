@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { humanize, inferField, TEXT_KEYS, TEXT_MAX } from "../shared/infer.js";
+import { humanize, inferField, TEXT_KEYS, TEXT_MAX, withFieldValues } from "../shared/infer.js";
 import { importFromAstro } from "./astro-deps.js";
 import { parseDocument } from "./content.js";
 
@@ -60,9 +60,24 @@ export async function readCollectionSchema(ctx, collection) {
   if (fromZod) {
     const hints = await collectHints(ctx, collection.name);
     if (hints.size) applyHints(fromZod, hints, "");
-    return { collection: collection.name, source: "zod", fields: fromZod };
+    return { collection: collection.name, source: "zod", fields: withFieldValues(fromZod, await readFrontmatters(ctx, collection)) };
   }
-  return { collection: collection.name, source: "inferred", fields: await inferFields(ctx, collection) };
+  const fields = await inferFields(ctx, collection);
+  return { collection: collection.name, source: "inferred", fields: withFieldValues(fields, await readFrontmatters(ctx, collection)) };
+}
+
+/** Every entry's frontmatter (unreadable files skipped), for the values the panel suggests. */
+async function readFrontmatters(ctx, collection) {
+  const all = await Promise.all(
+    (collection.entries ?? []).map(async (e) => {
+      try {
+        return parseDocument(await fs.readFile(path.resolve(ctx.root, e.file), "utf8")).frontmatter;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return all.filter((f) => f !== null);
 }
 
 // ---- 1. Astro's JSON Schema ----------------------------------------------------------

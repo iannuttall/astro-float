@@ -38,6 +38,7 @@ export interface FieldDef {
   required: boolean; // not optional / no default / not nullable
   default?: unknown; // from .default()
   options?: string[]; // enum
+  values?: string[]; // tags / string: what other entries already use, most used first (suggestions, not a rule)
   item?: FieldDef; // array
   fields?: FieldDef[]; // object
   collection?: string; // reference

@@ -132,10 +132,28 @@ describe("readCollectionSchema", () => {
         { key: "title", label: "Title", type: "string", required: false },
         { key: "when", label: "When", type: "date", required: false },
         // Empty in the first entry: the first non-empty value wins the type.
-        { key: "tags", label: "Tags", type: "tags", required: false },
+        { key: "tags", label: "Tags", type: "tags", required: false, values: ["a"] },
         { key: "draft", label: "Draft", type: "boolean", required: false },
       ],
     });
+  });
+
+  it("suggests the tags and repeated text values the entries already use, most used first", async () => {
+    const root = makeRoot({
+      "src/content/blog/a.md": "---\ntitle: Alpha\nseries: seo\nhub: guides\ntags: [zebra, apple, apple]\n---\n",
+      "src/content/blog/b.md": "---\ntitle: Beta\nseries: seo\ntags: [zebra]\n---\n",
+      "src/content/blog/c.md": "---\ntitle: Gamma\nseries: ai\ntags: [apple, mango, zebra]\n---\n",
+      "src/content/blog/d.md": "---\ntitle: Delta\n---\n",
+    });
+    const entries = ["a", "b", "c", "d"].map((id) => ({ file: `src/content/blog/${id}.md` }));
+    const f = byKey((await readCollectionSchema({ root }, { name: "blog", entries })).fields);
+    // zebra is in three posts, apple in two (twice in one, counted once), mango in one: count, then A–Z.
+    expect(f.tags.values).toEqual(["zebra", "apple", "mango"]);
+    // A series repeats, so every value used is offered; titles never repeat, so they aren't.
+    expect(f.series.values).toEqual(["seo", "ai"]);
+    expect(f.title).not.toHaveProperty("values");
+    // Used once, but by one entry in four: the first post of a new series still offers its name to the second.
+    expect(f.hub.values).toEqual(["guides"]);
   });
 
   it("ignores a collection name that could escape .astro/collections", async () => {

@@ -5,3 +5,4 @@
 export { splitBlocks } from "./server/blocks.js";
 export { parseDocument, serializeDocument } from "./shared/document.js";
 export { renderBlocks } from "./shared/render-blocks.js";
+export { withFieldValues } from "./shared/infer.js";

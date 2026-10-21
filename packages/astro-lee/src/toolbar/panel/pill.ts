@@ -48,6 +48,8 @@ export interface PillHost {
   original(): Frontmatter;
   schema(): CollectionSchema | null;
   collections(): Collection[];
+  /** See `LeeHost.home`. */
+  home?: { label: string; href: string };
   listCollection(): string | null;
   setListCollection(name: string): void;
   /** The field is edited on the page itself (bound by attribute or found by text): the popover leaves it out. */
@@ -421,6 +423,7 @@ export class Pill {
         {
           doc: () => this.host.doc(),
           collections: () => this.host.collections(),
+          home: this.host.home,
           listCollection: () => this.host.listCollection(),
           setListCollection: (name) => this.host.setListCollection(name),
           navigate: (href, opts) => this.host.navigate(href, opts),

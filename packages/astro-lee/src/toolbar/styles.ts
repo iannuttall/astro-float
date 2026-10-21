@@ -305,6 +305,11 @@ button.address:hover, button.address:focus-visible { background: var(--bg-hover)
 .chip-x:hover { background: var(--bg-active); color: var(--fg); }
 .chips-input { flex: 1; min-width: 60px; height: 22px; padding: 0 4px; border: 0; background: none; outline: none; font-size: 13px; }
 .chips-input::placeholder { color: var(--fg-faint); }
+.suggest { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.suggest-list { display: flex; flex-direction: column; max-height: 200px; overflow-y: auto; padding: 3px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); }
+.suggest-list[hidden] { display: none; }
+.suggest-item { padding: 4px 8px; border-radius: 4px; font-size: 13px; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.suggest-item[aria-selected="true"] { background: var(--bg-hover); }
 
 .image-field { display: flex; flex-direction: column; gap: 6px; }
 .image-row { display: flex; align-items: center; gap: 10px; }

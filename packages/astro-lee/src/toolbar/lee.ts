@@ -24,13 +24,15 @@ export interface LeeHandle {
 export interface LeeHost {
   /** Ask the toolbar to switch the Edit app off. */
   requestOff(): void;
+  /** Autosave until the pill's switch says otherwise (a hosted editor, where a save is only a draft). */
+  autosave?: boolean;
+  /** A link in the popover's footer back to the host's own page, such as a hosted editor's list of posts. */
+  home?: { label: string; href: string };
   /**
    * Extra buttons in the popover header while the entry is saved and clean,
    * such as a hosted editor's Publish. Lee shows a busy dot while `run` works,
    * then its returned text (or the error's message) as the status.
    */
-  /** Autosave until the pill's switch says otherwise (a hosted editor, where a save is only a draft). */
-  autosave?: boolean;
   entryActions?(doc: EntryDoc): Array<{ label: string; primary?: boolean; busy?: string; run(): Promise<string | void> }>;
 }
 
@@ -150,6 +152,7 @@ class Lee {
       original: () => this.doc?.frontmatter ?? {},
       schema: () => this.schema,
       collections: () => this.collections,
+      home: this.host.home,
       listCollection: () => this.listCollection,
       setListCollection: (name) => (this.listCollection = name),
       onPage: (key) => this.fields.has(key),
