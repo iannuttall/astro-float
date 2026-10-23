@@ -15,7 +15,7 @@ export default async function globalSetup() {
   const logDir = path.join(REPO, "test-results");
   fs.mkdirSync(logDir, { recursive: true });
   const log = fs.createWriteStream(path.join(logDir, "astro-dev.log"), { flags: "a" });
-  const dev: ChildProcess = spawn("pnpm", ["--filter", "demo", "exec", "astro", "dev", "--port", String(port), "--host", "127.0.0.1"], {
+  const dev: ChildProcess = spawn("pnpm", ["--filter", "demo", "exec", "astro", "dev", "--port", String(port), "--host", "127.0.0.1", "--ignore-lock"], {
     cwd: REPO,
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, FORCE_COLOR: "0" },

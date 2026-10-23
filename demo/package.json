@@ -9,13 +9,13 @@
     "check": "astro check"
   },
   "dependencies": {
-    "@astrojs/mdx": "^4.3.14",
-    "astro": "^5.13.0",
+    "@astrojs/mdx": "^8.1.1",
+    "astro": "^7.4.2",
     "astro-lee": "workspace:*"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.10",
-    "sharp": "^0.34.0",
+    "@astrojs/check": "^0.9.12",
+    "sharp": "^0.35.5",
     "typescript": "^5.9.3"
   }
 }

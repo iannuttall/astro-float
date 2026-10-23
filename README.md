@@ -212,7 +212,7 @@ packages/astro-lee/     the integration (what you'd publish to npm)
   src/toolbar/html-to-md.ts  HTML → Markdown for edited blocks
   src/toolbar/embeds.ts   accepted media files, their Markdown, and URL → embed blocks
   src/toolbar/styles.ts   pill / popover styles (light, dark to match the site)
-demo/                   a minimal Astro 5 blog (+ one .mdx post), a `notes` collection (one folder entry, one flat file) whose schema
+demo/                   a minimal Astro 7 blog (+ one .mdx post), a `notes` collection (one folder entry, one flat file) whose schema
                         uses z.enum / z.number / .optional / .describe / image() / reference("blog"), + generic [collection] routes
 docs/                   screenshots
 scripts/compat/         Astro-version compat check: `scripts/compat/switch.sh 7.3.2 8.0.1 && scripts/compat/run.sh 4367 astro7` (see its README)

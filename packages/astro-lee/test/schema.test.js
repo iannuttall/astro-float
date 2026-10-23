@@ -68,6 +68,25 @@ describe("fieldsFromJsonSchema", () => {
     expect(f.$schema).toBeUndefined();
   });
 
+  it("tells Zod 4 dates from ISO datetime strings (Astro 7 output)", () => {
+    const iso = { type: "string", format: "date-time", pattern: "^\\d{4}-\\d{2}-\\d{2}T.*Z$" };
+    const f = byKey(
+      fieldsFromJsonSchema({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: {
+          pubDate: { type: "string", format: "date-time" },
+          updated: { anyOf: [{ type: "string", format: "date-time" }, { type: "null" }] },
+          stamp: iso,
+        },
+        required: ["pubDate", "stamp"],
+      }),
+    );
+    expect(f.pubDate).toMatchObject({ type: "date", required: true });
+    expect(f.updated).toMatchObject({ type: "date", required: false });
+    expect(f.stamp).toMatchObject({ type: "datetime", required: true });
+  });
+
   it("returns null for anything that isn't an object schema", () => {
     expect(fieldsFromJsonSchema(null)).toBeNull();
     expect(fieldsFromJsonSchema({ type: "string" })).toBeNull();

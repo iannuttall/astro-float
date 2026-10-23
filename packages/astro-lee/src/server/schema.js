@@ -176,6 +176,7 @@ function shapeOf(doc, node, key) {
     // z.coerce.date() / z.date(): Astro emits { date-time | date | unix-time }. A
     // schema that only allows date-time is a datetime; the coerce union takes either.
     const formats = new Set(real.filter((b) => b.type === "string").map((b) => b.format));
+    if (real.length === 1 && isZodDate(doc, real[0])) return { type: "date", nullable };
     if (formats.has("date-time") && !formats.has("date")) return { type: "datetime", nullable };
     if (formats.has("date")) return { type: "date", nullable };
     // reference("blog"): a string id, or { id | slug, collection }. The collection name is filled in by `collectHints`.
@@ -199,6 +200,7 @@ function shapeOf(doc, node, key) {
   const nullable = Array.isArray(node.type) && node.type.includes("null") ? true : undefined;
   switch (type) {
     case "string": {
+      if (isZodDate(doc, node)) return { type: "date", nullable };
       if (node.format === "date-time") return { type: "datetime", nullable };
       if (node.format === "date") return { type: "date", nullable };
       const min = typeof node.minLength === "number" ? node.minLength : undefined;
@@ -226,6 +228,14 @@ function shapeOf(doc, node, key) {
     default:
       return { type: "json", nullable };
   }
+}
+
+/**
+ * z.date() / z.coerce.date() under Zod 4 (Astro 7, JSON Schema 2020-12): Astro writes a bare
+ * `{ type: "string", format: "date-time" }`, while z.iso.datetime() always carries a `pattern`.
+ */
+function isZodDate(doc, node) {
+  return String(doc?.$schema).includes("2020-12") && node.type === "string" && node.format === "date-time" && !node.pattern;
 }
 
 function numberOr(a, b) {
