@@ -117,6 +117,17 @@ export class SourceEditor {
     this.replace(this.area.selectionStart, this.area.selectionEnd, text);
   }
 
+  /** Insert a block on its own lines at the caret: after the line it is on, with a blank line either side. */
+  insertBlock(block: string) {
+    const value = this.area.value;
+    const lineEnd = value.indexOf("\n", this.area.selectionEnd);
+    const at = lineEnd < 0 ? value.length : lineEnd;
+    const before = value.slice(0, at).replace(/\s+$/, "");
+    const after = value.slice(at).replace(/^\s+/, "");
+    const text = (before ? "\n\n" : "") + block + (after ? "\n\n" : "\n");
+    this.replace(before.length, value.length - after.length, text);
+  }
+
   dispose() {
     this.el.remove();
   }

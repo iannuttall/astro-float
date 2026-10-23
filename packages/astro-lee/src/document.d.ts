@@ -4,6 +4,8 @@ export interface Block {
   text: string;
   src: string;
   trailer: string;
+  /** Set on a block that is only an HTML comment (`<!-- members -->` → "members"). */
+  comment?: string;
 }
 
 /** Split a Markdown body into the blocks the visual editor lines up with. */

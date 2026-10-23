@@ -16,9 +16,14 @@ export const ISLAND_TYPES = new Set(["mdxJsxFlowElement", "html"]);
  * MDX component blocks and raw HTML blocks are flagged as islands: the client
  * keeps them atomic (move / remove only) and always writes back their source.
  *
- * Nodes that render nothing (link reference definitions, HTML comments, MDX
- * import/export statements) are carried as a `trailer` on the block before
- * them. `lead` is anything before the first rendering block.
+ * Nodes that render nothing (link reference definitions, MDX import/export
+ * statements) are carried as a `trailer` on the block before them. `lead` is
+ * anything before the first rendering block.
+ *
+ * An HTML comment on its own (`<!-- members -->`) is a block of its own, an
+ * island with `comment` set to its text: the client draws it as a visible
+ * marker, so it can be moved or removed on purpose but never lost with the
+ * paragraph before it. Comments next to each other are one block.
  *
  * @param {string} body
  * @param {{ mdx?: boolean }} [options]
@@ -26,7 +31,7 @@ export const ISLAND_TYPES = new Set(["mdxJsxFlowElement", "html"]);
  * no images), which lets the client find the rendered body on a page that has
  * no `data-lee-body` attribute.
  *
- * @returns {{ lead: string, blocks: Array<{ src: string, trailer: string, type: string, island: boolean, text: string }> }}
+ * @returns {{ lead: string, blocks: Array<{ src: string, trailer: string, type: string, island: boolean, text: string, comment?: string }> }}
  */
 export function splitBlocks(body, { mdx = false } = {}) {
   let tree;
@@ -41,7 +46,7 @@ export function splitBlocks(body, { mdx = false } = {}) {
     return splitBlocks(body, { mdx: false });
   }
 
-  const rendering = mergeWrappers(tree.children.filter((node) => rendersToDom(node)), body);
+  const rendering = mergeComments(mergeWrappers(tree.children.filter((node) => rendersToDom(node)), body), body);
   const blocks = [];
 
   for (let i = 0; i < rendering.length; i++) {
@@ -50,12 +55,14 @@ export function splitBlocks(body, { mdx = false } = {}) {
     const start = node.position.start.offset;
     const end = node.position.end.offset;
     const trailerEnd = next ? next.position.start.offset : body.length;
+    const comment = commentText(node);
     blocks.push({
       type: node.type,
-      island: isIsland(node),
-      text: plainText(node),
+      island: comment !== null || isIsland(node),
+      text: comment !== null ? "" : plainText(node),
       src: body.slice(start, end).replace(/\s+$/, ""),
       trailer: body.slice(end, trailerEnd).trim(),
+      ...(comment !== null ? { comment } : {}),
     });
   }
 
@@ -134,9 +141,31 @@ function rendersToDom(node) {
   if (node.type === "definition" || node.type === "footnoteDefinition") return false;
   // import/export statements and `{/* comments */}` / expressions don't produce blocks.
   if (node.type === "mdxjsEsm" || node.type === "mdxFlowExpression") return false;
-  if (node.type === "html") {
-    // Comments (and nothing but comments) don't produce elements.
-    return node.value.replace(/<!--[\s\S]*?-->/g, "").trim() !== "";
-  }
+  // An HTML comment alone is a block too: the client gives it an element (see commentText).
   return true;
+}
+
+const ONLY_COMMENTS = /^(?:\s*<!--[\s\S]*?-->)+\s*$/;
+
+/** The text of an HTML block that is nothing but comments (`<!-- members -->` → "members"), else null. */
+export function commentText(node) {
+  if (node.type !== "html" || !ONLY_COMMENTS.test(node.value)) return null;
+  return [...node.value.matchAll(/<!--([\s\S]*?)-->/g)].map((m) => m[1].trim()).join(" ");
+}
+
+/**
+ * Comment blocks next to each other render as comments next to each other,
+ * which the client cannot tell apart: fold each run into one block.
+ */
+function mergeComments(nodes, body) {
+  const out = [];
+  for (const node of nodes) {
+    const prev = out[out.length - 1];
+    if (prev && commentText(prev) !== null && commentText(node) !== null) {
+      const { start } = prev.position;
+      const { end } = node.position;
+      out[out.length - 1] = { type: "html", value: body.slice(start.offset, end.offset), position: { start, end } };
+    } else out.push(node);
+  }
+  return out;
 }

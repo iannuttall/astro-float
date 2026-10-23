@@ -59,11 +59,27 @@ describe("PageEditor round trip", () => {
 
   it("moves an island's source verbatim when its DOM node moves", async () => {
     const { editor, container } = await bound(BODY);
-    const island = container.querySelector("[data-lee-island]") as HTMLElement;
+    const island = container.querySelector(".raw[data-lee-island]") as HTMLElement;
     expect(island.tagName).toBe("DIV");
     expect(island.contentEditable).toBe("false");
     container.querySelector("ul")!.before(island);
     expect(editor.toMarkdown()).toBe(BODY.replace(`${LIST}\n\n${ISLAND}`, `${ISLAND}\n\n${LIST}`));
+  });
+
+  it("keeps a members comment when the paragraph above it is edited, and inserts one where asked", async () => {
+    const body = "Free part.\n\n<!-- members -->\n\nPaid part.\n";
+    const { editor, container } = await bound(body);
+    expect(editor.mapped).toBe(true);
+    expect(editor.hasComment("members")).toBe(true);
+    container.querySelector("p")!.textContent = "Free part, edited.";
+    expect(editor.toMarkdown()).toBe(body.replace("Free part.", "Free part, edited."));
+
+    const plain = await bound("One.\n\nTwo.\n");
+    expect(plain.editor.hasComment("members")).toBe(false);
+    const range = document.createRange();
+    range.selectNodeContents(plain.container.querySelector("p")!);
+    plain.editor.insertComment("members", range);
+    expect(plain.editor.toMarkdown()).toBe("One.\n\n<!-- members -->\n\nTwo.\n");
   });
 
   it("drops a removed block and appends a typed one", async () => {

@@ -7,37 +7,54 @@ describe("splitBlocks on Markdown", () => {
   const { lead, blocks } = splitBlocks(body);
 
   it("keeps everything before the first rendering block as the lead", () => {
-    expect(lead).toBe("<!-- lead comment -->\n\n[docs]: https://docs.example.test/");
+    expect(lead).toBe("");
+    expect(splitBlocks("[docs]: https://x.test/\n\n# Title\n").lead).toBe("[docs]: https://x.test/");
   });
 
   it("returns each block's exact source, in order, with islands flagged", () => {
     expect(blocks.map((b) => [b.type, b.island])).toEqual([
+      ["html", true],
       ["heading", false],
       ["paragraph", false],
       ["list", false],
       ["html", true],
+      ["html", true],
       ["code", false],
       ["paragraph", false],
     ]);
-    expect(blocks[0].src).toBe("# Title");
-    expect(blocks[1].src).toBe("A paragraph with a [reference link][docs], `inline code` and an ![image](./pic.png).");
-    expect(blocks[2].src).toBe("- a\n- b");
-    expect(blocks[3].src).toBe('<div class="raw">raw html block</div>');
-    expect(blocks[4].src).toBe("```js\nconst x = 1;\n```");
-    expect(blocks[5].src).toBe("Last paragraph with a hard  \nbreak.");
+    expect(blocks[0].src).toBe("<!-- lead comment -->");
+    expect(blocks[1].src).toBe("# Title");
+    expect(blocks[2].src).toBe("A paragraph with a [reference link][docs], `inline code` and an ![image](./pic.png).");
+    expect(blocks[3].src).toBe("- a\n- b");
+    expect(blocks[4].src).toBe('<div class="raw">raw html block</div>');
+    expect(blocks[5].src).toBe("<!-- members -->");
+    expect(blocks[6].src).toBe("```js\nconst x = 1;\n```");
+    expect(blocks[7].src).toBe("Last paragraph with a hard  \nbreak.");
   });
 
   it("carries nodes that render nothing as the trailer of the block before them", () => {
-    expect(blocks[1].trailer).toBe("[^1]: A footnote definition that renders nothing.");
-    expect(blocks[3].trailer).toBe("<!-- a comment only: not a block -->");
+    expect(blocks[0].trailer).toBe("[docs]: https://docs.example.test/");
+    expect(blocks[2].trailer).toBe("[^1]: A footnote definition that renders nothing.");
     expect(blocks.filter((b) => b.trailer).length).toBe(2);
+  });
+
+  it("makes an HTML comment its own block, so editing the block before it cannot drop it", () => {
+    expect(blocks.map((b) => b.comment)).toEqual(["lead comment", undefined, undefined, undefined, undefined, "members", undefined, undefined]);
+    const { blocks: merged } = splitBlocks("Free.\n\n<!-- members -->\n\n<!-- note -->\n\nPaid.\n");
+    expect(merged.map((b) => [b.src, b.comment])).toEqual([
+      ["Free.", undefined],
+      ["<!-- members -->\n\n<!-- note -->", "members note"],
+      ["Paid.", undefined],
+    ]);
   });
 
   it("gives each block the plain text it renders to", () => {
     expect(blocks.map((b) => b.text)).toEqual([
+      "",
       "Title",
       "A paragraph with a reference link, inline code and an .",
       "ab",
+      "",
       "",
       "const x = 1;",
       "Last paragraph with a hard break.",
@@ -45,13 +62,13 @@ describe("splitBlocks on Markdown", () => {
   });
 
   it("reassembles to the original body", () => {
-    const parts = [lead, ...blocks.map((b) => (b.trailer ? `${b.src}\n\n${b.trailer}` : b.src))];
+    const parts = [lead, ...blocks.map((b) => (b.trailer ? `${b.src}\n\n${b.trailer}` : b.src))].filter(Boolean);
     expect(parts.join("\n\n") + "\n").toBe(body);
   });
 
   it("handles an empty body and a body with no rendering blocks", () => {
     expect(splitBlocks("")).toEqual({ lead: "", blocks: [] });
-    expect(splitBlocks("<!-- only a comment -->\n")).toEqual({ lead: "<!-- only a comment -->", blocks: [] });
+    expect(splitBlocks("<!-- only a comment -->\n").blocks.map((b) => b.comment)).toEqual(["only a comment"]);
     expect(splitBlocks("[ref]: https://x.test/\n")).toEqual({ lead: "[ref]: https://x.test/", blocks: [] });
   });
 

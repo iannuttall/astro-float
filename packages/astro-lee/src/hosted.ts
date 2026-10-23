@@ -19,6 +19,8 @@ export interface HostedOptions {
   entryActions?: LeeHost["entryActions"];
   /** A link in the popover's footer back to your own page, such as `{ label: "All posts", href: "/admin" }`. */
   home?: LeeHost["home"];
+  /** Named HTML comments with a label and an Insert button (see `LeeHost.markers`). */
+  markers?: LeeHost["markers"];
 }
 
 export function mountHostedLee(options: HostedOptions): LeeHandle {
@@ -32,6 +34,7 @@ export function mountHostedLee(options: HostedOptions): LeeHandle {
     autosave: true,
     entryActions: options.entryActions,
     home: options.home,
+    markers: options.markers,
   });
   void lee.setEditing(true);
   return lee;

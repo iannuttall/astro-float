@@ -13,7 +13,7 @@ A paragraph with a [reference link][docs], `inline code` and an ![image](./pic.p
 
 <div class="raw">raw html block</div>
 
-<!-- a comment only: not a block -->
+<!-- members -->
 
 ```js
 const x = 1;

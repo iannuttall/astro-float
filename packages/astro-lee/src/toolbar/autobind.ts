@@ -144,7 +144,9 @@ function scoreChildren(el: Element, blocks: SourceBlock[]) {
  * The element that wraps the rendered body. Exact alignment with the source
  * blocks wins; among equal scores the smallest (deepest) element wins.
  */
-export function findBody(blocks: SourceBlock[]): HTMLElement | null {
+export function findBody(all: SourceBlock[]): HTMLElement | null {
+  // A comment renders no element (the editor draws one later), so the page's children skip it.
+  const blocks = all.filter((block) => block.comment === undefined);
   if (!blocks.length) return null;
   let best: { el: HTMLElement; score: number } | null = null;
   for (const el of walk(document.body)) {

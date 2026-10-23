@@ -1,7 +1,7 @@
 import { api, ApiError, onFileChanged, type Collection, type EntryDoc, type FileChange, type Frontmatter, type MediaItem, type ValidationIssue } from "./api";
 import { isMediaFile, mediaMarkdown } from "./embeds";
 import { h } from "./dom";
-import { ensurePageStyle, PageEditor, removePageStyle } from "./editor";
+import { ensurePageStyle, PageEditor, removePageStyle, type CommentMarker } from "./editor";
 import { DatePicker } from "./datepicker";
 import { findBody, markBody, unmarkAuto } from "./autobind";
 import { FieldBindings } from "./fields";
@@ -28,6 +28,14 @@ export interface LeeHost {
   autosave?: boolean;
   /** A link in the popover's footer back to the host's own page, such as a hosted editor's list of posts. */
   home?: { label: string; href: string };
+  /**
+   * Named HTML comments, such as a members cut: `{ comment: "members", label:
+   * "Members only below", button: "Members line" }`. Every comment on its own
+   * shows on the page as a labelled rule (its text, without a label here);
+   * these also get an Insert button in the body's corner, in both views, once
+   * per entry.
+   */
+  markers?: CommentMarker[];
   /**
    * Extra buttons in the popover header while the entry is saved and clean,
    * such as a hosted editor's Publish. Lee shows a busy dot while `run` works,
@@ -129,6 +137,7 @@ class Lee {
       },
       onFiles: (files, range) => void this.uploadAll(files, range),
     });
+    this.page.markers = host.markers ?? [];
     this.fields = new FieldBindings({
       onChange: (key, value) => {
         this.draftFrontmatter[key] = value;
@@ -361,6 +370,18 @@ class Lee {
       busy: () => this.sourceBusy,
       error: () => this.sourceError,
       discard: () => this.discardSource(),
+      markers: () =>
+        (this.host.markers ?? []).map((marker) => ({
+          button: marker.button ?? marker.label,
+          present: this.sourceArea ? commentIn(this.sourceDraft, marker.comment) : this.page.hasComment(marker.comment),
+        })),
+      insertMarker: (index: number) => {
+        const marker = this.host.markers?.[index];
+        if (!marker) return;
+        if (this.sourceEditor) this.sourceEditor.insertBlock(`<!-- ${marker.comment} -->`);
+        else this.page.insertComment(marker.comment);
+        this.region.refresh();
+      },
     };
   }
 
@@ -1237,4 +1258,10 @@ function formatTime(ts: number) {
 
 function altFrom(name: string) {
   return name.replace(/\.[^.]+$/, "").replace(/[-_]+/g, " ");
+}
+
+/** Whether Markdown has `<!-- comment -->` on a line of its own. */
+function commentIn(markdown: string, comment: string): boolean {
+  const escaped = comment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^[ \\t]*<!--\\s*${escaped}\\s*-->[ \\t]*$`, "m").test(markdown);
 }

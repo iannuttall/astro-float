@@ -41,6 +41,9 @@ export interface RegionActions {
   /** The last attempt to leave source view failed; shown next to a Discard escape hatch. */
   error(): string | null;
   discard(): void;
+  /** The host's named comments: one Insert button each, off when the entry already has it. */
+  markers?(): Array<{ button: string; present: boolean }>;
+  insertMarker?(index: number): void;
 }
 
 /**
@@ -214,6 +217,12 @@ export class RegionControl {
       });
     });
     el.appendChild(copy);
+
+    (actions.markers?.() ?? []).forEach((marker, index) => {
+      const insert = makeButton("separator", marker.present ? `${marker.button} is already in this post` : `Insert ${marker.button.toLowerCase()}`, () => actions.insertMarker?.(index));
+      insert.disabled = marker.present;
+      el.appendChild(insert);
+    });
 
     const isSource = actions.isSource();
     const busy = actions.busy();

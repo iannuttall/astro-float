@@ -9,6 +9,18 @@ export interface SourceBlock {
   src: string;
   trailer: string;
   island?: boolean;
+  /** Only an HTML comment: its text. The page has no element for it, so `placeComments` makes one. */
+  comment?: string;
+}
+
+/**
+ * A named HTML comment the host gives a label and an Insert button, such as
+ * `{ comment: "members", label: "Members only below", button: "Members line" }`.
+ */
+export interface CommentMarker {
+  comment: string;
+  label: string;
+  button?: string;
 }
 
 export interface BodySource {
@@ -196,6 +208,10 @@ const PAGE_STYLE = /* css */ `
 
 /* Islands: rendered components / raw HTML. Atomic — no caret, move or remove only. */
 [data-lee-editing] [data-lee-island] { cursor: default; user-select: none; -webkit-user-select: none; }
+/* An HTML comment in the source (<!-- members -->), drawn as a labelled rule: text in the middle, hairlines either side. */
+.lee-comment { display: flex; align-items: center; gap: 0.75em; margin-block: 1.5em; font-size: 0.75rem; line-height: 1; letter-spacing: 0.04em; text-transform: uppercase; color: color-mix(in srgb, currentColor 60%, transparent); }
+.lee-comment::before, .lee-comment::after { content: ""; flex: 1; border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent); }
+.lee-comment[hidden] { display: none; }
 [data-lee-editing] [data-lee-island] * { cursor: default; }
 /* An iframe swallows clicks; while editing, a click on an embed must select its island (the wrapper) instead. */
 [data-lee-editing] [data-lee-island] iframe { pointer-events: none; }
@@ -505,6 +521,8 @@ export class PageEditor {
   private keyCounter = 0;
   /** Raw-HTML islands inserted this session (video, embeds), by key: written back verbatim until the server has them. */
   private pendingSource = new Map<string, string>();
+  /** The host's named comments (see `LeeHost.markers`): their labels on the page. */
+  markers: CommentMarker[] = [];
 
   // islands
   private selected: HTMLElement | null = null;
@@ -550,8 +568,56 @@ export class PageEditor {
       el.removeAttribute("data-astro-source-loc");
     }
     this.pendingSource.clear();
+    this.placeComments(container, source);
     this.decorateIslands(source);
     this.setBaseline(source);
+  }
+
+  /**
+   * A comment block renders nothing the editor could hold, so it would ride
+   * along with the block before it and vanish when that block is edited.
+   * Give each one a visible, atomic marker element where it sits in the
+   * source (between the elements of its neighbours), and drop the page's own
+   * comment nodes. Only when the other blocks line up one to one.
+   */
+  private placeComments(container: HTMLElement, source: BodySource) {
+    if (!source.blocks.some((b) => b.comment !== undefined)) return;
+    for (const node of Array.from(container.childNodes)) if (node.nodeType === Node.COMMENT_NODE) node.remove();
+    const nodes = this.domBlocks();
+    if (nodes.length !== source.blocks.filter((b) => b.comment === undefined).length) return;
+    let next = 0;
+    for (const block of source.blocks) {
+      if (block.comment === undefined) next++;
+      else container.insertBefore(this.commentElement(block.comment), nodes[next] ?? null);
+    }
+  }
+
+  /** The marker drawn for a comment: its host label, else the comment itself. */
+  private commentElement(comment: string): HTMLElement {
+    const el = document.createElement("div");
+    el.className = "lee-comment";
+    el.dataset.leeComment = comment;
+    const label = this.markers.find((m) => m.comment === comment)?.label ?? `<!-- ${comment} -->`;
+    el.appendChild(Object.assign(document.createElement("span"), { textContent: label }));
+    el.hidden = !this.attached;
+    return el;
+  }
+
+  /** Whether the body already has this comment. */
+  hasComment(comment: string): boolean {
+    return Array.from(this.container?.querySelectorAll<HTMLElement>("[data-lee-comment]") ?? []).some((el) => el.dataset.leeComment === comment);
+  }
+
+  /** Insert a named comment as its marker after the caret's block (or at the end). */
+  insertComment(comment: string, at: Range | null = null) {
+    const node = this.commentElement(comment);
+    const key = `island-${++this.keyCounter}-${Date.now().toString(36)}`;
+    node.setAttribute("data-lee-island", "");
+    node.dataset.leeKey = key;
+    node.contentEditable = "false";
+    node.draggable = true;
+    this.pendingSource.set(key, `<!-- ${comment} -->`);
+    this.placeBlock(node, at);
   }
 
   /** Fresh clean baseline from the DOM as it is right now. */
@@ -596,6 +662,7 @@ export class PageEditor {
     if (!el.children.length) el.appendChild(emptyParagraph());
     el.contentEditable = "true";
     el.setAttribute("data-lee-editing", "");
+    for (const marker of Array.from(el.querySelectorAll<HTMLElement>("[data-lee-comment]"))) marker.hidden = false;
     try {
       document.execCommand("defaultParagraphSeparator", false, "p");
     } catch {
@@ -661,6 +728,8 @@ export class PageEditor {
     window.removeEventListener("resize", this.reposition);
     this.observer?.disconnect();
     this.observer = null;
+    // Comment markers are the editor's: out of sight while it is off.
+    for (const marker of Array.from(el.querySelectorAll<HTMLElement>("[data-lee-comment]"))) marker.hidden = true;
     this.select(null);
     this.hovered = null;
     this.gripFor = null;
@@ -670,6 +739,10 @@ export class PageEditor {
   /** Let go of the container and take back everything `bind` put on its islands. */
   unbind() {
     this.detach();
+    // Put the page's comments back where the markers stand.
+    for (const marker of Array.from(this.container?.querySelectorAll<HTMLElement>("[data-lee-comment]") ?? [])) {
+      marker.replaceWith(document.createComment(` ${marker.dataset.leeComment ?? ""} `));
+    }
     for (const node of Array.from(this.container?.querySelectorAll<HTMLElement>("[data-lee-island]") ?? [])) {
       node.removeAttribute("data-lee-island");
       node.removeAttribute("data-lee-image");
@@ -692,7 +765,10 @@ export class PageEditor {
   restoreBaseline() {
     if (!this.container) return;
     this.select(null);
-    if (this.isDirty()) this.container.innerHTML = this.baselineHTML;
+    if (this.isDirty()) {
+      this.container.innerHTML = this.baselineHTML;
+      for (const marker of Array.from(this.container.querySelectorAll<HTMLElement>("[data-lee-comment]"))) marker.hidden = !this.attached;
+    }
   }
 
   /** Where the live DOM first departs from the clean baseline (for bug reports). */

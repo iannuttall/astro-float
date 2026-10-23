@@ -30,6 +30,8 @@ export interface SourceBlock {
   trailer: string;
   /** MDX component / raw HTML: atomic on the page, source always written back verbatim. */
   island?: boolean;
+  /** Only an HTML comment: its text. Drawn as a marker element (see `PageEditor.placeComments`). */
+  comment?: string;
 }
 
 export interface EntryDoc {
