@@ -212,7 +212,8 @@ function inlineOf(el: Node, ctx: SerializeContext): string {
   const kids = Array.from(el.childNodes);
   kids.forEach((node, i) => {
     if (node.nodeType === Node.TEXT_NODE) {
-      out += escapeText(collapse(node.textContent ?? ""));
+      // \u200b: the caret holder an inline shortcut leaves after its element (editor.ts); never content.
+      out += escapeText(collapse((node.textContent ?? "").replace(/\u200b/g, "")));
       return;
     }
     if (!(node instanceof HTMLElement)) return;

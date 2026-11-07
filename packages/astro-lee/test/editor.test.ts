@@ -211,6 +211,46 @@ describe("PageEditor round trip", () => {
     }
   });
 
+  it("turns closing inline Markdown markers into formatting as they are typed, and writes it back as Markdown", async () => {
+    const cases: Array<[string, string, string | null]> = [
+      ["They ~~never~", "~", "They ~~never~~ rarely.\n"],
+      ["A **bold*", "*", "A **bold** rarely.\n"],
+      ["An *it", "*", "An *it* rarely.\n"],
+      ["Run `pnpm dev", "`", "Run `pnpm dev` rarely.\n"],
+      // Not shortcuts: a lone `~`, the first `*` of a closing `**`, a span that starts with a space.
+      ["Approx ~5", "~", null],
+      ["half **bold", "*", null],
+      ["spaced ~~ x~", "~", null],
+    ];
+    for (const [typed, key, expected] of cases) {
+      const body = "x\n";
+      const container = containerFrom(await renderMarkdown(body));
+      document.body.appendChild(container);
+      const editor = new PageEditor(hooks);
+      editor.bind(container, splitBlocks(body), ABS_DIR);
+      editor.attach();
+      const p = container.querySelector("p")!;
+      const text = document.createTextNode(typed);
+      p.replaceChildren(text, document.createTextNode(""));
+      const range = document.createRange();
+      range.setStart(text, typed.length);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      const input = new InputEvent("beforeinput", { inputType: "insertText", data: key, bubbles: true, cancelable: true });
+      container.dispatchEvent(input);
+      if (expected === null) {
+        expect(input.defaultPrevented, typed).toBe(false);
+        expect(container.querySelector("del, strong, em, code"), typed).toBeNull();
+      } else {
+        const caret = getSelection()!.getRangeAt(0);
+        (caret.startContainer as Text).insertData(caret.startOffset, " rarely.");
+        expect(editor.toMarkdown(), typed).toBe(expected);
+      }
+      editor.unbind();
+      container.remove();
+    }
+  });
+
   it("sizes a picture and puts it back: the wrapper is written, and 100% brings back the original bytes and a clean state", async () => {
     const body = "Before.\n\n![pic](./x.png)\n\nAfter.\n";
     const { editor, container } = await bound(body);

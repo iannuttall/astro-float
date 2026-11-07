@@ -686,6 +686,7 @@ export class PageEditor {
 
     el.addEventListener("keydown", this.onKeydown);
     el.addEventListener("keyup", this.onKeyup);
+    el.addEventListener("beforeinput", this.onBeforeInput);
     el.addEventListener("paste", this.onPaste);
     el.addEventListener("click", this.onClick);
     el.addEventListener("mouseover", this.onMouseOver);
@@ -720,6 +721,7 @@ export class PageEditor {
     el.removeAttribute("data-lee-dragging");
     el.removeEventListener("keydown", this.onKeydown);
     el.removeEventListener("keyup", this.onKeyup);
+    el.removeEventListener("beforeinput", this.onBeforeInput);
     el.removeEventListener("paste", this.onPaste);
     el.removeEventListener("click", this.onClick);
     el.removeEventListener("mouseover", this.onMouseOver);
@@ -1599,6 +1601,43 @@ export class PageEditor {
   }
 
   /** Typing the third backtick on an otherwise-empty line opens a code block. */
+  /**
+   * Inline Markdown as you type: the closing `~~`, `**`, `*` or `` ` `` turns the
+   * text since its opening marker into strike, bold, italic or code, and the
+   * markers go. Only within one text node, so a span never crosses a link or
+   * another format; code blocks are left alone.
+   */
+  private onBeforeInput = (e: InputEvent) => {
+    if (e.inputType !== "insertText" || !e.data || !INLINE_CLOSERS.includes(e.data)) return;
+    const range = this.selectionRange();
+    if (!range || !range.collapsed || !(range.startContainer instanceof Text)) return;
+    const node = range.startContainer;
+    if (closestWithin(node, this.container!, "pre, code")) return;
+    const offset = range.startOffset;
+    const before = node.data.slice(0, offset) + e.data;
+    for (const { pattern, tag } of INLINE_SHORTCUTS) {
+      const m = before.match(pattern);
+      if (!m) continue;
+      e.preventDefault();
+      const start = before.length - m[0].length + m[0].indexOf(m[1]);
+      // node: text before the opening marker; marked: the span typed so far (minus this character); tail: what follows the caret.
+      const marked = node.splitText(start);
+      const tail = marked.splitText(offset - start);
+      marked.remove();
+      const inline = document.createElement(tag);
+      inline.textContent = m[2];
+      tail.before(inline);
+      // A caret at the end of the new element would keep typing inside it: park it in the text after.
+      if (!tail.data) tail.data = "\u200b";
+      const sel = document.getSelection();
+      const caret = document.createRange();
+      caret.setStart(tail, tail.data.startsWith("\u200b") ? 1 : 0);
+      sel?.removeAllRanges();
+      sel?.addRange(caret);
+      return;
+    }
+  };
+
   private codeFenceShortcut(e: KeyboardEvent, range: Range) {
     const block = this.topLevelBlock(range.startContainer);
     if (!block || (block.tagName !== "P" && block.tagName !== "DIV")) return;
@@ -1901,6 +1940,20 @@ function leaveQuote(line: HTMLElement): HTMLParagraphElement {
   if (isEmptyBlock(quote)) quote.remove();
   return p;
 }
+
+/**
+ * Inline shortcuts, checked in order against the text up to the caret plus the
+ * typed character. Group 1 is the whole marked span, group 2 its text, which
+ * must not start or end with a space. `*` is only italic when it isn't half
+ * of a `**`.
+ */
+const INLINE_SHORTCUTS: Array<{ pattern: RegExp; tag: string }> = [
+  { pattern: /(?:^|[^~])(~~([^~\s](?:[^~]*[^~\s])?)~~)$/, tag: "del" },
+  { pattern: /(?:^|[^*])(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/, tag: "strong" },
+  { pattern: /(?:^|[^*\w])(\*([^*\s](?:[^*]*[^*\s])?)\*)$/, tag: "em" },
+  { pattern: /(?:^|[^`])(`([^`]+)`)$/, tag: "code" },
+];
+const INLINE_CLOSERS = ["~", "*", "`"];
 
 function emptyParagraph(): HTMLParagraphElement {
   const p = document.createElement("p");
