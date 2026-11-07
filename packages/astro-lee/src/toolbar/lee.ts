@@ -41,6 +41,13 @@ export interface LeeHost {
    * such as a hosted editor's Publish. Lee shows a busy dot while `run` works,
    * then its returned text (or the error's message) as the status.
    */
+  /**
+   * Your own embed for a lone URL pasted on an empty line of the body: one
+   * raw-HTML element, written to the Markdown as it is, or `null` for Lee's
+   * built-in embeds (YouTube, Vimeo, X, video files). While it works the URL
+   * shows on the line; when it throws, the URL stays as text.
+   */
+  embed?(url: string): Promise<string | null>;
   entryActions?(doc: EntryDoc): Array<{ label: string; primary?: boolean; busy?: string; run(): Promise<string | void> }>;
 }
 
@@ -136,6 +143,7 @@ class Lee {
         this.touched();
       },
       onFiles: (files, range) => void this.uploadAll(files, range),
+      embed: host.embed,
     });
     this.page.markers = host.markers ?? [];
     this.fields = new FieldBindings({

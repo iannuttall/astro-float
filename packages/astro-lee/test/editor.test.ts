@@ -166,6 +166,51 @@ describe("PageEditor round trip", () => {
     expect(container.innerHTML).toBe(before);
   });
 
+  it("gives a body that ends in an island a blank line to type on, which writes nothing and takes itself off", async () => {
+    const body = "Before.\n\n<aside class=\"card\"><p>card</p></aside>\n";
+    const container = containerFrom(await renderMarkdown(body));
+    const before = container.innerHTML;
+    const editor = new PageEditor(hooks);
+    editor.bind(container, splitBlocks(body), ABS_DIR);
+    editor.attach();
+    const last = container.lastElementChild as HTMLElement;
+    expect(last.tagName).toBe("P");
+    expect(last.textContent).toBe("");
+    expect(editor.isDirty()).toBe(false);
+    expect(editor.toMarkdown()).toBe(body);
+    editor.unbind();
+    expect(container.innerHTML).toBe(before);
+  });
+
+  it("puts the host's embed for a URL pasted on an empty line in place of the line, and keeps the URL as text when the host fails", async () => {
+    const body = "Before.\n";
+    const card = '<aside class="card"><p>card</p></aside>';
+    for (const [embed, expected] of [
+      [async () => card, `Before.\n\n${card}\n`],
+      [async () => { throw new Error("offline"); }, "Before.\n\nhttps://example.test/post/1\n"],
+    ] as const) {
+      const container = containerFrom(await renderMarkdown(body));
+      document.body.appendChild(container); // the caret has to be in the document
+      const editor = new PageEditor({ ...hooks, embed });
+      editor.bind(container, splitBlocks(body), ABS_DIR);
+      editor.attach();
+      const line = document.createElement("p");
+      line.appendChild(document.createElement("br"));
+      container.appendChild(line);
+      const range = document.createRange();
+      range.setStart(line, 0);
+      getSelection()!.removeAllRanges();
+      getSelection()!.addRange(range);
+      const paste = new Event("paste", { bubbles: true, cancelable: true });
+      Object.defineProperty(paste, "clipboardData", { value: { files: [], getData: () => "https://example.test/post/1" } });
+      container.dispatchEvent(paste);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(editor.toMarkdown()).toBe(expected);
+      editor.unbind();
+      container.remove();
+    }
+  });
+
   it("sizes a picture and puts it back: the wrapper is written, and 100% brings back the original bytes and a clean state", async () => {
     const body = "Before.\n\n![pic](./x.png)\n\nAfter.\n";
     const { editor, container } = await bound(body);

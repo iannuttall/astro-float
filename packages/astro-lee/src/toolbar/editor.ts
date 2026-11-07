@@ -39,6 +39,12 @@ export interface PageEditorHooks {
   onChange(): void;
   /** Image / video files dropped or pasted onto the body; `range` is where they landed. */
   onFiles(files: File[], range: Range | null): void;
+  /**
+   * A lone URL pasted on an empty line: the host's own embed block for it (one
+   * raw-HTML element, written to the Markdown verbatim), or `null` to fall back
+   * to Lee's built-in embeds (see `LeeHost.embed`).
+   */
+  embed?(url: string): Promise<string | null>;
 }
 
 const PAGE_STYLE_ID = "lee-page-style";
@@ -521,6 +527,8 @@ export class PageEditor {
   private keyCounter = 0;
   /** Raw-HTML islands inserted this session (video, embeds), by key: written back verbatim until the server has them. */
   private pendingSource = new Map<string, string>();
+  /** The blank line `attach` added after a closing island; `unbind` takes it away again if it is still blank. */
+  private tail: HTMLElement | null = null;
   /** The host's named comments (see `LeeHost.markers`): their labels on the page. */
   markers: CommentMarker[] = [];
 
@@ -660,6 +668,8 @@ export class PageEditor {
 
     ensurePageStyle();
     if (!el.children.length) el.appendChild(emptyParagraph());
+    // A body that ends in an island (an embed, a video) needs a line after it to type on. Blank, so it writes nothing.
+    if (el.lastElementChild?.matches(ISLAND_SELECTOR)) el.appendChild((this.tail = emptyParagraph()));
     el.contentEditable = "true";
     el.setAttribute("data-lee-editing", "");
     for (const marker of Array.from(el.querySelectorAll<HTMLElement>("[data-lee-comment]"))) marker.hidden = false;
@@ -750,6 +760,8 @@ export class PageEditor {
       node.removeAttribute("contenteditable");
       node.removeAttribute("draggable");
     }
+    if (this.tail && isBlankParagraph(this.tail)) this.tail.remove();
+    this.tail = null;
     this.container = null;
     this.snapshot = [];
     this.mapped = false;
@@ -1617,7 +1629,12 @@ export class PageEditor {
       // A lone URL pasted on an empty line becomes an embed (YouTube, Vimeo, tweet, video file).
       const range = this.selectionRange();
       const block = range ? this.topLevelBlock(range.startContainer) : null;
-      const embed = block && isEmptyBlock(block) && /^(P|DIV)$/.test(block.tagName) ? embedFor(text) : null;
+      const lone = block && isEmptyBlock(block) && /^(P|DIV)$/.test(block.tagName) && /^\s*https?:\/\/\S+\s*$/.test(text);
+      if (lone && this.hooks.embed) {
+        void this.hostEmbed(text.trim(), block);
+        return;
+      }
+      const embed = lone ? embedFor(text) : null;
       if (embed) {
         this.insertHtmlBlock(embed.html, range);
         return;
@@ -1625,6 +1642,29 @@ export class PageEditor {
       document.execCommand("insertText", false, text);
     }
   };
+
+  /**
+   * Ask the host for the URL's embed while the URL sits on the line; then the
+   * host's block (or Lee's built-in embed) replaces the line. If the host
+   * fails, the pasted URL stays as plain text, so nothing is lost.
+   */
+  private async hostEmbed(url: string, block: HTMLElement) {
+    const line = document.createElement("p");
+    line.textContent = url;
+    block.replaceWith(line);
+    let html: string | null = null;
+    try {
+      html = (await this.hooks.embed?.(url)) ?? embedFor(url)?.html ?? null;
+    } catch (error) {
+      console.error("[lee] embed failed", error);
+      html = null;
+    }
+    if (!html || !line.isConnected) return;
+    line.replaceChildren(document.createElement("br"));
+    const range = document.createRange();
+    range.setStart(line, 0);
+    this.insertHtmlBlock(html, range);
+  }
 
   /** Links stay editable text while editing (⌘-click follows them); clicking an island selects it. */
   private onClick = (e: MouseEvent) => {
